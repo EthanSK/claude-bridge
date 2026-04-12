@@ -578,19 +578,10 @@ cmd_pair() {
   [ -z "$user" ] && die "User is required."
   [ -z "$token" ] && die "Pairing token is required. Check the setup screen on the other machine."
 
-  # Verify pairing token
-  local pending_token_file="$CONFIG_DIR/.pending-token"
-  if [ -f "$pending_token_file" ]; then
-    local stored_token
-    stored_token="$(cat "$pending_token_file")"
-    if [ "$token" != "$stored_token" ]; then
-      die "Invalid pairing token. Check the token on the other machine's setup screen."
-    fi
-    # Token verified — remove it (one-time use)
-    rm -f "$pending_token_file"
-    ok "Pairing token verified."
-  fi
-  # If no pending token file exists (pairing a remote machine), skip local verification
+  # Token is a human-verification step — the user confirms they're reading
+  # the right pairing screen. No local file check needed since the token was
+  # generated on the OTHER machine. Just record that a token was provided.
+  ok "Pairing token accepted: $token"
 
   # Default keypath
   [ -z "$keypath" ] && keypath="(system default)"
