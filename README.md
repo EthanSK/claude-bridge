@@ -8,23 +8,13 @@
 
 ## Quick Start
 
-### On Computer A
-
-Paste this into Claude Code:
+Paste this into Claude Code on **each computer** you want to bridge:
 
 ```
 Read the README at https://github.com/EthanSK/claude-bridge and follow the setup instructions for this computer. Install claude-bridge, run the setup command, and install the Claude Code skill. Do everything automatically — don't ask me questions.
 ```
 
-### On Computer B
-
-Paste the same prompt into Claude Code on the other computer:
-
-```
-Read the README at https://github.com/EthanSK/claude-bridge and follow the setup instructions for this computer. Install claude-bridge, run the setup command, and install the Claude Code skill. Do everything automatically — don't ask me questions.
-```
-
-Then photograph Computer A's pairing screen and send it to Computer B's Claude (or vice versa). That's it — they can now talk to each other.
+Then photograph the pairing screen and send it to Claude on the other machine. That's it — they can now talk to each other.
 
 ---
 
