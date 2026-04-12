@@ -351,6 +351,9 @@ cmd_setup() {
     ok "Key pair generated."
   fi
 
+  # Save identity so pair/run/connect use the same key
+  printf '%s' "$key_path" > "$CONFIG_DIR/.identity"
+
   # Add to authorized_keys
   local ssh_dir="$HOME/.ssh"
   local auth_keys="$ssh_dir/authorized_keys"
@@ -619,10 +622,15 @@ cmd_pair() {
       die "Key file not found: $keypath"
     fi
   else
-    # Default: use this machine's own key pair
+    # Default: use the key from setup (saved in .identity), or fall back to hostname-based key
     printf "${BOLD}  1. Local Key Pair${RESET}\n"
+    if [ -f "$CONFIG_DIR/.identity" ]; then
+      local_key="$(cat "$CONFIG_DIR/.identity")"
+      local_pub="${local_key}.pub"
+      dim "Using setup key: $(basename "$local_key")"
+    fi
     if [ -f "$local_key" ] && [ -f "$local_pub" ]; then
-      dim "Using existing key pair for $local_machine."
+      dim "Key pair found for $local_machine."
     else
       dim "Generating SSH key pair for $local_machine..."
       ssh-keygen -t ed25519 -f "$local_key" -N "" -C "agent-bridge:${local_machine}" >/dev/null 2>&1
