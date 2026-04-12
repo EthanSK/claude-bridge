@@ -18,6 +18,108 @@ Then photograph the pairing screen and send it to Claude on the other machine. T
 
 ---
 
+## What it looks like
+
+### Step 1: Setup
+
+Run on each machine you want to bridge:
+
+```
+$ claude-bridge setup
+
+  +----------------------------------------------+
+  |         claude-bridge  .  setup               |
+  +----------------------------------------------+
+
+  1. SSH Server
+  [ok] SSH (Remote Login) is already enabled.
+
+  2. SSH Key Pair
+  Key pair generated.
+
+  3. Pairing Token
+  One-time pairing token generated.
+
+  ╔══════════════════════════════════════════════════╗
+  ║            claude-bridge pairing                 ║
+  ╠══════════════════════════════════════════════════╣
+  ║  Machine:    MacBook-Pro                        ║
+  ║  User:       ethan                              ║
+  ║  Local:      MacBookPro.local                   ║
+  ║  Local IP:   192.168.1.42                       ║
+  ║  Public IP:  82.45.123.67                       ║
+  ║  Port:       22                                 ║
+  ║  Token:      bridge-a7f3k9                      ║
+  ╚══════════════════════════════════════════════════╝
+
+  Photograph this screen and send to Claude on your other machine.
+```
+
+### Step 2: Pair
+
+On the other machine, tell Claude the connection details (or paste the manual command):
+
+```
+$ claude-bridge pair \
+    --name "MacBook-Pro" \
+    --host 192.168.1.42 \
+    --port 22 \
+    --user ethan \
+    --token bridge-a7f3k9
+
+  [ok] Pairing token verified.
+
+  [ok] Paired with "MacBook-Pro"!
+
+  Connection details:
+    Host:     192.168.1.42
+    Port:     22
+    User:     ethan
+    Key:      ~/.claude-bridge/keys/claude-bridge_MacBook-Pro
+```
+
+### Step 3: Use
+
+```
+$ claude-bridge run MacBook-Pro "uname -a"
+  Running command on MacBook-Pro...
+Darwin MacBookPro.local 25.3.0 Darwin Kernel Version 25.3.0...
+
+  [ok] command completed on MacBook-Pro (exit 0)
+
+$ claude-bridge run MacBook-Pro "what files are in ~/Projects?" --claude
+  Running Claude prompt on MacBook-Pro...
+The ~/Projects directory contains:
+  - producer-player/
+  - ai-music-video-studio/
+  - OBScene/
+  - claude-bridge/
+
+  [ok] Claude prompt completed on MacBook-Pro (exit 0)
+```
+
+### Optional: Internet tunnel
+
+Expose your machine to the internet without port forwarding:
+
+```
+$ claude-bridge setup --internet
+
+  ...
+  4. Internet Tunnel
+  Starting reverse SSH tunnel via serveo.net...
+  [ok] Tunnel active!
+
+  Internet access:
+    Host: serveo.net
+    Port: 43521
+
+  Remote pair command:
+    claude-bridge pair --name "MacBook-Pro" --host serveo.net --port 43521 --user ethan --token "bridge-a7f3k9"
+```
+
+---
+
 ## How it works
 
 ```
@@ -86,6 +188,11 @@ This will:
 - Generate an SSH key pair
 - Display a pairing screen with connection details
 
+For internet access without port forwarding, add the `--internet` flag:
+```bash
+claude-bridge setup --internet
+```
+
 ### Pair the machines:
 
 **Option A: Photo pairing (the magic way)**
@@ -123,7 +230,7 @@ claude-bridge run MacBook-Pro "uname -a"
 
 | Command | Description |
 |---------|-------------|
-| `claude-bridge setup` | Enables SSH, generates keys, and displays a pairing screen. Run on each machine. |
+| `claude-bridge setup` | Enables SSH, generates keys, and displays a pairing screen. Use `--internet` for tunnel. |
 | `claude-bridge pair` | Interactive or flag-based pairing to connect to another machine. |
 | `claude-bridge connect <machine>` | Open an interactive SSH session. |
 | `claude-bridge status [machine]` | Check if machine(s) are reachable. |
@@ -135,8 +242,10 @@ claude-bridge run MacBook-Pro "uname -a"
 ### Setup options
 
 ```
--n, --name <name>    Machine name (defaults to hostname)
--p, --port <port>    SSH port (default: 22)
+-n, --name <name>              Machine name (defaults to hostname)
+-p, --port <port>              SSH port (default: 22)
+    --internet                 Start a reverse SSH tunnel for internet access
+    --tunnel-provider <name>   Tunnel provider (default: serveo)
 ```
 
 ### Pair options

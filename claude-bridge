@@ -5,7 +5,7 @@ set -euo pipefail
 # Pure bash. Zero dependencies. Works on any Mac/Linux out of the box.
 # https://github.com/EthanSK/claude-bridge
 
-VERSION="2.1.0"
+VERSION="2.2.0"
 
 # -- Colours (ANSI) ----------------------------------------------------------
 RED='\033[0;31m'
@@ -268,14 +268,17 @@ ssh_build_args() {
 # -- Commands -----------------------------------------------------------------
 
 cmd_setup() {
-  local machine_name="" port="22"
+  local machine_name="" port="22" internet=false tunnel_provider="serveo"
+  TUNNEL_PID=""
 
   while [ $# -gt 0 ]; do
     case "$1" in
-      --name|-n)  machine_name="$2"; shift 2 ;;
-      --port|-p)  port="$2"; shift 2 ;;
-      --help|-h)  cmd_setup_help; exit 0 ;;
-      *)          die "Unknown option: $1. Use --help for usage." ;;
+      --name|-n)             machine_name="$2"; shift 2 ;;
+      --port|-p)             port="$2"; shift 2 ;;
+      --internet)            internet=true; shift ;;
+      --tunnel-provider)     tunnel_provider="$2"; shift 2 ;;
+      --help|-h)             cmd_setup_help; exit 0 ;;
+      *)                     die "Unknown option: $1. Use --help for usage." ;;
     esac
   done
 
@@ -393,8 +396,77 @@ cmd_setup() {
   printf "${RESET}"
   printf '\n'
   dim "Photograph this screen and send to Claude on your other machine."
-  dim "For internet access, forward port $port or use Tailscale."
+  if [ "$internet" = false ]; then
+    dim "For internet access, use --internet flag or Tailscale."
+  fi
   printf '\n'
+
+  # Internet tunnel
+  if [ "$internet" = true ]; then
+    printf "${BOLD}  4. Internet Tunnel${RESET}\n"
+    local tunnel_address=""
+
+    case "$tunnel_provider" in
+      serveo)
+        dim "Starting reverse SSH tunnel via serveo.net..."
+        local tunnel_log
+        tunnel_log="$(mktemp)"
+        ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R "0:localhost:${port}" serveo.net > "$tunnel_log" 2>&1 &
+        TUNNEL_PID=$!
+
+        # Wait for serveo to report the forwarding address (up to 10 seconds)
+        local waited=0
+        while [ "$waited" -lt 10 ]; do
+          if [ -f "$tunnel_log" ]; then
+            tunnel_address="$(grep -oE 'serveo\.net:[0-9]+' "$tunnel_log" 2>/dev/null | head -1 || true)"
+            if [ -n "$tunnel_address" ]; then
+              break
+            fi
+          fi
+          sleep 1
+          waited=$((waited + 1))
+        done
+
+        if [ -n "$tunnel_address" ]; then
+          local tunnel_host="${tunnel_address%%:*}"
+          local tunnel_port="${tunnel_address##*:}"
+          ok "Tunnel active!"
+          printf '\n'
+          printf "${BOLD}${GREEN}  Internet access:${RESET}\n"
+          printf "${BOLD}    Host: ${CYAN}%s${RESET}\n" "$tunnel_host"
+          printf "${BOLD}    Port: ${CYAN}%s${RESET}\n" "$tunnel_port"
+          printf '\n'
+          printf "${DIM}  Remote pair command:${RESET}\n"
+          printf "${DIM}    claude-bridge pair --name \"%s\" --host %s --port %s --user %s --token \"%s\"${RESET}\n" \
+            "$machine_name" "$tunnel_host" "$tunnel_port" "$user" "$pairing_token"
+          printf '\n'
+        else
+          warn "Tunnel may still be connecting. Check output below."
+          warn "If serveo.net is unavailable, try port forwarding or Tailscale instead."
+          if [ -n "$TUNNEL_PID" ] && kill -0 "$TUNNEL_PID" 2>/dev/null; then
+            dim "Tunnel process running (PID $TUNNEL_PID)."
+          else
+            warn "Tunnel process exited. serveo.net may be down."
+            TUNNEL_PID=""
+          fi
+          printf '\n'
+        fi
+
+        rm -f "$tunnel_log" 2>/dev/null
+        ;;
+      *)
+        die "Unknown tunnel provider: $tunnel_provider. Supported: serveo"
+        ;;
+    esac
+
+    if [ -z "$tunnel_address" ]; then
+      printf "${BOLD}  Manual alternatives:${RESET}\n"
+      dim "  1. Port forward $port on your router to this machine's local IP ($primary_ip)"
+      dim "  2. Use Tailscale (https://tailscale.com) for a private tunnel"
+      dim "  3. Use ngrok: ngrok tcp $port"
+      printf '\n'
+    fi
+  fi
 
   # Manual pairing string
   printf "${BOLD}${CYAN}  Manual pairing command (copy-paste):${RESET}\n"
@@ -422,8 +494,12 @@ cmd_setup() {
   printf '\n'
 
   # Keep process alive so user can photograph
-  # Use a trap to exit cleanly on Ctrl+C
-  trap 'printf "\n"; exit 0' INT
+  # Clean up tunnel on exit
+  cleanup() {
+    [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null
+    printf "\n"
+  }
+  trap cleanup EXIT INT TERM
   while true; do sleep 86400; done
 }
 
@@ -432,9 +508,11 @@ cmd_setup_help() {
   printf 'Enables SSH, generates keys, and displays a pairing screen.\n'
   printf 'Run on each machine you want to bridge.\n\n'
   printf 'Options:\n'
-  printf '  -n, --name <name>   Machine name (defaults to hostname)\n'
-  printf '  -p, --port <port>   SSH port (default: 22)\n'
-  printf '  -h, --help          Show this help\n'
+  printf '  -n, --name <name>              Machine name (defaults to hostname)\n'
+  printf '  -p, --port <port>              SSH port (default: 22)\n'
+  printf '      --internet                 Start a reverse SSH tunnel for internet access\n'
+  printf '      --tunnel-provider <name>   Tunnel provider (default: serveo). Supported: serveo\n'
+  printf '  -h, --help                     Show this help\n'
 }
 
 cmd_pair() {
@@ -859,7 +937,7 @@ cmd_help() {
   printf '  claude-bridge <command> [options]\n'
   printf '\n'
   printf "${BOLD}Commands:${RESET}\n"
-  printf '  setup              Enable SSH, generate keys, show pairing screen\n'
+  printf '  setup              Enable SSH, generate keys, show pairing screen (--internet for tunnel)\n'
   printf '  pair               Pair with another machine (interactive or flags)\n'
   printf '  connect <machine>  Open an interactive SSH session\n'
   printf '  run <machine> "cmd"  Run a command remotely\n'
