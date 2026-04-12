@@ -1,6 +1,6 @@
 # Claude Bridge Skill
 
-You are a Claude Code instance with claude-bridge installed. This machine is a **peer** in a bidirectional bridge — it can both send commands to and receive commands from other paired machines.
+You are a Claude Code instance with claude-bridge installed. This machine is a **peer** in a bidirectional bridge -- it can both send commands to and receive commands from other paired machines.
 
 ## When to activate
 
@@ -18,14 +18,13 @@ Activate when the user says things like:
 ## Setup (run on any machine you want to bridge)
 
 ```bash
-npx claude-bridge setup
+claude-bridge setup
 ```
 
 Options:
 ```bash
-npx claude-bridge setup --name "MacBook-Pro"   # Custom machine name
-npx claude-bridge setup --port 2222             # Custom SSH port
-npx claude-bridge setup --no-qr                 # Skip QR code display
+claude-bridge setup --name "MacBook-Pro"   # Custom machine name
+claude-bridge setup --port 2222             # Custom SSH port
 ```
 
 ### What setup does
@@ -33,8 +32,7 @@ npx claude-bridge setup --no-qr                 # Skip QR code display
 1. **Enables SSH** (Remote Login on macOS) if not already on
 2. **Generates an ED25519 key pair** at `~/.claude-bridge/keys/`
 3. **Adds the public key** to `~/.ssh/authorized_keys`
-4. **Generates a one-time pairing code**
-5. **Displays a pairing screen** with all connection details + QR code
+4. **Displays a pairing screen** with all connection details
 
 ### After setup
 
@@ -49,7 +47,7 @@ Alternatively, they can:
 
 ## Available commands
 
-All commands use the `claude-bridge` CLI (installed globally or via npx):
+All commands use the `claude-bridge` CLI:
 
 ### Check paired machines
 ```bash
@@ -79,9 +77,13 @@ This wraps the command in `claude --print "..."` on the remote machine, effectiv
 claude-bridge connect MacBook-Pro
 ```
 
-### Pair a new machine (manual)
+### Pair a new machine
 ```bash
-claude-bridge pair --manual --name "MacBook-Pro" --host 192.168.1.50 --port 22 --user ethan --key ~/.claude-bridge/keys/claude-bridge_MacBook-Pro
+# With flags:
+claude-bridge pair --name "MacBook-Pro" --host 192.168.1.50 --port 22 --user ethan --key ~/.claude-bridge/keys/claude-bridge_MacBook-Pro
+
+# Interactive:
+claude-bridge pair
 ```
 
 ### Remove a pairing
@@ -99,21 +101,17 @@ When the user sends a photo of another machine's pairing screen:
    - Username
    - Local IP
    - SSH Port
-   - Pairing Code
 3. Run the pair command:
 ```bash
-claude-bridge pair --manual --name "<name>" --host "<ip>" --port <port> --user "<user>" --code "<code>"
+claude-bridge pair --name "<name>" --host "<ip>" --port <port> --user "<user>"
 ```
 4. Then test: `claude-bridge status <name>`
-
-If the photo contains a QR code with `claude-bridge://` data, decode the base64 payload to get all fields including the private key.
 
 ## Transferring the private key
 
 Setup generates a key pair on each machine. The private key must be on the connecting machine to authenticate. Options:
-1. **Photo contains it**: If the QR code data includes the private key, save it to `~/.claude-bridge/keys/`
-2. **Manual copy**: `scp other-machine:~/.claude-bridge/keys/claude-bridge_<name> ~/.claude-bridge/keys/`
-3. **Use existing SSH keys**: If you already have SSH access, skip the key step
+1. **Manual copy**: `scp other-machine:~/.claude-bridge/keys/claude-bridge_<name> ~/.claude-bridge/keys/`
+2. **Use existing SSH keys**: If you already have SSH access, skip the key step
 
 ## Typical workflows
 
@@ -168,7 +166,6 @@ If both machines are on Tailscale, use the Tailscale hostname or IP instead of t
 
 - All communication uses SSH with key-based authentication
 - Private keys are stored in `~/.claude-bridge/keys/` (mode 600)
-- Config is stored in `~/.claude-bridge/config.json` (mode 600)
+- Config is stored in `~/.claude-bridge/config` (mode 600)
 - No passwords are stored or transmitted
-- Pairing codes are one-time-use
 - All files are stored in `~/.claude-bridge/` with restrictive permissions (mode 700)

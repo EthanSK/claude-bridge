@@ -1,7 +1,4 @@
-node_modules/
 .DS_Store
 *.log
 .env
 .claude-bridge/
-dist/
-coverage/

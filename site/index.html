@@ -37,7 +37,7 @@
           <span class="logo-icon">&#x1F309;</span>
           <span class="logo-copy">
             <span class="logo-title">
-              claude-bridge <span class="logo-version">v1.0</span>
+              claude-bridge <span class="logo-version">v2.0</span>
             </span>
             <span class="logo-sub">Claude-to-Claude, machine-to-machine</span>
           </span>
@@ -64,10 +64,10 @@
           <a class="btn btn--ghost" href="#how">How it works</a>
         </div>
         <div class="hero-install">
-          <code class="install-cmd">npm install -g claude-bridge</code>
+          <code class="install-cmd">curl -fsSL https://raw.githubusercontent.com/EthanSK/claude-bridge/main/install.sh | bash</code>
         </div>
         <p class="hero-note">
-          MIT licensed &middot; Node.js 18+ &middot; macOS &amp; Linux
+          MIT licensed &middot; Zero dependencies &middot; Pure bash &middot; macOS &amp; Linux
         </p>
       </header>
 
@@ -80,7 +80,7 @@
             <span class="terminal-title">Terminal &mdash; Any Machine</span>
           </div>
           <div class="terminal-body">
-<pre><span class="t-dim">$</span> npx claude-bridge setup
+<pre><span class="t-dim">$</span> claude-bridge setup
 
   <span class="t-cyan">+----------------------------------------------+</span>
   <span class="t-cyan">|         claude-bridge  .  setup               |</span>
@@ -117,7 +117,7 @@
             <div class="step-num">1</div>
             <div>
               <h3>Set up each machine</h3>
-              <p>Run <code>npx claude-bridge setup</code> on each computer you want to bridge. It enables SSH, generates keys, and displays a pairing screen with connection details and a QR code.</p>
+              <p>Run <code>claude-bridge setup</code> on each computer you want to bridge. It enables SSH, generates keys, and displays a pairing screen with connection details.</p>
             </div>
           </li>
           <li>
@@ -185,8 +185,8 @@
             <div class="feature-icon">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
             </div>
-            <h3>QR code pairing</h3>
-            <p>The setup screen includes a QR code with all connection details encoded. Scan it or photograph it &mdash; either way, pairing takes seconds.</p>
+            <h3>Zero dependencies</h3>
+            <p>Pure bash. No Node.js, no Python, no package managers. Just bash, ssh, and ssh-keygen &mdash; built into every Mac and Linux box.</p>
           </div>
 
           <div class="feature">
@@ -245,12 +245,12 @@
             <h2>One command to rule them all.</h2>
             <div class="install-options">
               <div class="install-option">
-                <span class="install-label">npm (global)</span>
-                <code class="install-cmd">npm install -g claude-bridge</code>
+                <span class="install-label">curl (one-line)</span>
+                <code class="install-cmd">curl -fsSL https://raw.githubusercontent.com/EthanSK/claude-bridge/main/install.sh | bash</code>
               </div>
               <div class="install-option">
-                <span class="install-label">npx (no install)</span>
-                <code class="install-cmd">npx claude-bridge setup</code>
+                <span class="install-label">git clone</span>
+                <code class="install-cmd">git clone https://github.com/EthanSK/claude-bridge.git</code>
               </div>
             </div>
           </div>
@@ -259,7 +259,7 @@
               Quick start guide
             </a>
             <a class="btn btn--ghost" href="https://github.com/EthanSK/claude-bridge" target="_blank" rel="noopener">View on GitHub</a>
-            <a class="btn btn--ghost" href="https://www.npmjs.com/package/claude-bridge" target="_blank" rel="noopener">npm</a>
+            <a class="btn btn--ghost" href="https://github.com/EthanSK/claude-bridge/blob/main/claude-bridge" target="_blank" rel="noopener">View script</a>
           </div>
         </div>
       </section>

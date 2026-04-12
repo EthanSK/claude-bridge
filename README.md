@@ -2,7 +2,7 @@
 
 **Let your Claude Code instances talk to each other across machines.**
 
-[Website](https://ethansk.github.io/claude-bridge/) · [GitHub](https://github.com/EthanSK/claude-bridge) · [npm](https://www.npmjs.com/package/claude-bridge)
+[Website](https://ethansk.github.io/claude-bridge/) · [GitHub](https://github.com/EthanSK/claude-bridge)
 
 ---
 
@@ -13,7 +13,7 @@
 Paste this into Claude Code:
 
 ```
-Read the README at https://github.com/EthanSK/claude-bridge and follow the setup instructions for this computer. Install claude-bridge globally, run the setup command, and install the Claude Code skill. Do everything automatically — don't ask me questions.
+Read the README at https://github.com/EthanSK/claude-bridge and follow the setup instructions for this computer. Install claude-bridge, run the setup command, and install the Claude Code skill. Do everything automatically — don't ask me questions.
 ```
 
 ### On Computer B
@@ -21,7 +21,7 @@ Read the README at https://github.com/EthanSK/claude-bridge and follow the setup
 Paste the same prompt into Claude Code on the other computer:
 
 ```
-Read the README at https://github.com/EthanSK/claude-bridge and follow the setup instructions for this computer. Install claude-bridge globally, run the setup command, and install the Claude Code skill. Do everything automatically — don't ask me questions.
+Read the README at https://github.com/EthanSK/claude-bridge and follow the setup instructions for this computer. Install claude-bridge, run the setup command, and install the Claude Code skill. Do everything automatically — don't ask me questions.
 ```
 
 Then photograph Computer A's pairing screen and send it to Computer B's Claude (or vice versa). That's it — they can now talk to each other.
@@ -57,17 +57,29 @@ Both machines are **peers** — either one can run commands on the other. There'
 
 ## Installation
 
-```bash
-npm install -g claude-bridge
-```
+**Zero dependencies.** Just bash, ssh, and ssh-keygen (built into every Mac and Linux).
 
-Or use directly with npx:
+### Option A: One-line install
 
 ```bash
-npx claude-bridge <command>
+curl -fsSL https://raw.githubusercontent.com/EthanSK/claude-bridge/main/install.sh | bash
 ```
 
-Requires Node.js 18+.
+### Option B: Clone and symlink
+
+```bash
+git clone https://github.com/EthanSK/claude-bridge.git
+cd claude-bridge
+chmod +x claude-bridge
+sudo ln -sf "$(pwd)/claude-bridge" /usr/local/bin/claude-bridge
+```
+
+### Option C: Just download the script
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/EthanSK/claude-bridge/main/claude-bridge -o /usr/local/bin/claude-bridge
+chmod +x /usr/local/bin/claude-bridge
+```
 
 ---
 
@@ -82,7 +94,7 @@ claude-bridge setup
 This will:
 - Enable SSH (Remote Login) if not already on
 - Generate an SSH key pair
-- Display a pairing screen with connection details and a QR code
+- Display a pairing screen with connection details
 
 ### Pair the machines:
 
@@ -93,7 +105,7 @@ This will:
 
 **Option B: Manual pairing**
 ```bash
-claude-bridge pair --manual \
+claude-bridge pair \
   --name "MacBook-Pro" \
   --host 192.168.1.50 \
   --port 22 \
@@ -101,10 +113,10 @@ claude-bridge pair --manual \
   --key ~/.claude-bridge/keys/claude-bridge_MacBook-Pro
 ```
 
-**Option C: JSON file**
+**Option C: Interactive pairing**
 ```bash
-# Copy the pairing data to a file, then:
-claude-bridge pair pairing.json
+claude-bridge pair
+# Follow the prompts
 ```
 
 ### Test the connection:
@@ -121,7 +133,7 @@ claude-bridge run MacBook-Pro "uname -a"
 | Command | Description |
 |---------|-------------|
 | `claude-bridge setup` | Enables SSH, generates keys, and displays a pairing screen. Run on each machine. |
-| `claude-bridge pair [photo]` | Reads a pairing photo/file or manual entry to connect to another machine. |
+| `claude-bridge pair` | Interactive or flag-based pairing to connect to another machine. |
 | `claude-bridge connect <machine>` | Open an interactive SSH session. |
 | `claude-bridge status [machine]` | Check if machine(s) are reachable. |
 | `claude-bridge list` | List all paired machines. |
@@ -132,34 +144,35 @@ claude-bridge run MacBook-Pro "uname -a"
 ### Setup options
 
 ```
---name <name>    Machine name (defaults to hostname)
---port <port>    SSH port (default: 22)
---no-qr          Skip QR code display
+-n, --name <name>    Machine name (defaults to hostname)
+-p, --port <port>    SSH port (default: 22)
 ```
 
 ### Pair options
 
 ```
---manual         Manually enter connection details
---name <name>    Override machine name
---host <host>    Hostname or IP of the other machine
---port <port>    SSH port (default: 22)
---user <user>    SSH username
---key <key>      Path to SSH private key
---code <code>    One-time pairing code
+-n, --name <name>    Machine name (defaults to host)
+-H, --host <host>    Hostname or IP of the other machine
+-u, --user <user>    SSH username
+-p, --port <port>    SSH port (default: 22)
+-k, --key <key>      Path to SSH private key
 ```
 
 ---
 
 ## Claude Code skill
 
-claude-bridge ships with a Claude Code skill that teaches Claude how to use the bridge automatically. The same skill works on every machine.
+claude-bridge ships with a Claude Code skill that teaches Claude how to use the bridge automatically.
 
 ### Install the skill
 
 ```bash
-# Copy the skill to your Claude config
-cp -r node_modules/claude-bridge/skills/bridge ~/.claude/skills/claude-bridge
+# If you cloned the repo:
+cp -r skills/bridge ~/.claude/skills/claude-bridge
+
+# Or download directly:
+curl -fsSL https://raw.githubusercontent.com/EthanSK/claude-bridge/main/skills/bridge/skill.md \
+  -o ~/.claude/skills/claude-bridge/skill.md --create-dirs
 ```
 
 Or reference it in your CLAUDE.md:
@@ -176,20 +189,32 @@ When the user asks to run something on another machine, use claude-bridge:
 
 ```
 ~/.claude-bridge/
-├── config.json          # Paired machines (host, port, user, key path)
-├── keys/                # SSH key pairs
-│   ├── claude-bridge_MacBook-Pro
-│   └── claude-bridge_MacBook-Pro.pub
-└── pairing-code         # One-time pairing code
+├── config               # Paired machines (INI-style key-value)
+└── keys/                # SSH key pairs
+    ├── claude-bridge_MacBook-Pro
+    └── claude-bridge_MacBook-Pro.pub
+```
+
+### Config format
+
+Simple INI-style flat file — no JSON, no YAML:
+
+```ini
+[MacBook-Pro]
+host=192.168.1.50
+user=ethan
+port=22
+key=~/.claude-bridge/keys/claude-bridge_MacBook-Pro
+paired_at=2026-04-09T12:00:00Z
 ```
 
 ### How pairing works
 
 1. Each machine runs `setup` which generates an ED25519 key pair
 2. The public key is added to `~/.ssh/authorized_keys` on that machine
-3. The pairing screen displays all connection info + the private key embedded in a QR code
-4. The other machine reads the pairing info (from photo, file, or manual entry)
-5. The private key is saved to `~/.claude-bridge/keys/` on the connecting machine
+3. The pairing screen displays all connection info
+4. The other machine reads the pairing info (from photo or manual entry)
+5. The private key is copied to `~/.claude-bridge/keys/` on the connecting machine
 6. The connecting machine can now SSH in using key-based auth
 
 ### How remote execution works
@@ -223,7 +248,6 @@ Claude on Machine A                     Machine B
 - **SSH key-based auth only** — no passwords stored or transmitted
 - **ED25519 keys** — modern, fast, secure
 - **Restrictive file permissions** — config dir is mode 700, keys are mode 600
-- **One-time pairing codes** — codes are single-use
 - **No cloud** — all communication is direct SSH, no third-party servers
 - **Separate config** — stored in `~/.claude-bridge/`, not in `.claude/` to avoid accidental git commits
 
@@ -242,7 +266,7 @@ If both machines are on the same Tailscale network, use the Tailscale hostname o
 
 ```bash
 # When pairing, use the Tailscale address
-claude-bridge pair --manual \
+claude-bridge pair \
   --name "MacBook-Pro" \
   --host macbook-pro.tail12345.ts.net \
   --user ethan \
@@ -289,8 +313,8 @@ Contributions welcome! Please open an issue first to discuss what you'd like to 
 ```bash
 git clone https://github.com/EthanSK/claude-bridge.git
 cd claude-bridge
-npm install
-node bin/claude-bridge.js --help
+chmod +x claude-bridge
+./claude-bridge help
 ```
 
 ---

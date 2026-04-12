@@ -1,0 +1,855 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# claude-bridge — Let your Claude Code instances talk to each other across machines.
+# Pure bash. Zero dependencies. Works on any Mac/Linux out of the box.
+# https://github.com/EthanSK/claude-bridge
+
+VERSION="2.0.0"
+
+# -- Colours (ANSI) ----------------------------------------------------------
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+RESET='\033[0m'
+
+# -- Paths --------------------------------------------------------------------
+CONFIG_DIR="$HOME/.claude-bridge"
+CONFIG_FILE="$CONFIG_DIR/config"
+KEYS_DIR="$CONFIG_DIR/keys"
+
+# -- Helpers ------------------------------------------------------------------
+die()  { printf "${RED}  Error: %s${RESET}\n" "$1" >&2; exit 1; }
+info() { printf "${CYAN}%s${RESET}\n" "$1"; }
+ok()   { printf "${GREEN}  [ok] %s${RESET}\n" "$1"; }
+warn() { printf "${YELLOW}  %s${RESET}\n" "$1"; }
+dim()  { printf "${DIM}  %s${RESET}\n" "$1"; }
+
+ensure_config_dir() {
+  [ -d "$CONFIG_DIR" ] || mkdir -p "$CONFIG_DIR" && chmod 700 "$CONFIG_DIR"
+  [ -d "$KEYS_DIR" ]   || mkdir -p "$KEYS_DIR"   && chmod 700 "$KEYS_DIR"
+  [ -f "$CONFIG_FILE" ] || touch "$CONFIG_FILE"   && chmod 600 "$CONFIG_FILE"
+}
+
+# -- INI-style config parser --------------------------------------------------
+# Config format:
+#   [MacBook-Pro]
+#   host=MacBookPro.local
+#   user=ethansk
+#   port=22
+#   key=~/.claude-bridge/keys/MacBook-Pro
+#   paired_at=2026-04-09T12:00:00
+
+# Get a value for a machine: cfg_get <machine> <key>
+cfg_get() {
+  local machine="$1" key="$2"
+  if [ ! -f "$CONFIG_FILE" ]; then
+    return 1
+  fi
+  local in_section=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    # Strip carriage returns
+    line="${line%$'\r'}"
+    # Check for section header (case-insensitive match)
+    if [[ "$line" =~ ^\[(.+)\]$ ]]; then
+      local section="${BASH_REMATCH[1]}"
+      if [ "$(printf '%s' "$section" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$machine" | tr '[:upper:]' '[:lower:]')" ]; then
+        in_section=1
+      else
+        in_section=0
+      fi
+      continue
+    fi
+    if [ "$in_section" = "1" ] && [[ "$line" =~ ^${key}=(.*)$ ]]; then
+      printf '%s' "${BASH_REMATCH[1]}"
+      return 0
+    fi
+  done < "$CONFIG_FILE"
+  return 1
+}
+
+# Check if a machine exists (case-insensitive)
+cfg_exists() {
+  local machine="$1"
+  local lower_machine
+  lower_machine="$(printf '%s' "$machine" | tr '[:upper:]' '[:lower:]')"
+  if [ ! -f "$CONFIG_FILE" ]; then
+    return 1
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    if [[ "$line" =~ ^\[(.+)\]$ ]]; then
+      local section="${BASH_REMATCH[1]}"
+      if [ "$(printf '%s' "$section" | tr '[:upper:]' '[:lower:]')" = "$lower_machine" ]; then
+        return 0
+      fi
+    fi
+  done < "$CONFIG_FILE"
+  return 1
+}
+
+# Get the exact section name (preserving original case)
+cfg_real_name() {
+  local machine="$1"
+  local lower_machine
+  lower_machine="$(printf '%s' "$machine" | tr '[:upper:]' '[:lower:]')"
+  if [ ! -f "$CONFIG_FILE" ]; then
+    return 1
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    if [[ "$line" =~ ^\[(.+)\]$ ]]; then
+      local section="${BASH_REMATCH[1]}"
+      if [ "$(printf '%s' "$section" | tr '[:upper:]' '[:lower:]')" = "$lower_machine" ]; then
+        printf '%s' "$section"
+        return 0
+      fi
+    fi
+  done < "$CONFIG_FILE"
+  return 1
+}
+
+# Save a machine config (overwrites if exists)
+cfg_save() {
+  local machine="$1" host="$2" user="$3" port="$4" keypath="$5"
+  ensure_config_dir
+
+  # Remove existing section first
+  cfg_remove "$machine" 2>/dev/null || true
+
+  local ts
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  # Expand ~ in keypath
+  keypath="${keypath/#\~/$HOME}"
+
+  {
+    printf '[%s]\n' "$machine"
+    printf 'host=%s\n' "$host"
+    printf 'user=%s\n' "$user"
+    printf 'port=%s\n' "$port"
+    printf 'key=%s\n' "$keypath"
+    printf 'paired_at=%s\n' "$ts"
+    printf '\n'
+  } >> "$CONFIG_FILE"
+  chmod 600 "$CONFIG_FILE"
+}
+
+# Remove a machine section
+cfg_remove() {
+  local machine="$1"
+  if ! cfg_exists "$machine"; then
+    return 1
+  fi
+  local real_name
+  real_name="$(cfg_real_name "$machine")"
+  local tmpfile
+  tmpfile="$(mktemp)"
+  local in_section=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    if [[ "$line" =~ ^\[(.+)\]$ ]]; then
+      local section="${BASH_REMATCH[1]}"
+      if [ "$section" = "$real_name" ]; then
+        in_section=1
+        continue
+      else
+        in_section=0
+      fi
+    fi
+    if [ "$in_section" = "1" ]; then
+      # Skip lines in the removed section
+      continue
+    fi
+    printf '%s\n' "$line"
+  done < "$CONFIG_FILE" > "$tmpfile"
+  mv "$tmpfile" "$CONFIG_FILE"
+  chmod 600 "$CONFIG_FILE"
+}
+
+# List all machine names
+cfg_list_names() {
+  if [ ! -f "$CONFIG_FILE" ]; then
+    return
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    if [[ "$line" =~ ^\[(.+)\]$ ]]; then
+      printf '%s\n' "${BASH_REMATCH[1]}"
+    fi
+  done < "$CONFIG_FILE"
+}
+
+# -- Network helpers ----------------------------------------------------------
+get_local_ip() {
+  if command -v ipconfig >/dev/null 2>&1; then
+    # macOS
+    local ip
+    ip="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
+    if [ -n "$ip" ]; then
+      printf '%s' "$ip"
+      return
+    fi
+  fi
+  # Linux / fallback
+  if command -v hostname >/dev/null 2>&1; then
+    local ip
+    ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    if [ -n "$ip" ]; then
+      printf '%s' "$ip"
+      return
+    fi
+  fi
+  # Last resort
+  if command -v ifconfig >/dev/null 2>&1; then
+    local ip
+    ip="$(ifconfig 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | head -1 | awk '{print $2}')"
+    if [ -n "$ip" ]; then
+      printf '%s' "$ip"
+      return
+    fi
+  fi
+  printf 'unknown'
+}
+
+get_hostname() {
+  hostname 2>/dev/null || printf 'unknown'
+}
+
+get_machine_name() {
+  local h
+  h="$(get_hostname)"
+  # Strip .local suffix
+  printf '%s' "${h%.local}"
+}
+
+get_username() {
+  whoami 2>/dev/null || printf '%s' "$USER"
+}
+
+is_macos() {
+  [ "$(uname -s)" = "Darwin" ]
+}
+
+# -- SSH helpers --------------------------------------------------------------
+ssh_build_args() {
+  local machine="$1"
+  local host user port keypath
+  host="$(cfg_get "$machine" host)" || die "Machine \"$machine\" not found."
+  user="$(cfg_get "$machine" user)" || die "No user for \"$machine\"."
+  port="$(cfg_get "$machine" port 2>/dev/null || printf '22')"
+  keypath="$(cfg_get "$machine" key 2>/dev/null || true)"
+
+  # Expand ~ in keypath
+  keypath="${keypath/#\~/$HOME}"
+
+  local args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-p" "$port")
+  if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
+    args+=("-i" "$keypath")
+  fi
+  args+=("${user}@${host}")
+
+  printf '%s\n' "${args[@]}"
+}
+
+# -- Commands -----------------------------------------------------------------
+
+cmd_setup() {
+  local machine_name="" port="22"
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --name|-n)  machine_name="$2"; shift 2 ;;
+      --port|-p)  port="$2"; shift 2 ;;
+      --help|-h)  cmd_setup_help; exit 0 ;;
+      *)          die "Unknown option: $1. Use --help for usage." ;;
+    esac
+  done
+
+  [ -z "$machine_name" ] && machine_name="$(get_machine_name)"
+  local user
+  user="$(get_username)"
+  local local_hostname
+  local_hostname="$(get_hostname)"
+
+  printf '\n'
+  printf "${BOLD}${CYAN}  +----------------------------------------------+${RESET}\n"
+  printf "${BOLD}${CYAN}  |         claude-bridge  .  setup               |${RESET}\n"
+  printf "${BOLD}${CYAN}  +----------------------------------------------+${RESET}\n"
+  printf '\n'
+
+  # Step 1: Check/enable SSH
+  printf "${BOLD}  1. SSH Server${RESET}\n"
+  if is_macos; then
+    local ssh_status
+    ssh_status="$(sudo systemsetup -getremotelogin 2>/dev/null || printf 'unknown')"
+    if printf '%s' "$ssh_status" | grep -qi 'on'; then
+      ok "SSH (Remote Login) is already enabled."
+    else
+      dim "Enabling Remote Login (may require sudo)..."
+      if sudo systemsetup -setremotelogin on 2>/dev/null; then
+        ok "Remote Login enabled."
+      else
+        warn "Could not enable Remote Login automatically."
+        warn "Enable it manually: System Settings > General > Sharing > Remote Login"
+      fi
+    fi
+  else
+    if systemctl is-active --quiet sshd 2>/dev/null || systemctl is-active --quiet ssh 2>/dev/null; then
+      ok "SSH server is running."
+    elif pgrep -x sshd >/dev/null 2>&1; then
+      ok "SSH server is running."
+    else
+      warn "SSH server does not appear to be running."
+      warn "Start it with: sudo systemctl start sshd"
+    fi
+  fi
+  printf '\n'
+
+  # Step 2: Generate key pair
+  printf "${BOLD}  2. SSH Key Pair${RESET}\n"
+  ensure_config_dir
+  local key_path="$KEYS_DIR/claude-bridge_${machine_name}"
+  local pub_key_path="${key_path}.pub"
+
+  if [ -f "$key_path" ] && [ -f "$pub_key_path" ]; then
+    dim "Using existing key pair."
+  else
+    dim "Generating SSH key pair..."
+    ssh-keygen -t ed25519 -f "$key_path" -N "" -C "claude-bridge:${machine_name}" >/dev/null 2>&1
+    chmod 600 "$key_path"
+    ok "Key pair generated."
+  fi
+
+  # Add to authorized_keys
+  local ssh_dir="$HOME/.ssh"
+  local auth_keys="$ssh_dir/authorized_keys"
+  [ -d "$ssh_dir" ] || mkdir -p "$ssh_dir" && chmod 700 "$ssh_dir"
+  local pub_key
+  pub_key="$(cat "$pub_key_path")"
+
+  if [ -f "$auth_keys" ] && grep -qF "$pub_key" "$auth_keys" 2>/dev/null; then
+    dim "Public key already in authorized_keys."
+  else
+    printf '%s\n' "$pub_key" >> "$auth_keys"
+    chmod 600 "$auth_keys"
+    ok "Public key added to authorized_keys."
+  fi
+
+  # Fingerprint
+  local fingerprint
+  fingerprint="$(ssh-keygen -lf "$pub_key_path" 2>/dev/null | awk '{print $2}' || printf 'unknown')"
+  printf '\n'
+
+  # Step 3: Get network info
+  local primary_ip
+  primary_ip="$(get_local_ip)"
+
+  # Step 4: Display pairing screen
+  printf "${BOLD}${CYAN}  =============================================================${RESET}\n"
+  printf '\n'
+  printf "${BOLD}${CYAN}  PAIRING SCREEN -- photograph this and send to your other machine's Claude${RESET}\n"
+  printf '\n'
+  printf "${BOLD}  -------------------------------------------------------------${RESET}\n"
+  printf '\n'
+  printf "${BOLD}  Machine Name:  ${YELLOW}${BOLD}%s${RESET}\n" "$machine_name"
+  printf "${BOLD}  Username:      ${RESET}%s\n" "$user"
+  printf "${BOLD}  Hostname:      ${RESET}%s\n" "$local_hostname"
+  printf "${BOLD}  Local IP:      ${RESET}%s\n" "$primary_ip"
+  printf "${BOLD}  SSH Port:      ${RESET}%s\n" "$port"
+  printf "${BOLD}  Fingerprint:   ${DIM}%s${RESET}\n" "$fingerprint"
+  printf '\n'
+  printf "${BOLD}  -------------------------------------------------------------${RESET}\n"
+  printf '\n'
+  printf "${BOLD}  Private Key Path: ${DIM}%s${RESET}\n" "$key_path"
+  printf '\n'
+
+  # Manual pairing string
+  printf "${BOLD}${CYAN}  Manual pairing command (copy-paste):${RESET}\n"
+  printf '\n'
+  printf "${DIM}  claude-bridge pair \\\\${RESET}\n"
+  printf "${DIM}    --name \"%s\" \\\\${RESET}\n" "$machine_name"
+  printf "${DIM}    --host \"%s\" \\\\${RESET}\n" "$primary_ip"
+  printf "${DIM}    --port %s \\\\${RESET}\n" "$port"
+  printf "${DIM}    --user \"%s\" \\\\${RESET}\n" "$user"
+  printf "${DIM}    --key \"%s\"${RESET}\n" "$key_path"
+  printf '\n'
+  printf "${BOLD}${CYAN}  =============================================================${RESET}\n"
+  printf '\n'
+  dim "Tip: Take a photo of this screen and send it to the Claude on"
+  dim "your other machine. It can read the image and extract the connection details."
+  printf '\n'
+  dim "Or copy the private key file to the other machine:"
+  printf "${DIM}  scp \"%s\" other-machine:~/.claude-bridge/keys/${RESET}\n" "$key_path"
+  printf '\n'
+  printf "${YELLOW}  Warning: The private key grants SSH access to this machine.${RESET}\n"
+  printf "${YELLOW}  Keep it secure. Files are stored in ~/.claude-bridge/ (mode 700).${RESET}\n"
+  printf '\n'
+  ok "Setup complete. This screen will stay visible."
+  dim "Press Ctrl+C to close."
+  printf '\n'
+
+  # Keep process alive so user can photograph
+  # Use a trap to exit cleanly on Ctrl+C
+  trap 'printf "\n"; exit 0' INT
+  while true; do sleep 86400; done
+}
+
+cmd_setup_help() {
+  printf 'Usage: claude-bridge setup [OPTIONS]\n\n'
+  printf 'Enables SSH, generates keys, and displays a pairing screen.\n'
+  printf 'Run on each machine you want to bridge.\n\n'
+  printf 'Options:\n'
+  printf '  -n, --name <name>   Machine name (defaults to hostname)\n'
+  printf '  -p, --port <port>   SSH port (default: 22)\n'
+  printf '  -h, --help          Show this help\n'
+}
+
+cmd_pair() {
+  local machine_name="" host="" user="" port="22" keypath=""
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --name|-n)    machine_name="$2"; shift 2 ;;
+      --host|-H)    host="$2"; shift 2 ;;
+      --user|-u)    user="$2"; shift 2 ;;
+      --port|-p)    port="$2"; shift 2 ;;
+      --key|-k)     keypath="$2"; shift 2 ;;
+      --manual|-m)  shift ;;  # No-op, kept for compat
+      --help|-h)    cmd_pair_help; exit 0 ;;
+      -*)           die "Unknown option: $1. Use --help for usage." ;;
+      *)
+        # Positional argument — could be a JSON/text file
+        if [ -f "$1" ]; then
+          dim "File pairing not supported in bash version. Use --name/--host/--user flags."
+          exit 1
+        fi
+        die "Unknown argument: $1"
+        ;;
+    esac
+  done
+
+  # Interactive mode if missing required fields
+  if [ -z "$host" ] || [ -z "$user" ]; then
+    printf '\n'
+    printf "${BOLD}${CYAN}  claude-bridge pair${RESET}\n"
+    printf '\n'
+
+    if [ -z "$machine_name" ]; then
+      printf '  Machine name: '
+      read -r machine_name
+    fi
+    if [ -z "$host" ]; then
+      printf '  Host (IP or hostname): '
+      read -r host
+    fi
+    if [ -z "$user" ]; then
+      printf '  User: '
+      read -r user
+    fi
+    printf '  Port [%s]: ' "$port"
+    read -r input_port
+    [ -n "$input_port" ] && port="$input_port"
+
+    if [ -z "$keypath" ]; then
+      printf '  Key path (leave empty for system default): '
+      read -r keypath
+    fi
+  fi
+
+  [ -z "$machine_name" ] && machine_name="$host"
+  [ -z "$host" ] && die "Host is required."
+  [ -z "$user" ] && die "User is required."
+
+  # Default keypath
+  [ -z "$keypath" ] && keypath="(system default)"
+
+  # Save
+  ensure_config_dir
+  cfg_save "$machine_name" "$host" "$user" "$port" "$keypath"
+
+  printf '\n'
+  printf "${GREEN}${BOLD}  [ok] Paired with \"%s\"!${RESET}\n" "$machine_name"
+  printf '\n'
+  printf "  Connection details:\n"
+  printf "${DIM}    Host:     %s${RESET}\n" "$host"
+  printf "${DIM}    Port:     %s${RESET}\n" "$port"
+  printf "${DIM}    User:     %s${RESET}\n" "$user"
+  printf "${DIM}    Key:      %s${RESET}\n" "$keypath"
+  printf '\n'
+  printf "  Try it out:\n"
+  printf "${DIM}    claude-bridge status %s${RESET}\n" "$machine_name"
+  printf "${DIM}    claude-bridge run %s \"uname -a\"${RESET}\n" "$machine_name"
+  printf "${DIM}    claude-bridge connect %s${RESET}\n" "$machine_name"
+  printf '\n'
+}
+
+cmd_pair_help() {
+  printf 'Usage: claude-bridge pair [OPTIONS]\n\n'
+  printf 'Pair with another machine. Interactive if flags are omitted.\n\n'
+  printf 'Options:\n'
+  printf '  -n, --name <name>   Machine name (defaults to host)\n'
+  printf '  -H, --host <host>   Hostname or IP of the other machine\n'
+  printf '  -u, --user <user>   SSH username\n'
+  printf '  -p, --port <port>   SSH port (default: 22)\n'
+  printf '  -k, --key <key>     Path to SSH private key\n'
+  printf '  -m, --manual        (Kept for compat, no-op)\n'
+  printf '  -h, --help          Show this help\n'
+}
+
+cmd_connect() {
+  local machine_name=""
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --help|-h) cmd_connect_help; exit 0 ;;
+      -*)        die "Unknown option: $1" ;;
+      *)         machine_name="$1"; shift ;;
+    esac
+  done
+
+  [ -z "$machine_name" ] && die "Machine name required. Usage: claude-bridge connect <machine>"
+
+  if ! cfg_exists "$machine_name"; then
+    die "Machine \"$machine_name\" not found. Run 'claude-bridge list' to see paired machines."
+  fi
+
+  local host user port keypath
+  host="$(cfg_get "$machine_name" host)"
+  user="$(cfg_get "$machine_name" user)"
+  port="$(cfg_get "$machine_name" port 2>/dev/null || printf '22')"
+  keypath="$(cfg_get "$machine_name" key 2>/dev/null || true)"
+  keypath="${keypath/#\~/$HOME}"
+
+  printf '\n'
+  printf "${CYAN}  Connecting to ${BOLD}%s${RESET}${CYAN} (%s@%s)...${RESET}\n" "$machine_name" "$user" "$host"
+  printf '\n'
+
+  local args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-p" "$port")
+  if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
+    args+=("-i" "$keypath")
+  fi
+  args+=("${user}@${host}")
+
+  ssh "${args[@]}"
+  local exit_code=$?
+
+  printf '\n'
+  if [ "$exit_code" -eq 0 ]; then
+    dim "Connection closed."
+  else
+    printf "${YELLOW}  SSH exited with code %d.${RESET}\n" "$exit_code"
+  fi
+}
+
+cmd_connect_help() {
+  printf 'Usage: claude-bridge connect <machine>\n\n'
+  printf 'Open an interactive SSH session to a paired machine.\n'
+}
+
+cmd_run() {
+  local machine_name="" command="" use_claude=0
+
+  # Parse args — machine and command are positional
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --claude)  use_claude=1; shift ;;
+      --help|-h) cmd_run_help; exit 0 ;;
+      -*)        die "Unknown option: $1" ;;
+      *)
+        if [ -z "$machine_name" ]; then
+          machine_name="$1"
+        elif [ -z "$command" ]; then
+          command="$1"
+        else
+          die "Unexpected argument: $1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  [ -z "$machine_name" ] && die "Machine name required. Usage: claude-bridge run <machine> \"command\" [--claude]"
+  [ -z "$command" ] && die "Command required. Usage: claude-bridge run <machine> \"command\" [--claude]"
+
+  if ! cfg_exists "$machine_name"; then
+    die "Machine \"$machine_name\" not found. Run 'claude-bridge list' to see paired machines."
+  fi
+
+  local host user port keypath
+  host="$(cfg_get "$machine_name" host)"
+  user="$(cfg_get "$machine_name" user)"
+  port="$(cfg_get "$machine_name" port 2>/dev/null || printf '22')"
+  keypath="$(cfg_get "$machine_name" key 2>/dev/null || true)"
+  keypath="${keypath/#\~/$HOME}"
+
+  local final_command="$command"
+  local label="command"
+  if [ "$use_claude" -eq 1 ]; then
+    # Escape single quotes
+    local escaped="${command//\'/\'\\\'\'}"
+    final_command="claude --print '${escaped}'"
+    label="Claude prompt"
+  fi
+
+  printf "${DIM}  Running %s on %s...${RESET}\n" "$label" "$machine_name"
+
+  local args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-p" "$port")
+  if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
+    args+=("-i" "$keypath")
+  fi
+  args+=("${user}@${host}" "$final_command")
+
+  local exit_code=0
+  ssh "${args[@]}" || exit_code=$?
+
+  printf '\n'
+  if [ "$exit_code" -eq 0 ]; then
+    ok "$label completed on $machine_name (exit 0)"
+  else
+    printf "${YELLOW}  %s on %s exited with code %d.${RESET}\n" "$label" "$machine_name" "$exit_code"
+  fi
+
+  exit "$exit_code"
+}
+
+cmd_run_help() {
+  printf 'Usage: claude-bridge run <machine> "command" [--claude]\n\n'
+  printf 'Run a command on a paired machine.\n\n'
+  printf 'Options:\n'
+  printf '  --claude   Wrap command in claude --print "..." on the remote machine\n'
+  printf '  -h, --help Show this help\n'
+}
+
+cmd_list() {
+  printf '\n'
+  printf "${BOLD}${CYAN}  claude-bridge list${RESET}\n"
+  printf '\n'
+
+  local names
+  names="$(cfg_list_names)"
+
+  if [ -z "$names" ]; then
+    dim "No paired machines."
+    printf '\n'
+    dim "To pair a machine:"
+    dim "  1. Run 'claude-bridge setup' on the other machine"
+    dim "  2. Send a photo of the pairing screen to this machine's Claude"
+    dim "  3. Run 'claude-bridge pair' here with the details"
+    printf '\n'
+    return
+  fi
+
+  local count=0
+  while IFS= read -r name; do
+    [ -z "$name" ] && continue
+    count=$((count + 1))
+    local host user port keypath paired_at
+    host="$(cfg_get "$name" host 2>/dev/null || printf 'unknown')"
+    user="$(cfg_get "$name" user 2>/dev/null || printf 'unknown')"
+    port="$(cfg_get "$name" port 2>/dev/null || printf '22')"
+    keypath="$(cfg_get "$name" key 2>/dev/null || printf '(system default)')"
+    paired_at="$(cfg_get "$name" paired_at 2>/dev/null || true)"
+
+    printf "${BOLD}  %s${RESET}\n" "$name"
+    printf "${DIM}    Host:       %s${RESET}\n" "$host"
+    printf "${DIM}    Port:       %s${RESET}\n" "$port"
+    printf "${DIM}    User:       %s${RESET}\n" "$user"
+    printf "${DIM}    Key:        %s${RESET}\n" "$keypath"
+    if [ -n "$paired_at" ]; then
+      printf "${DIM}    Paired:     %s${RESET}\n" "$paired_at"
+    fi
+    printf '\n'
+  done <<< "$names"
+
+  dim "$count machine$([ "$count" -ne 1 ] && printf 's') paired."
+  printf '\n'
+}
+
+cmd_status() {
+  local machine_name=""
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --help|-h) cmd_status_help; exit 0 ;;
+      -*)        die "Unknown option: $1" ;;
+      *)         machine_name="$1"; shift ;;
+    esac
+  done
+
+  printf '\n'
+  printf "${BOLD}${CYAN}  claude-bridge status${RESET}\n"
+  printf '\n'
+
+  check_machine() {
+    local name="$1"
+    local host user port keypath
+    host="$(cfg_get "$name" host 2>/dev/null || printf 'unknown')"
+    user="$(cfg_get "$name" user 2>/dev/null || printf 'unknown')"
+    port="$(cfg_get "$name" port 2>/dev/null || printf '22')"
+    keypath="$(cfg_get "$name" key 2>/dev/null || true)"
+    keypath="${keypath/#\~/$HOME}"
+
+    local args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-o" "ConnectTimeout=5" "-p" "$port")
+    if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
+      args+=("-i" "$keypath")
+    fi
+    args+=("${user}@${host}" "echo ok")
+
+    local start_time
+    if is_macos; then
+      start_time=$(perl -MTime::HiRes=time -e 'printf "%.0f\n", time*1000')
+    else
+      start_time=$(($(date +%s%N) / 1000000))
+    fi
+
+    if ssh "${args[@]}" >/dev/null 2>&1; then
+      local end_time
+      if is_macos; then
+        end_time=$(perl -MTime::HiRes=time -e 'printf "%.0f\n", time*1000')
+      else
+        end_time=$(($(date +%s%N) / 1000000))
+      fi
+      local latency=$((end_time - start_time))
+      printf "${GREEN}  %s${RESET}${DIM} (%s@%s:%s) -- %dms${RESET}\n" "$name" "$user" "$host" "$port" "$latency"
+      return 0
+    else
+      printf "${RED}  %s${RESET}${DIM} (%s) -- unreachable${RESET}\n" "$name" "$host"
+      return 1
+    fi
+  }
+
+  if [ -n "$machine_name" ]; then
+    if ! cfg_exists "$machine_name"; then
+      die "Machine \"$machine_name\" not found. Run 'claude-bridge list' to see paired machines."
+    fi
+    check_machine "$machine_name"
+  else
+    local names
+    names="$(cfg_list_names)"
+
+    if [ -z "$names" ]; then
+      dim "No paired machines."
+      dim "Run 'claude-bridge setup' on each machine, then 'claude-bridge pair' to connect them."
+      printf '\n'
+      return
+    fi
+
+    local total=0 reachable=0
+    while IFS= read -r name; do
+      [ -z "$name" ] && continue
+      total=$((total + 1))
+      if check_machine "$name"; then
+        reachable=$((reachable + 1))
+      fi
+    done <<< "$names"
+
+    printf '\n'
+    dim "$reachable/$total machines reachable."
+  fi
+
+  printf '\n'
+}
+
+cmd_status_help() {
+  printf 'Usage: claude-bridge status [machine]\n\n'
+  printf 'Check if paired machine(s) are reachable.\n'
+  printf 'Omit machine name to check all.\n'
+}
+
+cmd_unpair() {
+  local machine_name=""
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --help|-h) cmd_unpair_help; exit 0 ;;
+      -*)        die "Unknown option: $1" ;;
+      *)         machine_name="$1"; shift ;;
+    esac
+  done
+
+  [ -z "$machine_name" ] && die "Machine name required. Usage: claude-bridge unpair <machine>"
+
+  if ! cfg_exists "$machine_name"; then
+    die "Machine \"$machine_name\" not found. Run 'claude-bridge list' to see paired machines."
+  fi
+
+  # Try to remove the key file
+  local keypath
+  keypath="$(cfg_get "$machine_name" key 2>/dev/null || true)"
+  keypath="${keypath/#\~/$HOME}"
+  if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ] && [ -f "$keypath" ]; then
+    rm -f "$keypath" 2>/dev/null && dim "Removed key: $keypath" || warn "Could not remove key at $keypath"
+    # Also remove .pub if it exists
+    [ -f "${keypath}.pub" ] && rm -f "${keypath}.pub" 2>/dev/null
+  fi
+
+  cfg_remove "$machine_name"
+  printf '\n'
+  ok "Unpaired \"$machine_name\"."
+  printf '\n'
+}
+
+cmd_unpair_help() {
+  printf 'Usage: claude-bridge unpair <machine>\n\n'
+  printf 'Remove a paired machine and its SSH key.\n'
+}
+
+cmd_help() {
+  printf '\n'
+  printf "${BOLD}claude-bridge${RESET} v%s\n" "$VERSION"
+  printf 'Let your Claude Code instances talk to each other across machines.\n'
+  printf 'Pure bash. Zero dependencies.\n'
+  printf '\n'
+  printf "${BOLD}Usage:${RESET}\n"
+  printf '  claude-bridge <command> [options]\n'
+  printf '\n'
+  printf "${BOLD}Commands:${RESET}\n"
+  printf '  setup              Enable SSH, generate keys, show pairing screen\n'
+  printf '  pair               Pair with another machine (interactive or flags)\n'
+  printf '  connect <machine>  Open an interactive SSH session\n'
+  printf '  run <machine> "cmd"  Run a command remotely\n'
+  printf '  list               List all paired machines\n'
+  printf '  status [machine]   Check reachability\n'
+  printf '  unpair <machine>   Remove a pairing\n'
+  printf '  version            Show version\n'
+  printf '  help               Show this help\n'
+  printf '\n'
+  printf "${BOLD}Examples:${RESET}\n"
+  printf '  claude-bridge setup --name MacBook-Pro\n'
+  printf '  claude-bridge pair --host 192.168.1.50 --user ethan --name MacBook-Pro\n'
+  printf '  claude-bridge run MacBook-Pro "ls -la ~/Projects"\n'
+  printf '  claude-bridge run MacBook-Pro "fix the tests" --claude\n'
+  printf '  claude-bridge connect MacBook-Pro\n'
+  printf '\n'
+  printf 'https://github.com/EthanSK/claude-bridge\n'
+  printf '\n'
+}
+
+cmd_version() {
+  printf 'claude-bridge %s\n' "$VERSION"
+}
+
+# -- Main dispatch ------------------------------------------------------------
+main() {
+  local cmd="${1:-help}"
+  shift 2>/dev/null || true
+
+  case "$cmd" in
+    setup)    cmd_setup "$@" ;;
+    pair)     cmd_pair "$@" ;;
+    connect)  cmd_connect "$@" ;;
+    run)      cmd_run "$@" ;;
+    list)     cmd_list "$@" ;;
+    status)   cmd_status "$@" ;;
+    unpair)   cmd_unpair "$@" ;;
+    version|--version|-v) cmd_version ;;
+    help|--help|-h)       cmd_help ;;
+    *)        die "Unknown command: $cmd. Run 'claude-bridge help' for usage." ;;
+  esac
+}
+
+main "$@"
