@@ -374,6 +374,29 @@ cmd_setup() {
   fingerprint="$(ssh-keygen -lf "$pub_key_path" 2>/dev/null | awk '{print $2}' || printf 'unknown')"
   printf '\n'
 
+  # Step 2b: Check Full Disk Access (macOS only)
+  if is_macos; then
+    printf "${BOLD}  2b. Full Disk Access${RESET}\n"
+    if ls ~/Desktop/ >/dev/null 2>&1; then
+      ok "Full Disk Access is granted for SSH sessions."
+    else
+      warn "Full Disk Access not granted — SSH sessions won't be able to access Desktop, Documents, Downloads."
+      dim "Opening System Settings to the right page..."
+      open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles" 2>/dev/null || true
+      printf '\n'
+      printf "${YELLOW}  Add /usr/sbin/sshd (or Terminal) to Full Disk Access, then press Enter to continue.${RESET}\n"
+      printf "  > "
+      read -r _
+      if ls ~/Desktop/ >/dev/null 2>&1; then
+        ok "Full Disk Access verified."
+      else
+        warn "Still no Full Disk Access. SSH sessions may have limited file access."
+        dim "You can fix this later in System Settings > Privacy & Security > Full Disk Access."
+      fi
+    fi
+    printf '\n'
+  fi
+
   # Step 3: Get network info
   local primary_ip
   primary_ip="$(get_local_ip)"
