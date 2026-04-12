@@ -14,11 +14,11 @@ export async function list() {
     console.log();
     console.log(chalk.dim("  To pair a machine:"));
     console.log(
-      chalk.dim("    1. Run 'npx claude-bridge setup' on the target machine")
+      chalk.dim("    1. Run 'npx claude-bridge setup' on the other machine")
     );
     console.log(
       chalk.dim(
-        "    2. Send a photo of the pairing screen to the controller Claude"
+        "    2. Send a photo of the pairing screen to this machine's Claude"
       )
     );
     console.log(

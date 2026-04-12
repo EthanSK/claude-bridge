@@ -61,7 +61,7 @@ export async function status(machineName) {
       console.log(chalk.dim("  No paired machines."));
       console.log(
         chalk.dim(
-          "  Run 'claude-bridge setup' on the target, then 'claude-bridge pair' here."
+          "  Run 'claude-bridge setup' on each machine, then 'claude-bridge pair' to connect them."
         )
       );
       console.log();

@@ -30,7 +30,7 @@ program
 program
   .command("setup")
   .description(
-    "Run on the TARGET machine. Enables SSH, generates keys, and displays a pairing screen."
+    "Enables SSH, generates keys, and displays a pairing screen. Run on each machine you want to bridge."
   )
   .option("-n, --name <name>", "Machine name (defaults to hostname)")
   .option("-p, --port <port>", "SSH port", "22")
@@ -40,16 +40,16 @@ program
 program
   .command("pair")
   .description(
-    "Run on the CONTROLLER machine. Reads a pairing photo or manually enters connection details."
+    "Reads a pairing photo or manually enters connection details to connect to another machine."
   )
-  .argument("[photo]", "Path to a photo of the target pairing screen")
+  .argument("[photo]", "Path to a photo of another machine's pairing screen")
   .option("-m, --manual", "Manually enter connection details")
   .option("-n, --name <name>", "Override machine name")
-  .option("-h, --host <host>", "Target hostname or IP")
+  .option("-h, --host <host>", "Hostname or IP of the other machine")
   .option("-p, --port <port>", "SSH port", "22")
   .option("-u, --user <user>", "SSH username")
   .option("-k, --key <key>", "Path to SSH private key")
-  .option("-c, --code <code>", "One-time pairing code from target")
+  .option("-c, --code <code>", "One-time pairing code from the other machine")
   .action(pair);
 
 program

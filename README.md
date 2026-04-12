@@ -2,34 +2,56 @@
 
 **Let your Claude Code instances talk to each other across machines.**
 
-claude-bridge enables Claude-to-Claude communication between two computers. One machine is the "controller" (your main workstation), the other is the "target" (a secondary machine). The controller Claude can run commands, edit files, and even start Claude Code sessions on the target — all over SSH.
-
 [Website](https://ethansk.github.io/claude-bridge/) · [GitHub](https://github.com/EthanSK/claude-bridge) · [npm](https://www.npmjs.com/package/claude-bridge)
+
+---
+
+## Quick Start
+
+### On Computer A
+
+Paste this into Claude Code:
+
+```
+Read the README at https://github.com/EthanSK/claude-bridge and follow the setup instructions for this computer. Install claude-bridge globally, run the setup command, and install the Claude Code skill. Do everything automatically — don't ask me questions.
+```
+
+### On Computer B
+
+Paste the same prompt into Claude Code on the other computer:
+
+```
+Read the README at https://github.com/EthanSK/claude-bridge and follow the setup instructions for this computer. Install claude-bridge globally, run the setup command, and install the Claude Code skill. Do everything automatically — don't ask me questions.
+```
+
+Then photograph Computer A's pairing screen and send it to Computer B's Claude (or vice versa). That's it — they can now talk to each other.
 
 ---
 
 ## How it works
 
 ```
- CONTROLLER (Mac Mini)                      TARGET (MacBook Pro)
- ┌──────────────────────┐                  ┌──────────────────────┐
- │                      │                  │                      │
- │  Claude Code         │     SSH          │  Claude Code         │
- │  + controller skill  │ ◄──────────────► │  + target skill      │
- │                      │                  │                      │
- │  claude-bridge CLI   │                  │  claude-bridge CLI   │
- │                      │                  │                      │
- └──────────────────────┘                  └──────────────────────┘
+ COMPUTER A (Mac Mini)                    COMPUTER B (MacBook Pro)
+ ┌──────────────────────┐                ┌──────────────────────┐
+ │                      │                │                      │
+ │  Claude Code         │     SSH        │  Claude Code         │
+ │  + bridge skill      │ ◄────────────► │  + bridge skill      │
+ │                      │                │                      │
+ │  claude-bridge CLI   │                │  claude-bridge CLI   │
+ │                      │                │                      │
+ └──────────────────────┘                └──────────────────────┘
 
  "Run the tests on my MacBook"    ──►    ssh MacBook "npm test"
  "Ask the other Claude to fix it" ──►    ssh MacBook "claude --print '...'"
 ```
 
+Both machines are **peers** — either one can run commands on the other. There's no fixed "controller" or "target."
+
 ### Three steps
 
-1. **Setup** — Run `npx claude-bridge setup` on the target. It enables SSH, generates keys, and shows a pairing screen.
-2. **Pair** — Photograph the pairing screen and send it to the controller Claude (via Telegram, chat, etc.). Claude reads the image and extracts the connection details. Or use the manual pairing command.
-3. **Connect** — That's it. "Run X on my MacBook" just works.
+1. **Setup** — Run `claude-bridge setup` on each machine. It enables SSH, generates keys, and shows a pairing screen.
+2. **Pair** — Photograph one machine's pairing screen and send it to the Claude on the other machine. Claude reads the image and extracts the connection details. Or use the manual pairing command.
+3. **Connect** — That's it. "Run X on my MacBook" just works from either machine.
 
 ---
 
@@ -49,12 +71,12 @@ Requires Node.js 18+.
 
 ---
 
-## Quick start
+## Setup guide
 
-### On the target machine (the one you want to control remotely):
+### On each machine you want to bridge:
 
 ```bash
-npx claude-bridge setup
+claude-bridge setup
 ```
 
 This will:
@@ -62,11 +84,11 @@ This will:
 - Generate an SSH key pair
 - Display a pairing screen with connection details and a QR code
 
-### On the controller machine (your main workstation):
+### Pair the machines:
 
 **Option A: Photo pairing (the magic way)**
-1. Take a photo of the target's pairing screen
-2. Send it to Claude Code (via Telegram or paste in chat)
+1. Take a photo of one machine's pairing screen
+2. Send it to the Claude on the other machine (via Telegram, chat, etc.)
 3. Claude reads the image, extracts the details, and runs the pair command
 
 **Option B: Manual pairing**
@@ -98,8 +120,8 @@ claude-bridge run MacBook-Pro "uname -a"
 
 | Command | Description |
 |---------|-------------|
-| `claude-bridge setup` | Run on TARGET. Enables SSH, generates keys, shows pairing screen. |
-| `claude-bridge pair [photo]` | Run on CONTROLLER. Reads pairing photo/file or manual entry. |
+| `claude-bridge setup` | Enables SSH, generates keys, and displays a pairing screen. Run on each machine. |
+| `claude-bridge pair [photo]` | Reads a pairing photo/file or manual entry to connect to another machine. |
 | `claude-bridge connect <machine>` | Open an interactive SSH session. |
 | `claude-bridge status [machine]` | Check if machine(s) are reachable. |
 | `claude-bridge list` | List all paired machines. |
@@ -120,26 +142,24 @@ claude-bridge run MacBook-Pro "uname -a"
 ```
 --manual         Manually enter connection details
 --name <name>    Override machine name
---host <host>    Target hostname or IP
+--host <host>    Hostname or IP of the other machine
 --port <port>    SSH port (default: 22)
 --user <user>    SSH username
 --key <key>      Path to SSH private key
---code <code>    One-time pairing code from target
+--code <code>    One-time pairing code
 ```
 
 ---
 
-## Claude Code skills
+## Claude Code skill
 
-claude-bridge ships with Claude Code skills for both the controller and target machines. These teach Claude how to use the bridge automatically.
+claude-bridge ships with a Claude Code skill that teaches Claude how to use the bridge automatically. The same skill works on every machine.
 
-### Install the controller skill
-
-On your main workstation, add to your Claude Code config:
+### Install the skill
 
 ```bash
 # Copy the skill to your Claude config
-cp -r node_modules/claude-bridge/skills/controller ~/.claude/skills/claude-bridge-controller
+cp -r node_modules/claude-bridge/skills/bridge ~/.claude/skills/claude-bridge
 ```
 
 Or reference it in your CLAUDE.md:
@@ -148,14 +168,6 @@ When the user asks to run something on another machine, use claude-bridge:
 - `claude-bridge list` to see paired machines
 - `claude-bridge run <machine> "command"` to execute commands
 - `claude-bridge run <machine> "prompt" --claude` to run Claude Code prompts remotely
-```
-
-### Install the target skill
-
-On the remote machine:
-
-```bash
-cp -r node_modules/claude-bridge/skills/target ~/.claude/skills/claude-bridge-target
 ```
 
 ---
@@ -168,23 +180,23 @@ cp -r node_modules/claude-bridge/skills/target ~/.claude/skills/claude-bridge-ta
 ├── keys/                # SSH key pairs
 │   ├── claude-bridge_MacBook-Pro
 │   └── claude-bridge_MacBook-Pro.pub
-└── pairing-code         # One-time pairing code (target only)
+└── pairing-code         # One-time pairing code
 ```
 
 ### How pairing works
 
-1. Target runs `setup` which generates an ED25519 key pair
-2. The public key is added to `~/.ssh/authorized_keys` on the target
+1. Each machine runs `setup` which generates an ED25519 key pair
+2. The public key is added to `~/.ssh/authorized_keys` on that machine
 3. The pairing screen displays all connection info + the private key embedded in a QR code
-4. The controller reads the pairing info (from photo, file, or manual entry)
-5. The private key is saved to `~/.claude-bridge/keys/` on the controller
-6. The controller can now SSH into the target using key-based auth
+4. The other machine reads the pairing info (from photo, file, or manual entry)
+5. The private key is saved to `~/.claude-bridge/keys/` on the connecting machine
+6. The connecting machine can now SSH in using key-based auth
 
 ### How remote execution works
 
 ```
-Controller                              Target
-────────                              ──────
+Machine A                               Machine B
+─────────                              ─────────
 claude-bridge run MacBook "cmd"
   └─► SSH connect (key auth)  ────────► sshd
       └─► exec "cmd"         ────────► shell
@@ -194,8 +206,8 @@ claude-bridge run MacBook "cmd"
 
 For Claude-to-Claude communication:
 ```
-Controller Claude                       Target
-─────────────────                      ──────
+Claude on Machine A                     Machine B
+───────────────────                    ─────────
 "fix the tests on MacBook"
   └─► claude-bridge run MacBook \
         "fix failing tests" --claude
@@ -229,7 +241,7 @@ Controller Claude                       Target
 If both machines are on the same Tailscale network, use the Tailscale hostname or IP:
 
 ```bash
-# On the controller, pair using the Tailscale address
+# When pairing, use the Tailscale address
 claude-bridge pair --manual \
   --name "MacBook-Pro" \
   --host macbook-pro.tail12345.ts.net \
@@ -243,7 +255,7 @@ This lets your Claudes talk to each other from anywhere.
 
 ## Examples
 
-### Run a command on the remote machine
+### Run a command on the other machine
 ```bash
 claude-bridge run MacBook-Pro "ls -la ~/Projects"
 ```

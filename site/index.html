@@ -6,7 +6,7 @@
     <title>claude-bridge &mdash; Let your Claude Code instances talk to each other</title>
     <meta
       name="description"
-      content="claude-bridge enables Claude-to-Claude communication between two computers over SSH. Set up in seconds with a photo-based pairing flow."
+      content="claude-bridge enables bidirectional Claude-to-Claude communication between two computers over SSH. Set up in seconds with a photo-based pairing flow."
     />
     <meta name="robots" content="index, follow, max-image-preview:large" />
     <link rel="canonical" href="https://ethansk.github.io/claude-bridge/" />
@@ -19,12 +19,12 @@
     <meta property="og:locale" content="en_GB" />
     <meta property="og:url" content="https://ethansk.github.io/claude-bridge/" />
     <meta property="og:title" content="claude-bridge &mdash; Let your Claude Code instances talk to each other" />
-    <meta property="og:description" content="Enable Claude-to-Claude communication between two computers. Photo-based pairing, SSH under the hood, zero config." />
+    <meta property="og:description" content="Bidirectional Claude-to-Claude communication between two computers. Photo-based pairing, SSH under the hood, zero config." />
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="claude-bridge &mdash; Let your Claude Code instances talk to each other" />
-    <meta name="twitter:description" content="Enable Claude-to-Claude communication between two computers. Photo-based pairing, SSH under the hood, zero config." />
+    <meta name="twitter:description" content="Bidirectional Claude-to-Claude communication between two computers. Photo-based pairing, SSH under the hood, zero config." />
 
     <link rel="stylesheet" href="./styles.css" />
   </head>
@@ -50,7 +50,7 @@
           Let your <span class="accent">Claudes</span> talk to each other.
         </h1>
         <p class="tagline">
-          claude-bridge connects Claude Code instances across machines. Run commands, edit files, and even start Claude sessions on remote computers &mdash; all over SSH, paired with a photo.
+          claude-bridge connects Claude Code instances across machines with bidirectional communication. Run commands, edit files, and start Claude sessions on any paired computer &mdash; all over SSH, paired with a photo.
         </p>
         <div class="hero-actions">
           <a class="btn btn--primary" href="https://github.com/EthanSK/claude-bridge#quick-start">
@@ -77,7 +77,7 @@
             <span class="terminal-dot red"></span>
             <span class="terminal-dot yellow"></span>
             <span class="terminal-dot green"></span>
-            <span class="terminal-title">Terminal &mdash; Target Machine</span>
+            <span class="terminal-title">Terminal &mdash; Any Machine</span>
           </div>
           <div class="terminal-body">
 <pre><span class="t-dim">$</span> npx claude-bridge setup
@@ -104,7 +104,7 @@
   <span class="t-bold">SSH Port:</span>      22
   <span class="t-bold">Pairing Code:</span>  <span class="t-green">a7Bx9kQ2mP4n</span>
 
-  <span class="t-dim">[ok] Setup complete. Take a photo and send to controller.</span></pre>
+  <span class="t-dim">[ok] Setup complete. Photograph this and send to your other machine's Claude.</span></pre>
           </div>
         </div>
       </section>
@@ -116,22 +116,22 @@
           <li>
             <div class="step-num">1</div>
             <div>
-              <h3>Setup the target</h3>
-              <p>Run <code>npx claude-bridge setup</code> on the machine you want to control remotely. It enables SSH, generates keys, and displays a pairing screen with connection details and a QR code.</p>
+              <h3>Set up each machine</h3>
+              <p>Run <code>npx claude-bridge setup</code> on each computer you want to bridge. It enables SSH, generates keys, and displays a pairing screen with connection details and a QR code.</p>
             </div>
           </li>
           <li>
             <div class="step-num">2</div>
             <div>
               <h3>Pair via photo</h3>
-              <p>Photograph the pairing screen and send it to the controller Claude (via Telegram, chat, or any channel). Claude reads the image, extracts the connection details, and saves the pairing. Or paste the manual command.</p>
+              <p>Photograph one machine&rsquo;s pairing screen and send it to the Claude on the other machine (via Telegram, chat, or any channel). Claude reads the image, extracts the connection details, and saves the pairing.</p>
             </div>
           </li>
           <li>
             <div class="step-num">3</div>
             <div>
               <h3>Bridge your Claudes</h3>
-              <p>&ldquo;Run the tests on my MacBook&rdquo; just works. The controller SSH&rsquo;s into the target, executes the command, and reports back. Add <code>--claude</code> to run a full Claude Code prompt on the remote machine.</p>
+              <p>&ldquo;Run the tests on my MacBook&rdquo; just works &mdash; from either machine. Each peer can SSH into the other, execute commands, and report back. Add <code>--claude</code> to run a full Claude Code prompt on the remote machine.</p>
             </div>
           </li>
         </ol>
@@ -146,7 +146,15 @@
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M13 12H3"/></svg>
             </div>
             <h3>Photo-based pairing</h3>
-            <p>Photograph the target&rsquo;s setup screen. Claude reads the image, extracts connection details, and pairs automatically. No typing IPs.</p>
+            <p>Photograph the pairing screen. Claude reads the image, extracts connection details, and pairs automatically. No typing IPs.</p>
+          </div>
+
+          <div class="feature">
+            <div class="feature-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/><path d="M7 12h10M12 7v10"/></svg>
+            </div>
+            <h3>Bidirectional</h3>
+            <p>No fixed roles. Both machines are equal peers &mdash; either one can run commands on the other. Pair once, communicate both ways.</p>
           </div>
 
           <div class="feature">
@@ -154,7 +162,7 @@
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/></svg>
             </div>
             <h3>Remote command execution</h3>
-            <p>Run any shell command on paired machines. Deploy apps, check status, manage processes &mdash; all from your main workstation.</p>
+            <p>Run any shell command on paired machines. Deploy apps, check status, manage processes &mdash; all from either computer.</p>
           </div>
 
           <div class="feature">
@@ -162,7 +170,7 @@
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
             </div>
             <h3>Claude-to-Claude</h3>
-            <p>Use <code>--claude</code> to run a Claude Code prompt on the remote machine. Your controller Claude can delegate work to the target Claude.</p>
+            <p>Use <code>--claude</code> to run a Claude Code prompt on the remote machine. Your Claude can delegate work to the Claude on any paired peer.</p>
           </div>
 
           <div class="feature">
@@ -179,14 +187,6 @@
             </div>
             <h3>QR code pairing</h3>
             <p>The setup screen includes a QR code with all connection details encoded. Scan it or photograph it &mdash; either way, pairing takes seconds.</p>
-          </div>
-
-          <div class="feature">
-            <div class="feature-icon">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-            </div>
-            <h3>Claude Code skills</h3>
-            <p>Ships with ready-made skills for both controller and target. Claude knows how to use the bridge without any extra prompting.</p>
           </div>
 
           <div class="feature">
@@ -211,28 +211,28 @@
         <div class="section-kicker">Architecture</div>
         <h2>Simple under the hood.</h2>
         <div class="arch-diagram">
-          <div class="arch-box arch-controller">
-            <div class="arch-label">Controller</div>
-            <div class="arch-desc">Mac Mini / Main workstation</div>
+          <div class="arch-box arch-peer">
+            <div class="arch-label">Peer A</div>
+            <div class="arch-desc">Any machine (e.g. Mac Mini)</div>
             <div class="arch-items">
               <span>Claude Code</span>
-              <span>Controller skill</span>
+              <span>Bridge skill</span>
               <span>claude-bridge CLI</span>
             </div>
           </div>
           <div class="arch-arrow">
             <svg width="80" height="24" viewBox="0 0 80 24" fill="none">
-              <path d="M0 12h72M72 12l-8-6M72 12l-8 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M8 12h64M72 12l-8-6M72 12l-8 6M8 12l8-6M8 12l8 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
             <span class="arch-arrow-label">SSH</span>
           </div>
-          <div class="arch-box arch-target">
-            <div class="arch-label">Target</div>
-            <div class="arch-desc">MacBook Pro / Secondary machine</div>
+          <div class="arch-box arch-peer">
+            <div class="arch-label">Peer B</div>
+            <div class="arch-desc">Any machine (e.g. MacBook Pro)</div>
             <div class="arch-items">
               <span>Claude Code</span>
-              <span>Target skill</span>
-              <span>SSH server (sshd)</span>
+              <span>Bridge skill</span>
+              <span>claude-bridge CLI</span>
             </div>
           </div>
         </div>

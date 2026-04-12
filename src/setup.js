@@ -189,7 +189,7 @@ export async function setup(options) {
     )
   );
   console.log();
-  console.log(chalk.bold.cyan("  PAIRING SCREEN -- photograph this and send to controller"));
+  console.log(chalk.bold.cyan("  PAIRING SCREEN -- photograph this and send to your other machine's Claude"));
   console.log();
   console.log(
     chalk.bold.white(
@@ -275,21 +275,21 @@ export async function setup(options) {
   console.log();
   console.log(
     chalk.dim(
-      "  Tip: Take a photo of this screen and send it to the controller"
+      "  Tip: Take a photo of this screen and send it to the Claude on"
     )
   );
   console.log(
     chalk.dim(
-      "  Claude. It can read the image and extract the connection details."
+      "  your other machine. It can read the image and extract the connection details."
     )
   );
   console.log();
   console.log(
     chalk.dim(
-      "  Or copy the private key file to the controller machine:"
+      "  Or copy the private key file to the other machine:"
     )
   );
-  console.log(chalk.dim(`  scp "${keyPath}" controller:~/.claude-bridge/keys/`));
+  console.log(chalk.dim(`  scp "${keyPath}" other-machine:~/.claude-bridge/keys/`));
   console.log();
 
   // Security note
