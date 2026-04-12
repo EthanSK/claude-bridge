@@ -232,6 +232,54 @@ nav {
   background: rgba(255, 255, 255, 0.06);
 }
 
+/* -- Quick Start -- */
+.quickstart {
+  padding: 60px 24px 20px;
+  text-align: center;
+}
+.quickstart h2 {
+  max-width: 680px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.quickstart-prompt {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 18px;
+}
+.quickstart-cmd {
+  max-width: 680px;
+  text-align: left;
+  white-space: normal;
+  line-height: 1.55;
+}
+.prereq-note {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: 680px;
+  margin: 0 auto 18px;
+  padding: 14px 20px;
+  border-radius: 10px;
+  background: rgba(251, 191, 36, 0.06);
+  border: 1px solid rgba(251, 191, 36, 0.2);
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: left;
+  line-height: 1.55;
+}
+.prereq-note svg {
+  flex-shrink: 0;
+  color: #fbbf24;
+  margin-top: 1px;
+}
+.quickstart-sub {
+  font-size: 14px;
+  color: var(--text-muted);
+  max-width: 600px;
+  margin: 0 auto;
+}
+
 /* -- Terminal demo -- */
 .demo-wrap {
   padding: 40px 24px 60px;
