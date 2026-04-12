@@ -100,7 +100,8 @@ claude-bridge pair \
   --host 192.168.1.50 \
   --port 22 \
   --user ethan \
-  --key ~/.claude-bridge/keys/claude-bridge_MacBook-Pro
+  --key ~/.claude-bridge/keys/claude-bridge_MacBook-Pro \
+  --token bridge-a7f3k9
 ```
 
 **Option C: Interactive pairing**
@@ -141,11 +142,12 @@ claude-bridge run MacBook-Pro "uname -a"
 ### Pair options
 
 ```
--n, --name <name>    Machine name (defaults to host)
--H, --host <host>    Hostname or IP of the other machine
--u, --user <user>    SSH username
--p, --port <port>    SSH port (default: 22)
--k, --key <key>      Path to SSH private key
+-n, --name <name>      Machine name (defaults to host)
+-H, --host <host>      Hostname or IP of the other machine
+-u, --user <user>      SSH username
+-p, --port <port>      SSH port (default: 22)
+-k, --key <key>        Path to SSH private key
+-t, --token <token>    Pairing token from setup screen
 ```
 
 ---
@@ -180,6 +182,7 @@ When the user asks to run something on another machine, use claude-bridge:
 ```
 ~/.claude-bridge/
 ├── config               # Paired machines (INI-style key-value)
+├── .pending-token       # One-time pairing token (deleted after use)
 └── keys/                # SSH key pairs
     ├── claude-bridge_MacBook-Pro
     └── claude-bridge_MacBook-Pro.pub
@@ -202,10 +205,12 @@ paired_at=2026-04-09T12:00:00Z
 
 1. Each machine runs `setup` which generates an ED25519 key pair
 2. The public key is added to `~/.ssh/authorized_keys` on that machine
-3. The pairing screen displays all connection info
-4. The other machine reads the pairing info (from photo or manual entry)
-5. The private key is copied to `~/.claude-bridge/keys/` on the connecting machine
-6. The connecting machine can now SSH in using key-based auth
+3. A one-time pairing token is generated and displayed on screen
+4. The pairing screen displays all connection info (local IP, public IP, token)
+5. The other machine reads the pairing info (from photo or manual entry)
+6. The pairing token is verified during the `pair` step, then deleted
+7. The private key is copied to `~/.claude-bridge/keys/` on the connecting machine
+8. The connecting machine can now SSH in using key-based auth
 
 ### How remote execution works
 

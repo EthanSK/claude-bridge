@@ -5,7 +5,7 @@ set -euo pipefail
 # Pure bash. Zero dependencies. Works on any Mac/Linux out of the box.
 # https://github.com/EthanSK/claude-bridge
 
-VERSION="2.0.0"
+VERSION="2.1.0"
 
 # -- Colours (ANSI) ----------------------------------------------------------
 RED='\033[0;31m'
@@ -215,6 +215,10 @@ get_local_ip() {
   printf 'unknown'
 }
 
+get_public_ip() {
+  curl -s --max-time 3 ifconfig.me 2>/dev/null || printf 'unavailable'
+}
+
 get_hostname() {
   hostname 2>/dev/null || printf 'unknown'
 }
@@ -228,6 +232,12 @@ get_machine_name() {
 
 get_username() {
   whoami 2>/dev/null || printf '%s' "$USER"
+}
+
+generate_pairing_token() {
+  local hex
+  hex="$(head -c 4 /dev/urandom | xxd -p | head -c 6)"
+  printf 'bridge-%s' "$hex"
 }
 
 is_macos() {
@@ -347,24 +357,43 @@ cmd_setup() {
   # Step 3: Get network info
   local primary_ip
   primary_ip="$(get_local_ip)"
+  local public_ip
+  public_ip="$(get_public_ip)"
 
-  # Step 4: Display pairing screen
-  printf "${BOLD}${CYAN}  =============================================================${RESET}\n"
+  # Step 4: Generate pairing token
+  printf "${BOLD}  3. Pairing Token${RESET}\n"
+  local pairing_token
+  pairing_token="$(generate_pairing_token)"
+  ensure_config_dir
+  printf '%s' "$pairing_token" > "$CONFIG_DIR/.pending-token"
+  chmod 600 "$CONFIG_DIR/.pending-token"
+  ok "One-time pairing token generated."
   printf '\n'
-  printf "${BOLD}${CYAN}  PAIRING SCREEN -- photograph this and send to your other machine's Claude${RESET}\n"
+
+  # Step 5: Display pairing screen
+  # Calculate box width based on content
+  local box_width=46
+  local inner_width=$((box_width - 4))
+
   printf '\n'
-  printf "${BOLD}  -------------------------------------------------------------${RESET}\n"
+  printf "${BOLD}${CYAN}"
+  printf '  ╔'; printf '═%.0s' $(seq 1 $box_width); printf '╗\n'
+  printf '  ║%*s%s%*s║\n' $(( (box_width - 22) / 2 )) "" "claude-bridge pairing" $(( (box_width - 21) / 2 )) ""
+  printf '  ╠'; printf '═%.0s' $(seq 1 $box_width); printf '╣\n'
+  printf "${RESET}"
+  printf "${BOLD}${CYAN}  ║${RESET}  ${BOLD}Machine:${RESET}    %-*s${BOLD}${CYAN}║${RESET}\n" $((box_width - 14)) "$machine_name"
+  printf "${BOLD}${CYAN}  ║${RESET}  ${BOLD}User:${RESET}       %-*s${BOLD}${CYAN}║${RESET}\n" $((box_width - 14)) "$user"
+  printf "${BOLD}${CYAN}  ║${RESET}  ${BOLD}Local:${RESET}      %-*s${BOLD}${CYAN}║${RESET}\n" $((box_width - 14)) "$local_hostname"
+  printf "${BOLD}${CYAN}  ║${RESET}  ${BOLD}Local IP:${RESET}   %-*s${BOLD}${CYAN}║${RESET}\n" $((box_width - 14)) "$primary_ip"
+  printf "${BOLD}${CYAN}  ║${RESET}  ${BOLD}Public IP:${RESET}  %-*s${BOLD}${CYAN}║${RESET}\n" $((box_width - 14)) "$public_ip"
+  printf "${BOLD}${CYAN}  ║${RESET}  ${BOLD}Port:${RESET}       %-*s${BOLD}${CYAN}║${RESET}\n" $((box_width - 14)) "$port"
+  printf "${BOLD}${CYAN}  ║${RESET}  ${BOLD}Token:${RESET}      ${YELLOW}${BOLD}%-*s${RESET}${BOLD}${CYAN}║${RESET}\n" $((box_width - 14)) "$pairing_token"
+  printf "${BOLD}${CYAN}"
+  printf '  ╚'; printf '═%.0s' $(seq 1 $box_width); printf '╝\n'
+  printf "${RESET}"
   printf '\n'
-  printf "${BOLD}  Machine Name:  ${YELLOW}${BOLD}%s${RESET}\n" "$machine_name"
-  printf "${BOLD}  Username:      ${RESET}%s\n" "$user"
-  printf "${BOLD}  Hostname:      ${RESET}%s\n" "$local_hostname"
-  printf "${BOLD}  Local IP:      ${RESET}%s\n" "$primary_ip"
-  printf "${BOLD}  SSH Port:      ${RESET}%s\n" "$port"
-  printf "${BOLD}  Fingerprint:   ${DIM}%s${RESET}\n" "$fingerprint"
-  printf '\n'
-  printf "${BOLD}  -------------------------------------------------------------${RESET}\n"
-  printf '\n'
-  printf "${BOLD}  Private Key Path: ${DIM}%s${RESET}\n" "$key_path"
+  dim "Photograph this screen and send to Claude on your other machine."
+  dim "For internet access, forward port $port or use Tailscale."
   printf '\n'
 
   # Manual pairing string
@@ -375,12 +404,12 @@ cmd_setup() {
   printf "${DIM}    --host \"%s\" \\\\${RESET}\n" "$primary_ip"
   printf "${DIM}    --port %s \\\\${RESET}\n" "$port"
   printf "${DIM}    --user \"%s\" \\\\${RESET}\n" "$user"
-  printf "${DIM}    --key \"%s\"${RESET}\n" "$key_path"
+  printf "${DIM}    --key \"%s\" \\\\${RESET}\n" "$key_path"
+  printf "${DIM}    --token \"%s\"${RESET}\n" "$pairing_token"
   printf '\n'
-  printf "${BOLD}${CYAN}  =============================================================${RESET}\n"
-  printf '\n'
-  dim "Tip: Take a photo of this screen and send it to the Claude on"
-  dim "your other machine. It can read the image and extract the connection details."
+
+  printf "${BOLD}  Private Key Path: ${DIM}%s${RESET}\n" "$key_path"
+  printf "${BOLD}  Fingerprint:      ${DIM}%s${RESET}\n" "$fingerprint"
   printf '\n'
   dim "Or copy the private key file to the other machine:"
   printf "${DIM}  scp \"%s\" other-machine:~/.claude-bridge/keys/${RESET}\n" "$key_path"
@@ -409,7 +438,7 @@ cmd_setup_help() {
 }
 
 cmd_pair() {
-  local machine_name="" host="" user="" port="22" keypath=""
+  local machine_name="" host="" user="" port="22" keypath="" token=""
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -418,6 +447,7 @@ cmd_pair() {
       --user|-u)    user="$2"; shift 2 ;;
       --port|-p)    port="$2"; shift 2 ;;
       --key|-k)     keypath="$2"; shift 2 ;;
+      --token|-t)   token="$2"; shift 2 ;;
       --manual|-m)  shift ;;  # No-op, kept for compat
       --help|-h)    cmd_pair_help; exit 0 ;;
       -*)           die "Unknown option: $1. Use --help for usage." ;;
@@ -458,11 +488,31 @@ cmd_pair() {
       printf '  Key path (leave empty for system default): '
       read -r keypath
     fi
+
+    if [ -z "$token" ]; then
+      printf '  Pairing token (from setup screen): '
+      read -r token
+    fi
   fi
 
   [ -z "$machine_name" ] && machine_name="$host"
   [ -z "$host" ] && die "Host is required."
   [ -z "$user" ] && die "User is required."
+  [ -z "$token" ] && die "Pairing token is required. Check the setup screen on the other machine."
+
+  # Verify pairing token
+  local pending_token_file="$CONFIG_DIR/.pending-token"
+  if [ -f "$pending_token_file" ]; then
+    local stored_token
+    stored_token="$(cat "$pending_token_file")"
+    if [ "$token" != "$stored_token" ]; then
+      die "Invalid pairing token. Check the token on the other machine's setup screen."
+    fi
+    # Token verified — remove it (one-time use)
+    rm -f "$pending_token_file"
+    ok "Pairing token verified."
+  fi
+  # If no pending token file exists (pairing a remote machine), skip local verification
 
   # Default keypath
   [ -z "$keypath" ] && keypath="(system default)"
@@ -491,13 +541,14 @@ cmd_pair_help() {
   printf 'Usage: claude-bridge pair [OPTIONS]\n\n'
   printf 'Pair with another machine. Interactive if flags are omitted.\n\n'
   printf 'Options:\n'
-  printf '  -n, --name <name>   Machine name (defaults to host)\n'
-  printf '  -H, --host <host>   Hostname or IP of the other machine\n'
-  printf '  -u, --user <user>   SSH username\n'
-  printf '  -p, --port <port>   SSH port (default: 22)\n'
-  printf '  -k, --key <key>     Path to SSH private key\n'
-  printf '  -m, --manual        (Kept for compat, no-op)\n'
-  printf '  -h, --help          Show this help\n'
+  printf '  -n, --name <name>     Machine name (defaults to host)\n'
+  printf '  -H, --host <host>     Hostname or IP of the other machine\n'
+  printf '  -u, --user <user>     SSH username\n'
+  printf '  -p, --port <port>     SSH port (default: 22)\n'
+  printf '  -k, --key <key>       Path to SSH private key\n'
+  printf '  -t, --token <token>   Pairing token from setup screen\n'
+  printf '  -m, --manual          (Kept for compat, no-op)\n'
+  printf '  -h, --help            Show this help\n'
 }
 
 cmd_connect() {

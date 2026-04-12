@@ -80,7 +80,7 @@ claude-bridge connect MacBook-Pro
 ### Pair a new machine
 ```bash
 # With flags:
-claude-bridge pair --name "MacBook-Pro" --host 192.168.1.50 --port 22 --user ethan --key ~/.claude-bridge/keys/claude-bridge_MacBook-Pro
+claude-bridge pair --name "MacBook-Pro" --host 192.168.1.50 --port 22 --user ethan --key ~/.claude-bridge/keys/claude-bridge_MacBook-Pro --token bridge-a7f3k9
 
 # Interactive:
 claude-bridge pair
@@ -99,11 +99,12 @@ When the user sends a photo of another machine's pairing screen:
 2. Extract these fields from the pairing screen:
    - Machine Name
    - Username
-   - Local IP
-   - SSH Port
+   - Local IP (or Public IP if connecting over the internet)
+   - Port
+   - Token
 3. Run the pair command:
 ```bash
-claude-bridge pair --name "<name>" --host "<ip>" --port <port> --user "<user>"
+claude-bridge pair --name "<name>" --host "<ip>" --port <port> --user "<user>" --token "<token>"
 ```
 4. Then test: `claude-bridge status <name>`
 
