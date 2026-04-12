@@ -1,4 +1,5 @@
 .DS_Store
 *.log
 .env
+.agent-bridge/
 .claude-bridge/

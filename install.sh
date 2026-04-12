@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# claude-bridge installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/EthanSK/claude-bridge/main/install.sh | bash
+# agent-bridge installer
+# Usage: curl -fsSL https://raw.githubusercontent.com/EthanSK/agent-bridge/main/install.sh | bash
 
-REPO="https://raw.githubusercontent.com/EthanSK/claude-bridge/main/claude-bridge"
+REPO="https://raw.githubusercontent.com/EthanSK/agent-bridge/main/agent-bridge"
 INSTALL_DIR="/usr/local/bin"
-BIN_NAME="claude-bridge"
+BIN_NAME="agent-bridge"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -16,7 +16,7 @@ DIM='\033[2m'
 RESET='\033[0m'
 
 printf '\n'
-printf "${BOLD}${CYAN}  claude-bridge installer${RESET}\n"
+printf "${BOLD}${CYAN}  agent-bridge installer${RESET}\n"
 printf '\n'
 
 # Check for curl or wget
@@ -30,7 +30,7 @@ else
 fi
 
 # Download
-printf "${DIM}  Downloading claude-bridge...${RESET}\n"
+printf "${DIM}  Downloading agent-bridge...${RESET}\n"
 TMPFILE="$(mktemp)"
 $FETCH "$REPO" > "$TMPFILE"
 
@@ -44,10 +44,17 @@ else
   sudo chmod +x "$INSTALL_DIR/$BIN_NAME"
 fi
 
+# Create backward-compat symlink
+if [ -w "$INSTALL_DIR" ]; then
+  ln -sf "$INSTALL_DIR/$BIN_NAME" "$INSTALL_DIR/claude-bridge" 2>/dev/null || true
+else
+  sudo ln -sf "$INSTALL_DIR/$BIN_NAME" "$INSTALL_DIR/claude-bridge" 2>/dev/null || true
+fi
+
 printf '\n'
-printf "${GREEN}${BOLD}  [ok] claude-bridge installed to %s/%s${RESET}\n" "$INSTALL_DIR" "$BIN_NAME"
+printf "${GREEN}${BOLD}  [ok] agent-bridge installed to %s/%s${RESET}\n" "$INSTALL_DIR" "$BIN_NAME"
 printf '\n'
 printf "  Get started:\n"
-printf "${DIM}    claude-bridge setup${RESET}\n"
-printf "${DIM}    claude-bridge help${RESET}\n"
+printf "${DIM}    agent-bridge setup${RESET}\n"
+printf "${DIM}    agent-bridge help${RESET}\n"
 printf '\n'

@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# claude-bridge — Let your Claude Code instances talk to each other across machines.
+# agent-bridge — Bridge AI coding agents across machines.
 # Pure bash. Zero dependencies. Works on any Mac/Linux out of the box.
-# https://github.com/EthanSK/claude-bridge
+# https://github.com/EthanSK/agent-bridge
+#
+# Previously known as claude-bridge.
 
-VERSION="4.0.0"
+INVOKED_AS="$(basename "$0")"
+
+VERSION="5.0.0"
 
 # -- Colours (ANSI) ----------------------------------------------------------
 RED='\033[0;31m'
@@ -16,10 +20,20 @@ BOLD='\033[1m'
 DIM='\033[2m'
 RESET='\033[0m'
 
+# -- Deprecation notice -------------------------------------------------------
+if [ "$INVOKED_AS" = "claude-bridge" ]; then
+  printf '\033[0;33m  [deprecated] "claude-bridge" has been renamed to "agent-bridge". Please update your scripts.\033[0m\n' >&2
+fi
+
 # -- Paths --------------------------------------------------------------------
-CONFIG_DIR="$HOME/.claude-bridge"
+CONFIG_DIR="$HOME/.agent-bridge"
 CONFIG_FILE="$CONFIG_DIR/config"
 KEYS_DIR="$CONFIG_DIR/keys"
+
+# Migrate from old config dir if it exists and new one doesn't
+if [ ! -d "$CONFIG_DIR" ] && [ -d "$HOME/.claude-bridge" ]; then
+  mv "$HOME/.claude-bridge" "$CONFIG_DIR"
+fi
 
 # -- Helpers ------------------------------------------------------------------
 die()  { printf "${RED}  Error: %s${RESET}\n" "$1" >&2; exit 1; }
@@ -40,7 +54,7 @@ ensure_config_dir() {
 #   host=MacBookPro.local
 #   user=ethansk
 #   port=22
-#   key=~/.claude-bridge/keys/MacBook-Pro
+#   key=~/.agent-bridge/keys/MacBook-Pro
 #   paired_at=2026-04-09T12:00:00
 
 # Get a value for a machine: cfg_get <machine> <key>
@@ -290,7 +304,7 @@ cmd_setup() {
 
   printf '\n'
   printf "${BOLD}${CYAN}  +----------------------------------------------+${RESET}\n"
-  printf "${BOLD}${CYAN}  |         claude-bridge  .  setup               |${RESET}\n"
+  printf "${BOLD}${CYAN}  |         agent-bridge  .  setup                |${RESET}\n"
   printf "${BOLD}${CYAN}  +----------------------------------------------+${RESET}\n"
   printf '\n'
 
@@ -325,14 +339,14 @@ cmd_setup() {
   # Step 2: Generate key pair
   printf "${BOLD}  2. SSH Key Pair${RESET}\n"
   ensure_config_dir
-  local key_path="$KEYS_DIR/claude-bridge_${machine_name}"
+  local key_path="$KEYS_DIR/agent-bridge_${machine_name}"
   local pub_key_path="${key_path}.pub"
 
   if [ -f "$key_path" ] && [ -f "$pub_key_path" ]; then
     dim "Using existing key pair."
   else
     dim "Generating SSH key pair..."
-    ssh-keygen -t ed25519 -f "$key_path" -N "" -C "claude-bridge:${machine_name}" >/dev/null 2>&1
+    ssh-keygen -t ed25519 -f "$key_path" -N "" -C "agent-bridge:${machine_name}" >/dev/null 2>&1
     chmod 600 "$key_path"
     ok "Key pair generated."
   fi
@@ -386,7 +400,7 @@ cmd_setup() {
   printf '\n'
   printf "${BOLD}${CYAN}"
   printf '  ╔'; printf '═%.0s' $(seq 1 $box_width); printf '╗\n'
-  printf '  ║%*s%s%*s║\n' $(( (box_width - 22) / 2 )) "" "claude-bridge pairing" $(( (box_width - 21) / 2 )) ""
+  printf '  ║%*s%s%*s║\n' $(( (box_width - 21) / 2 )) "" "agent-bridge pairing" $(( (box_width - 20) / 2 )) ""
   printf '  ╠'; printf '═%.0s' $(seq 1 $box_width); printf '╣\n'
   printf "${RESET}"
   printf "${BOLD}${CYAN}  ║${RESET}  ${BOLD}Machine:${RESET}    %-*s${BOLD}${CYAN}║${RESET}\n" $((box_width - 14)) "$machine_name"
@@ -444,7 +458,7 @@ cmd_setup() {
           printf "${BOLD}    Port: ${CYAN}%s${RESET}\n" "$tunnel_port"
           printf '\n'
           printf "${DIM}  Remote pair command:${RESET}\n"
-          printf "${DIM}    claude-bridge pair --name \"%s\" --host %s --port %s --user %s --token \"%s\" --pubkey \"%s\"${RESET}\n" \
+          printf "${DIM}    agent-bridge pair --name \"%s\" --host %s --port %s --user %s --token \"%s\" --pubkey \"%s\"${RESET}\n" \
             "$machine_name" "$tunnel_host" "$tunnel_port" "$user" "$pairing_token" "$pub_key"
           printf '\n'
         else
@@ -478,7 +492,7 @@ cmd_setup() {
   # Manual pairing string (includes public key — no password needed)
   printf "${BOLD}${CYAN}  Pairing command (run on the other machine):${RESET}\n"
   printf '\n'
-  printf "${DIM}  claude-bridge pair \\\\${RESET}\n"
+  printf "${DIM}  agent-bridge pair \\\\${RESET}\n"
   printf "${DIM}    --name \"%s\" \\\\${RESET}\n" "$machine_name"
   printf "${DIM}    --host \"%s\" \\\\${RESET}\n" "$primary_ip"
   printf "${DIM}    --port %s \\\\${RESET}\n" "$port"
@@ -507,7 +521,7 @@ cmd_setup() {
 }
 
 cmd_setup_help() {
-  printf 'Usage: claude-bridge setup [OPTIONS]\n\n'
+  printf 'Usage: agent-bridge setup [OPTIONS]\n\n'
   printf 'Enables SSH, generates keys, and displays a pairing screen.\n'
   printf 'Run on each machine you want to bridge.\n\n'
   printf 'Options:\n'
@@ -547,7 +561,7 @@ cmd_pair() {
   # Interactive mode if missing required fields
   if [ -z "$host" ] || [ -z "$user" ]; then
     printf '\n'
-    printf "${BOLD}${CYAN}  claude-bridge pair${RESET}\n"
+    printf "${BOLD}${CYAN}  agent-bridge pair${RESET}\n"
     printf '\n'
 
     if [ -z "$machine_name" ]; then
@@ -585,14 +599,14 @@ cmd_pair() {
   [ -z "$pubkey" ] && die "Public key is required. Copy it from the other machine's setup screen."
 
   printf '\n'
-  printf "${BOLD}${CYAN}  claude-bridge pair${RESET}\n"
+  printf "${BOLD}${CYAN}  agent-bridge pair${RESET}\n"
   printf '\n'
 
   # Step 1: Generate local key pair (if not already present and no --key override)
   ensure_config_dir
   local local_machine
   local_machine="$(get_machine_name)"
-  local local_key="$KEYS_DIR/claude-bridge_${local_machine}"
+  local local_key="$KEYS_DIR/agent-bridge_${local_machine}"
   local local_pub="${local_key}.pub"
 
   if [ -n "$keypath" ]; then
@@ -611,7 +625,7 @@ cmd_pair() {
       dim "Using existing key pair for $local_machine."
     else
       dim "Generating SSH key pair for $local_machine..."
-      ssh-keygen -t ed25519 -f "$local_key" -N "" -C "claude-bridge:${local_machine}" >/dev/null 2>&1
+      ssh-keygen -t ed25519 -f "$local_key" -N "" -C "agent-bridge:${local_machine}" >/dev/null 2>&1
       chmod 600 "$local_key"
       ok "Key pair generated: $local_key"
     fi
@@ -657,14 +671,14 @@ cmd_pair() {
   printf "  For bidirectional access, run 'pair' on the other machine too.\n"
   printf '\n'
   printf "  Try it out:\n"
-  printf "${DIM}    claude-bridge status %s${RESET}\n" "$machine_name"
-  printf "${DIM}    claude-bridge run %s \"uname -a\"${RESET}\n" "$machine_name"
-  printf "${DIM}    claude-bridge connect %s${RESET}\n" "$machine_name"
+  printf "${DIM}    agent-bridge status %s${RESET}\n" "$machine_name"
+  printf "${DIM}    agent-bridge run %s \"uname -a\"${RESET}\n" "$machine_name"
+  printf "${DIM}    agent-bridge connect %s${RESET}\n" "$machine_name"
   printf '\n'
 }
 
 cmd_pair_help() {
-  printf 'Usage: claude-bridge pair [OPTIONS]\n\n'
+  printf 'Usage: agent-bridge pair [OPTIONS]\n\n'
   printf 'Pair with another machine. Interactive if flags are omitted.\n\n'
   printf 'Reads the other machine'\''s public key from the setup screen and adds it\n'
   printf 'to ~/.ssh/authorized_keys, authorizing that machine to SSH in. No\n'
@@ -693,10 +707,10 @@ cmd_connect() {
     esac
   done
 
-  [ -z "$machine_name" ] && die "Machine name required. Usage: claude-bridge connect <machine>"
+  [ -z "$machine_name" ] && die "Machine name required. Usage: agent-bridge connect <machine>"
 
   if ! cfg_exists "$machine_name"; then
-    die "Machine \"$machine_name\" not found. Run 'claude-bridge list' to see paired machines."
+    die "Machine \"$machine_name\" not found. Run 'agent-bridge list' to see paired machines."
   fi
 
   local host user port keypath
@@ -728,17 +742,25 @@ cmd_connect() {
 }
 
 cmd_connect_help() {
-  printf 'Usage: claude-bridge connect <machine>\n\n'
+  printf 'Usage: agent-bridge connect <machine>\n\n'
   printf 'Open an interactive SSH session to a paired machine.\n'
 }
 
 cmd_run() {
-  local machine_name="" command="" use_claude=0
+  local machine_name="" command="" agent_cmd=""
 
   # Parse args — machine and command are positional
   while [ $# -gt 0 ]; do
     case "$1" in
-      --claude)  use_claude=1; shift ;;
+      --agent)
+        if [ $# -gt 1 ] && [[ ! "$2" =~ ^- ]]; then
+          agent_cmd="$2"; shift 2
+        else
+          agent_cmd="claude --print"; shift
+        fi
+        ;;
+      --claude)  agent_cmd="claude --print"; shift ;;
+      --codex)   agent_cmd="codex exec"; shift ;;
       --help|-h) cmd_run_help; exit 0 ;;
       -*)        die "Unknown option: $1" ;;
       *)
@@ -754,11 +776,11 @@ cmd_run() {
     esac
   done
 
-  [ -z "$machine_name" ] && die "Machine name required. Usage: claude-bridge run <machine> \"command\" [--claude]"
-  [ -z "$command" ] && die "Command required. Usage: claude-bridge run <machine> \"command\" [--claude]"
+  [ -z "$machine_name" ] && die "Machine name required. Usage: agent-bridge run <machine> \"command\" [--agent \"cmd\"]"
+  [ -z "$command" ] && die "Command required. Usage: agent-bridge run <machine> \"command\" [--agent \"cmd\"]"
 
   if ! cfg_exists "$machine_name"; then
-    die "Machine \"$machine_name\" not found. Run 'claude-bridge list' to see paired machines."
+    die "Machine \"$machine_name\" not found. Run 'agent-bridge list' to see paired machines."
   fi
 
   local host user port keypath
@@ -770,11 +792,11 @@ cmd_run() {
 
   local final_command="$command"
   local label="command"
-  if [ "$use_claude" -eq 1 ]; then
+  if [ -n "$agent_cmd" ]; then
     # Escape single quotes
     local escaped="${command//\'/\'\\\'\'}"
-    final_command="claude --print '${escaped}'"
-    label="Claude prompt"
+    final_command="${agent_cmd} '${escaped}'"
+    label="agent prompt (${agent_cmd})"
   fi
 
   printf "${DIM}  Running %s on %s...${RESET}\n" "$label" "$machine_name"
@@ -799,16 +821,20 @@ cmd_run() {
 }
 
 cmd_run_help() {
-  printf 'Usage: claude-bridge run <machine> "command" [--claude]\n\n'
+  printf 'Usage: agent-bridge run <machine> "command" [--agent "cmd"]\n\n'
   printf 'Run a command on a paired machine.\n\n'
   printf 'Options:\n'
-  printf '  --claude   Wrap command in claude --print "..." on the remote machine\n'
-  printf '  -h, --help Show this help\n'
+  printf '  --agent [cmd]  Wrap prompt in an AI agent command on the remote machine.\n'
+  printf '                 Default: "claude --print" if no cmd specified.\n'
+  printf '                 Examples: --agent "codex exec", --agent "aider --message"\n'
+  printf '  --claude       Shorthand for --agent "claude --print"\n'
+  printf '  --codex        Shorthand for --agent "codex exec"\n'
+  printf '  -h, --help     Show this help\n'
 }
 
 cmd_list() {
   printf '\n'
-  printf "${BOLD}${CYAN}  claude-bridge list${RESET}\n"
+  printf "${BOLD}${CYAN}  agent-bridge list${RESET}\n"
   printf '\n'
 
   local names
@@ -818,9 +844,9 @@ cmd_list() {
     dim "No paired machines."
     printf '\n'
     dim "To pair a machine:"
-    dim "  1. Run 'claude-bridge setup' on the other machine"
+    dim "  1. Run 'agent-bridge setup' on the other machine"
     dim "  2. Send a photo of the pairing screen to this machine's Claude"
-    dim "  3. Run 'claude-bridge pair' here with the details"
+    dim "  3. Run 'agent-bridge pair' here with the details"
     printf '\n'
     return
   fi
@@ -863,7 +889,7 @@ cmd_status() {
   done
 
   printf '\n'
-  printf "${BOLD}${CYAN}  claude-bridge status${RESET}\n"
+  printf "${BOLD}${CYAN}  agent-bridge status${RESET}\n"
   printf '\n'
 
   check_machine() {
@@ -906,7 +932,7 @@ cmd_status() {
 
   if [ -n "$machine_name" ]; then
     if ! cfg_exists "$machine_name"; then
-      die "Machine \"$machine_name\" not found. Run 'claude-bridge list' to see paired machines."
+      die "Machine \"$machine_name\" not found. Run 'agent-bridge list' to see paired machines."
     fi
     check_machine "$machine_name"
   else
@@ -915,7 +941,7 @@ cmd_status() {
 
     if [ -z "$names" ]; then
       dim "No paired machines."
-      dim "Run 'claude-bridge setup' on each machine, then 'claude-bridge pair' to connect them."
+      dim "Run 'agent-bridge setup' on each machine, then 'agent-bridge pair' to connect them."
       printf '\n'
       return
     fi
@@ -937,7 +963,7 @@ cmd_status() {
 }
 
 cmd_status_help() {
-  printf 'Usage: claude-bridge status [machine]\n\n'
+  printf 'Usage: agent-bridge status [machine]\n\n'
   printf 'Check if paired machine(s) are reachable.\n'
   printf 'Omit machine name to check all.\n'
 }
@@ -953,10 +979,10 @@ cmd_unpair() {
     esac
   done
 
-  [ -z "$machine_name" ] && die "Machine name required. Usage: claude-bridge unpair <machine>"
+  [ -z "$machine_name" ] && die "Machine name required. Usage: agent-bridge unpair <machine>"
 
   if ! cfg_exists "$machine_name"; then
-    die "Machine \"$machine_name\" not found. Run 'claude-bridge list' to see paired machines."
+    die "Machine \"$machine_name\" not found. Run 'agent-bridge list' to see paired machines."
   fi
 
   # Try to remove the key file
@@ -976,24 +1002,24 @@ cmd_unpair() {
 }
 
 cmd_unpair_help() {
-  printf 'Usage: claude-bridge unpair <machine>\n\n'
+  printf 'Usage: agent-bridge unpair <machine>\n\n'
   printf 'Remove a paired machine and its SSH key.\n'
 }
 
 cmd_help() {
   printf '\n'
-  printf "${BOLD}claude-bridge${RESET} v%s\n" "$VERSION"
-  printf 'Let your Claude Code instances talk to each other across machines.\n'
+  printf "${BOLD}agent-bridge${RESET} v%s\n" "$VERSION"
+  printf 'Bridge AI coding agents across machines.\n'
   printf 'Pure bash. Zero dependencies.\n'
   printf '\n'
   printf "${BOLD}Usage:${RESET}\n"
-  printf '  claude-bridge <command> [options]\n'
+  printf '  agent-bridge <command> [options]\n'
   printf '\n'
   printf "${BOLD}Commands:${RESET}\n"
   printf '  setup              Enable SSH, generate keys, show pairing screen (--internet for tunnel)\n'
   printf '  pair               Pair with another machine (interactive or flags)\n'
   printf '  connect <machine>  Open an interactive SSH session\n'
-  printf '  run <machine> "cmd"  Run a command remotely\n'
+  printf '  run <machine> "cmd"  Run a command remotely (add --agent for AI agent prompts)\n'
   printf '  list               List all paired machines\n'
   printf '  status [machine]   Check reachability\n'
   printf '  unpair <machine>   Remove a pairing\n'
@@ -1001,18 +1027,20 @@ cmd_help() {
   printf '  help               Show this help\n'
   printf '\n'
   printf "${BOLD}Examples:${RESET}\n"
-  printf '  claude-bridge setup --name MacBook-Pro\n'
-  printf '  claude-bridge pair --host 192.168.1.50 --user ethan --name MacBook-Pro --pubkey "ssh-ed25519 AAAA..."\n'
-  printf '  claude-bridge run MacBook-Pro "ls -la ~/Projects"\n'
-  printf '  claude-bridge run MacBook-Pro "fix the tests" --claude\n'
-  printf '  claude-bridge connect MacBook-Pro\n'
+  printf '  agent-bridge setup --name MacBook-Pro\n'
+  printf '  agent-bridge pair --host 192.168.1.50 --user ethan --name MacBook-Pro --pubkey "ssh-ed25519 AAAA..."\n'
+  printf '  agent-bridge run MacBook-Pro "ls -la ~/Projects"\n'
+  printf '  agent-bridge run MacBook-Pro "fix the tests" --agent "claude --print"\n'
+  printf '  agent-bridge run MacBook-Pro "fix the tests" --claude\n'
+  printf '  agent-bridge run MacBook-Pro "refactor utils" --codex\n'
+  printf '  agent-bridge connect MacBook-Pro\n'
   printf '\n'
-  printf 'https://github.com/EthanSK/claude-bridge\n'
+  printf 'https://github.com/EthanSK/agent-bridge\n'
   printf '\n'
 }
 
 cmd_version() {
-  printf 'claude-bridge %s\n' "$VERSION"
+  printf 'agent-bridge %s\n' "$VERSION"
 }
 
 # -- Main dispatch ------------------------------------------------------------
@@ -1030,7 +1058,7 @@ main() {
     unpair)   cmd_unpair "$@" ;;
     version|--version|-v) cmd_version ;;
     help|--help|-h)       cmd_help ;;
-    *)        die "Unknown command: $cmd. Run 'claude-bridge help' for usage." ;;
+    *)        die "Unknown command: $cmd. Run 'agent-bridge help' for usage." ;;
   esac
 }
 
