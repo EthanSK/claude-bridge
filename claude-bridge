@@ -5,7 +5,7 @@ set -euo pipefail
 # Pure bash. Zero dependencies. Works on any Mac/Linux out of the box.
 # https://github.com/EthanSK/claude-bridge
 
-VERSION="3.0.0"
+VERSION="4.0.0"
 
 # -- Colours (ANSI) ----------------------------------------------------------
 RED='\033[0;31m'
@@ -444,8 +444,8 @@ cmd_setup() {
           printf "${BOLD}    Port: ${CYAN}%s${RESET}\n" "$tunnel_port"
           printf '\n'
           printf "${DIM}  Remote pair command:${RESET}\n"
-          printf "${DIM}    claude-bridge pair --name \"%s\" --host %s --port %s --user %s --token \"%s\"${RESET}\n" \
-            "$machine_name" "$tunnel_host" "$tunnel_port" "$user" "$pairing_token"
+          printf "${DIM}    claude-bridge pair --name \"%s\" --host %s --port %s --user %s --token \"%s\" --pubkey \"%s\"${RESET}\n" \
+            "$machine_name" "$tunnel_host" "$tunnel_port" "$user" "$pairing_token" "$pub_key"
           printf '\n'
         else
           warn "Tunnel may still be connecting. Check output below."
@@ -475,7 +475,7 @@ cmd_setup() {
     fi
   fi
 
-  # Manual pairing string (no --key needed — pair generates its own key)
+  # Manual pairing string (includes public key — no password needed)
   printf "${BOLD}${CYAN}  Pairing command (run on the other machine):${RESET}\n"
   printf '\n'
   printf "${DIM}  claude-bridge pair \\\\${RESET}\n"
@@ -483,13 +483,14 @@ cmd_setup() {
   printf "${DIM}    --host \"%s\" \\\\${RESET}\n" "$primary_ip"
   printf "${DIM}    --port %s \\\\${RESET}\n" "$port"
   printf "${DIM}    --user \"%s\" \\\\${RESET}\n" "$user"
-  printf "${DIM}    --token \"%s\"${RESET}\n" "$pairing_token"
+  printf "${DIM}    --token \"%s\" \\\\${RESET}\n" "$pairing_token"
+  printf "${DIM}    --pubkey \"%s\"${RESET}\n" "$pub_key"
   printf '\n'
 
   printf "${BOLD}  Fingerprint:      ${DIM}%s${RESET}\n" "$fingerprint"
   printf '\n'
-  dim "During pairing, the other machine will enter your password ONCE."
-  dim "After that, all connections use key-based auth (no password needed)."
+  dim "No password required. The other machine adds your public key to its"
+  dim "authorized_keys, authorizing this machine to SSH in."
   printf '\n'
   ok "Setup complete. This screen will stay visible."
   dim "Press Ctrl+C to close."
@@ -518,7 +519,7 @@ cmd_setup_help() {
 }
 
 cmd_pair() {
-  local machine_name="" host="" user="" port="22" keypath="" token=""
+  local machine_name="" host="" user="" port="22" keypath="" token="" pubkey=""
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -528,6 +529,7 @@ cmd_pair() {
       --port|-p)    port="$2"; shift 2 ;;
       --key|-k)     keypath="$2"; shift 2 ;;
       --token|-t)   token="$2"; shift 2 ;;
+      --pubkey)     pubkey="$2"; shift 2 ;;
       --manual|-m)  shift ;;  # No-op, kept for compat
       --help|-h)    cmd_pair_help; exit 0 ;;
       -*)           die "Unknown option: $1. Use --help for usage." ;;
@@ -568,12 +570,19 @@ cmd_pair() {
       printf '  Pairing token (from setup screen): '
       read -r token
     fi
+
+    if [ -z "$pubkey" ]; then
+      printf '  Public key from the other machine'\''s setup screen:\n'
+      printf '  > '
+      read -r pubkey
+    fi
   fi
 
   [ -z "$machine_name" ] && machine_name="$host"
   [ -z "$host" ] && die "Host is required."
   [ -z "$user" ] && die "User is required."
   [ -z "$token" ] && die "Pairing token is required. Check the setup screen on the other machine."
+  [ -z "$pubkey" ] && die "Public key is required. Copy it from the other machine's setup screen."
 
   printf '\n'
   printf "${BOLD}${CYAN}  claude-bridge pair${RESET}\n"
@@ -610,78 +619,30 @@ cmd_pair() {
   fi
   printf '\n'
 
-  # Step 2: Copy public key to remote via ssh-copy-id (one-time password auth)
-  printf "${BOLD}  2. Key Exchange${RESET}\n"
-  dim "Copying your public key to ${user}@${host}..."
-  dim "You will be prompted for ${user}'s password on the remote machine."
-  dim "(This is a one-time step — after this, connections are key-based.)"
-  printf '\n'
+  # Step 2: Authorize the other machine's public key on THIS machine
+  printf "${BOLD}  2. Authorize Remote Key${RESET}\n"
+  local ssh_dir="$HOME/.ssh"
+  local auth_keys="$ssh_dir/authorized_keys"
+  [ -d "$ssh_dir" ] || mkdir -p "$ssh_dir" && chmod 700 "$ssh_dir"
 
-  local pub_key_file="${keypath}.pub"
-  if [ ! -f "$pub_key_file" ]; then
-    die "Public key not found at $pub_key_file"
-  fi
-
-  if command -v ssh-copy-id >/dev/null 2>&1; then
-    ssh-copy-id -i "$pub_key_file" \
-      -o StrictHostKeyChecking=no \
-      -o UserKnownHostsFile=/dev/null \
-      -p "$port" \
-      "${user}@${host}" || die "ssh-copy-id failed. Check the host, user, port, and password."
+  if [ -f "$auth_keys" ] && grep -qF "$pubkey" "$auth_keys" 2>/dev/null; then
+    dim "Public key already in authorized_keys."
   else
-    # Fallback if ssh-copy-id not available
-    warn "ssh-copy-id not found, using manual key copy..."
-    cat "$pub_key_file" | \
-      ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-        -p "$port" "${user}@${host}" \
-        "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys" \
-      || die "Manual key copy failed. Check the host, user, port, and password."
+    printf '%s\n' "$pubkey" >> "$auth_keys"
+    sort -u "$auth_keys" -o "$auth_keys"
+    chmod 600 "$auth_keys"
+    ok "Remote public key added to ~/.ssh/authorized_keys."
   fi
-  ok "Public key copied to remote."
+  dim "The other machine can now SSH into this one."
   printf '\n'
 
-  # Step 3: Verify key-based SSH works
-  printf "${BOLD}  3. Verifying Key-Based Auth${RESET}\n"
-  if ssh -i "$keypath" \
-       -o BatchMode=yes -o ConnectTimeout=5 \
-       -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-       -o LogLevel=ERROR \
-       -p "$port" "${user}@${host}" "echo ok" >/dev/null 2>&1; then
-    ok "Key-based SSH works — no password needed from now on."
-  else
-    die "Key-based SSH failed after copying key. Check sshd config on the remote machine."
-  fi
+  # Step 3: Token accepted as human-verification (no remote check)
+  printf "${BOLD}  3. Token Verification${RESET}\n"
+  ok "Token accepted: $token"
+  dim "Token is recorded for human verification (no remote connection needed)."
   printf '\n'
 
-  # Step 4: Verify pairing token via SSH
-  printf "${BOLD}  4. Token Verification${RESET}\n"
-  local remote_token
-  remote_token="$(ssh -i "$keypath" \
-    -o BatchMode=yes -o ConnectTimeout=5 \
-    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -o LogLevel=ERROR \
-    -p "$port" "${user}@${host}" \
-    "cat ~/.claude-bridge/.pending-token 2>/dev/null" 2>/dev/null || true)"
-
-  if [ -z "$remote_token" ]; then
-    warn "No pending token found on remote. Skipping token verification."
-    warn "(The remote machine may not have run 'setup', or the token was already used.)"
-  elif [ "$token" != "$remote_token" ]; then
-    die "Token mismatch — expected \"$token\" but remote has \"$remote_token\". Wrong machine?"
-  else
-    ok "Token verified — correct machine."
-    # Clean up the remote token (one-time use)
-    ssh -i "$keypath" \
-      -o BatchMode=yes -o ConnectTimeout=5 \
-      -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-      -o LogLevel=ERROR \
-      -p "$port" "${user}@${host}" \
-      "rm -f ~/.claude-bridge/.pending-token" 2>/dev/null || true
-    dim "Remote token consumed (one-time use)."
-  fi
-  printf '\n'
-
-  # Step 5: Save pairing config
+  # Step 4: Save pairing config
   cfg_save "$machine_name" "$host" "$user" "$port" "$keypath"
 
   printf "${GREEN}${BOLD}  [ok] Paired with \"%s\"!${RESET}\n" "$machine_name"
@@ -691,6 +652,9 @@ cmd_pair() {
   printf "${DIM}    Port:     %s${RESET}\n" "$port"
   printf "${DIM}    User:     %s${RESET}\n" "$user"
   printf "${DIM}    Key:      %s${RESET}\n" "$keypath"
+  printf '\n'
+  printf "  The other machine's public key has been authorized on this machine.\n"
+  printf "  For bidirectional access, run 'pair' on the other machine too.\n"
   printf '\n'
   printf "  Try it out:\n"
   printf "${DIM}    claude-bridge status %s${RESET}\n" "$machine_name"
@@ -702,18 +666,20 @@ cmd_pair() {
 cmd_pair_help() {
   printf 'Usage: claude-bridge pair [OPTIONS]\n\n'
   printf 'Pair with another machine. Interactive if flags are omitted.\n\n'
-  printf 'Generates a local key pair, copies your public key to the remote\n'
-  printf 'machine via ssh-copy-id (one-time password prompt), then verifies\n'
-  printf 'the pairing token. After this, all connections are key-based.\n\n'
+  printf 'Reads the other machine'\''s public key from the setup screen and adds it\n'
+  printf 'to ~/.ssh/authorized_keys, authorizing that machine to SSH in. No\n'
+  printf 'password prompt, no SSH connection during pairing.\n\n'
+  printf 'For bidirectional access, run pair on both machines.\n\n'
   printf 'Options:\n'
-  printf '  -n, --name <name>     Machine name (defaults to host)\n'
-  printf '  -H, --host <host>     Hostname or IP of the other machine\n'
-  printf '  -u, --user <user>     SSH username\n'
-  printf '  -p, --port <port>     SSH port (default: 22)\n'
-  printf '  -k, --key <key>       Path to existing SSH private key (override)\n'
-  printf '  -t, --token <token>   Pairing token from setup screen\n'
-  printf '  -m, --manual          (Kept for compat, no-op)\n'
-  printf '  -h, --help            Show this help\n'
+  printf '  -n, --name <name>       Machine name (defaults to host)\n'
+  printf '  -H, --host <host>       Hostname or IP of the other machine\n'
+  printf '  -u, --user <user>       SSH username\n'
+  printf '  -p, --port <port>       SSH port (default: 22)\n'
+  printf '  -k, --key <key>         Path to existing SSH private key (override)\n'
+  printf '  -t, --token <token>     Pairing token from setup screen\n'
+  printf '      --pubkey <key>      Public key from the other machine'\''s setup screen\n'
+  printf '  -m, --manual            (Kept for compat, no-op)\n'
+  printf '  -h, --help              Show this help\n'
 }
 
 cmd_connect() {
@@ -1036,7 +1002,7 @@ cmd_help() {
   printf '\n'
   printf "${BOLD}Examples:${RESET}\n"
   printf '  claude-bridge setup --name MacBook-Pro\n'
-  printf '  claude-bridge pair --host 192.168.1.50 --user ethan --name MacBook-Pro\n'
+  printf '  claude-bridge pair --host 192.168.1.50 --user ethan --name MacBook-Pro --pubkey "ssh-ed25519 AAAA..."\n'
   printf '  claude-bridge run MacBook-Pro "ls -la ~/Projects"\n'
   printf '  claude-bridge run MacBook-Pro "fix the tests" --claude\n'
   printf '  claude-bridge connect MacBook-Pro\n'

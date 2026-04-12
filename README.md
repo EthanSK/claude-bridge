@@ -44,24 +44,26 @@ $ claude-bridge setup
   3. Pairing Token
   One-time pairing token generated.
 
-  ╔══════════════════════════════════════════════════╗
-  ║            claude-bridge pairing                 ║
-  ╠══════════════════════════════════════════════════╣
-  ║  Machine:    MacBook-Pro                        ║
-  ║  User:       ethan                              ║
-  ║  Local:      MacBookPro.local                   ║
-  ║  Local IP:   192.168.1.42                       ║
-  ║  Public IP:  82.45.123.67                       ║
-  ║  Port:       22                                 ║
-  ║  Token:      bridge-a7f3k9                      ║
-  ╚══════════════════════════════════════════════════╝
+  ╔══════════════════════════════════════════════════════════════════════╗
+  ║                    claude-bridge pairing                            ║
+  ╠══════════════════════════════════════════════════════════════════════╣
+  ║  Machine:    MacBook-Pro                                           ║
+  ║  User:       ethan                                                 ║
+  ║  Local:      MacBookPro.local                                      ║
+  ║  Local IP:   192.168.1.42                                          ║
+  ║  Public IP:  82.45.123.67                                          ║
+  ║  Port:       22                                                    ║
+  ║  Token:      bridge-a7f3k9                                         ║
+  ╠════════════════════════════════════════════════════════════════════  ╣
+  ║  Public Key: ssh-ed25519 AAAA...long...key bridge:MacBook-Pro      ║
+  ╚══════════════════════════════════════════════════════════════════════╝
 
   Photograph this screen and send to Claude on your other machine.
 ```
 
 ### Step 2: Pair
 
-On the other machine, tell Claude the connection details (or paste the manual command):
+On the other machine, tell Claude the connection details (or paste the manual command). The public key from the setup screen is included -- no password needed:
 
 ```
 $ claude-bridge pair \
@@ -69,9 +71,18 @@ $ claude-bridge pair \
     --host 192.168.1.42 \
     --port 22 \
     --user ethan \
-    --token bridge-a7f3k9
+    --token bridge-a7f3k9 \
+    --pubkey "ssh-ed25519 AAAA...key bridge:MacBook-Pro"
 
-  [ok] Pairing token verified.
+  1. Local Key Pair
+  Using existing key pair for Mac-Mini.
+
+  2. Authorize Remote Key
+  [ok] Remote public key added to ~/.ssh/authorized_keys.
+  The other machine can now SSH into this one.
+
+  3. Token Verification
+  [ok] Token accepted: bridge-a7f3k9
 
   [ok] Paired with "MacBook-Pro"!
 
@@ -79,7 +90,7 @@ $ claude-bridge pair \
     Host:     192.168.1.42
     Port:     22
     User:     ethan
-    Key:      ~/.claude-bridge/keys/claude-bridge_MacBook-Pro
+    Key:      ~/.claude-bridge/keys/claude-bridge_Mac-Mini
 ```
 
 ### Step 3: Use
@@ -211,8 +222,8 @@ claude-bridge pair \
   --host 192.168.1.50 \
   --port 22 \
   --user ethan \
-  --key ~/.claude-bridge/keys/claude-bridge_MacBook-Pro \
-  --token bridge-a7f3k9
+  --token bridge-a7f3k9 \
+  --pubkey "ssh-ed25519 AAAA...key bridge:MacBook-Pro"
 ```
 
 **Option C: Interactive pairing**
@@ -255,12 +266,13 @@ claude-bridge run MacBook-Pro "uname -a"
 ### Pair options
 
 ```
--n, --name <name>      Machine name (defaults to host)
--H, --host <host>      Hostname or IP of the other machine
--u, --user <user>      SSH username
--p, --port <port>      SSH port (default: 22)
--k, --key <key>        Path to SSH private key
--t, --token <token>    Pairing token from setup screen
+-n, --name <name>        Machine name (defaults to host)
+-H, --host <host>        Hostname or IP of the other machine
+-u, --user <user>        SSH username
+-p, --port <port>        SSH port (default: 22)
+-k, --key <key>          Path to SSH private key (override)
+-t, --token <token>      Pairing token from setup screen
+    --pubkey <key>       Public key from the other machine's setup screen
 ```
 
 ---
@@ -319,11 +331,12 @@ paired_at=2026-04-09T12:00:00Z
 1. Each machine runs `setup` which generates an ED25519 key pair
 2. The public key is added to `~/.ssh/authorized_keys` on that machine
 3. A one-time pairing token is generated and displayed on screen
-4. The pairing screen displays all connection info (local IP, public IP, token)
+4. The pairing screen displays all connection info (local IP, public IP, token, **public key**)
 5. The other machine reads the pairing info (from photo or manual entry)
-6. The pairing token is verified during the `pair` step, then deleted
-7. The private key is copied to `~/.claude-bridge/keys/` on the connecting machine
-8. The connecting machine can now SSH in using key-based auth
+6. `pair` adds the other machine's public key to the LOCAL `~/.ssh/authorized_keys`
+7. This authorizes the other machine to SSH into this one -- no password needed
+8. For bidirectional access, both machines run `pair` with each other's details
+9. No SSH connection is made during pairing -- it's pure local key exchange
 
 ### How remote execution works
 
@@ -353,7 +366,7 @@ Claude on Machine A                     Machine B
 
 ## Security
 
-- **SSH key-based auth only** — no passwords stored or transmitted
+- **SSH key-based auth only** — zero passwords in the entire flow
 - **ED25519 keys** — modern, fast, secure
 - **Restrictive file permissions** — config dir is mode 700, keys are mode 600
 - **No cloud** — all communication is direct SSH, no third-party servers
