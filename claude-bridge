@@ -5,7 +5,7 @@ set -euo pipefail
 # Pure bash. Zero dependencies. Works on any Mac/Linux out of the box.
 # https://github.com/EthanSK/claude-bridge
 
-VERSION="2.2.0"
+VERSION="3.0.0"
 
 # -- Colours (ANSI) ----------------------------------------------------------
 RED='\033[0;31m'
@@ -374,8 +374,13 @@ cmd_setup() {
   printf '\n'
 
   # Step 5: Display pairing screen
-  # Calculate box width based on content
-  local box_width=46
+  # Calculate box width — wide enough for the public key
+  local pub_key_display="$pub_key"
+  local pub_key_len=${#pub_key_display}
+  local min_width=46
+  local needed_width=$(( pub_key_len + 16 ))
+  local box_width=$min_width
+  [ "$needed_width" -gt "$box_width" ] && box_width=$needed_width
   local inner_width=$((box_width - 4))
 
   printf '\n'
@@ -391,6 +396,8 @@ cmd_setup() {
   printf "${BOLD}${CYAN}  ║${RESET}  ${BOLD}Public IP:${RESET}  %-*s${BOLD}${CYAN}║${RESET}\n" $((box_width - 14)) "$public_ip"
   printf "${BOLD}${CYAN}  ║${RESET}  ${BOLD}Port:${RESET}       %-*s${BOLD}${CYAN}║${RESET}\n" $((box_width - 14)) "$port"
   printf "${BOLD}${CYAN}  ║${RESET}  ${BOLD}Token:${RESET}      ${YELLOW}${BOLD}%-*s${RESET}${BOLD}${CYAN}║${RESET}\n" $((box_width - 14)) "$pairing_token"
+  printf "${BOLD}${CYAN}  ╠"; printf '═%.0s' $(seq 1 $box_width); printf "╣${RESET}\n"
+  printf "${BOLD}${CYAN}  ║${RESET}  ${BOLD}Public Key:${RESET} %-*s${BOLD}${CYAN}║${RESET}\n" $((box_width - 14)) "$pub_key_display"
   printf "${BOLD}${CYAN}"
   printf '  ╚'; printf '═%.0s' $(seq 1 $box_width); printf '╝\n'
   printf "${RESET}"
@@ -468,26 +475,21 @@ cmd_setup() {
     fi
   fi
 
-  # Manual pairing string
-  printf "${BOLD}${CYAN}  Manual pairing command (copy-paste):${RESET}\n"
+  # Manual pairing string (no --key needed — pair generates its own key)
+  printf "${BOLD}${CYAN}  Pairing command (run on the other machine):${RESET}\n"
   printf '\n'
   printf "${DIM}  claude-bridge pair \\\\${RESET}\n"
   printf "${DIM}    --name \"%s\" \\\\${RESET}\n" "$machine_name"
   printf "${DIM}    --host \"%s\" \\\\${RESET}\n" "$primary_ip"
   printf "${DIM}    --port %s \\\\${RESET}\n" "$port"
   printf "${DIM}    --user \"%s\" \\\\${RESET}\n" "$user"
-  printf "${DIM}    --key \"%s\" \\\\${RESET}\n" "$key_path"
   printf "${DIM}    --token \"%s\"${RESET}\n" "$pairing_token"
   printf '\n'
 
-  printf "${BOLD}  Private Key Path: ${DIM}%s${RESET}\n" "$key_path"
   printf "${BOLD}  Fingerprint:      ${DIM}%s${RESET}\n" "$fingerprint"
   printf '\n'
-  dim "Or copy the private key file to the other machine:"
-  printf "${DIM}  scp \"%s\" other-machine:~/.claude-bridge/keys/${RESET}\n" "$key_path"
-  printf '\n'
-  printf "${YELLOW}  Warning: The private key grants SSH access to this machine.${RESET}\n"
-  printf "${YELLOW}  Keep it secure. Files are stored in ~/.claude-bridge/ (mode 700).${RESET}\n"
+  dim "During pairing, the other machine will enter your password ONCE."
+  dim "After that, all connections use key-based auth (no password needed)."
   printf '\n'
   ok "Setup complete. This screen will stay visible."
   dim "Press Ctrl+C to close."
@@ -562,11 +564,6 @@ cmd_pair() {
     read -r input_port
     [ -n "$input_port" ] && port="$input_port"
 
-    if [ -z "$keypath" ]; then
-      printf '  Key path (leave empty for system default): '
-      read -r keypath
-    fi
-
     if [ -z "$token" ]; then
       printf '  Pairing token (from setup screen): '
       read -r token
@@ -578,19 +575,115 @@ cmd_pair() {
   [ -z "$user" ] && die "User is required."
   [ -z "$token" ] && die "Pairing token is required. Check the setup screen on the other machine."
 
-  # Token is a human-verification step — the user confirms they're reading
-  # the right pairing screen. No local file check needed since the token was
-  # generated on the OTHER machine. Just record that a token was provided.
-  ok "Pairing token accepted: $token"
+  printf '\n'
+  printf "${BOLD}${CYAN}  claude-bridge pair${RESET}\n"
+  printf '\n'
 
-  # Default keypath
-  [ -z "$keypath" ] && keypath="(system default)"
-
-  # Save
+  # Step 1: Generate local key pair (if not already present and no --key override)
   ensure_config_dir
+  local local_machine
+  local_machine="$(get_machine_name)"
+  local local_key="$KEYS_DIR/claude-bridge_${local_machine}"
+  local local_pub="${local_key}.pub"
+
+  if [ -n "$keypath" ]; then
+    # User supplied a specific key — use it as-is (override mode)
+    keypath="${keypath/#\~/$HOME}"
+    printf "${BOLD}  1. SSH Key${RESET}\n"
+    if [ -f "$keypath" ]; then
+      ok "Using provided key: $keypath"
+    else
+      die "Key file not found: $keypath"
+    fi
+  else
+    # Default: use this machine's own key pair
+    printf "${BOLD}  1. Local Key Pair${RESET}\n"
+    if [ -f "$local_key" ] && [ -f "$local_pub" ]; then
+      dim "Using existing key pair for $local_machine."
+    else
+      dim "Generating SSH key pair for $local_machine..."
+      ssh-keygen -t ed25519 -f "$local_key" -N "" -C "claude-bridge:${local_machine}" >/dev/null 2>&1
+      chmod 600 "$local_key"
+      ok "Key pair generated: $local_key"
+    fi
+    keypath="$local_key"
+  fi
+  printf '\n'
+
+  # Step 2: Copy public key to remote via ssh-copy-id (one-time password auth)
+  printf "${BOLD}  2. Key Exchange${RESET}\n"
+  dim "Copying your public key to ${user}@${host}..."
+  dim "You will be prompted for ${user}'s password on the remote machine."
+  dim "(This is a one-time step — after this, connections are key-based.)"
+  printf '\n'
+
+  local pub_key_file="${keypath}.pub"
+  if [ ! -f "$pub_key_file" ]; then
+    die "Public key not found at $pub_key_file"
+  fi
+
+  if command -v ssh-copy-id >/dev/null 2>&1; then
+    ssh-copy-id -i "$pub_key_file" \
+      -o StrictHostKeyChecking=no \
+      -o UserKnownHostsFile=/dev/null \
+      -p "$port" \
+      "${user}@${host}" || die "ssh-copy-id failed. Check the host, user, port, and password."
+  else
+    # Fallback if ssh-copy-id not available
+    warn "ssh-copy-id not found, using manual key copy..."
+    cat "$pub_key_file" | \
+      ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        -p "$port" "${user}@${host}" \
+        "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys" \
+      || die "Manual key copy failed. Check the host, user, port, and password."
+  fi
+  ok "Public key copied to remote."
+  printf '\n'
+
+  # Step 3: Verify key-based SSH works
+  printf "${BOLD}  3. Verifying Key-Based Auth${RESET}\n"
+  if ssh -i "$keypath" \
+       -o BatchMode=yes -o ConnectTimeout=5 \
+       -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+       -o LogLevel=ERROR \
+       -p "$port" "${user}@${host}" "echo ok" >/dev/null 2>&1; then
+    ok "Key-based SSH works — no password needed from now on."
+  else
+    die "Key-based SSH failed after copying key. Check sshd config on the remote machine."
+  fi
+  printf '\n'
+
+  # Step 4: Verify pairing token via SSH
+  printf "${BOLD}  4. Token Verification${RESET}\n"
+  local remote_token
+  remote_token="$(ssh -i "$keypath" \
+    -o BatchMode=yes -o ConnectTimeout=5 \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o LogLevel=ERROR \
+    -p "$port" "${user}@${host}" \
+    "cat ~/.claude-bridge/.pending-token 2>/dev/null" 2>/dev/null || true)"
+
+  if [ -z "$remote_token" ]; then
+    warn "No pending token found on remote. Skipping token verification."
+    warn "(The remote machine may not have run 'setup', or the token was already used.)"
+  elif [ "$token" != "$remote_token" ]; then
+    die "Token mismatch — expected \"$token\" but remote has \"$remote_token\". Wrong machine?"
+  else
+    ok "Token verified — correct machine."
+    # Clean up the remote token (one-time use)
+    ssh -i "$keypath" \
+      -o BatchMode=yes -o ConnectTimeout=5 \
+      -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+      -o LogLevel=ERROR \
+      -p "$port" "${user}@${host}" \
+      "rm -f ~/.claude-bridge/.pending-token" 2>/dev/null || true
+    dim "Remote token consumed (one-time use)."
+  fi
+  printf '\n'
+
+  # Step 5: Save pairing config
   cfg_save "$machine_name" "$host" "$user" "$port" "$keypath"
 
-  printf '\n'
   printf "${GREEN}${BOLD}  [ok] Paired with \"%s\"!${RESET}\n" "$machine_name"
   printf '\n'
   printf "  Connection details:\n"
@@ -609,12 +702,15 @@ cmd_pair() {
 cmd_pair_help() {
   printf 'Usage: claude-bridge pair [OPTIONS]\n\n'
   printf 'Pair with another machine. Interactive if flags are omitted.\n\n'
+  printf 'Generates a local key pair, copies your public key to the remote\n'
+  printf 'machine via ssh-copy-id (one-time password prompt), then verifies\n'
+  printf 'the pairing token. After this, all connections are key-based.\n\n'
   printf 'Options:\n'
   printf '  -n, --name <name>     Machine name (defaults to host)\n'
   printf '  -H, --host <host>     Hostname or IP of the other machine\n'
   printf '  -u, --user <user>     SSH username\n'
   printf '  -p, --port <port>     SSH port (default: 22)\n'
-  printf '  -k, --key <key>       Path to SSH private key\n'
+  printf '  -k, --key <key>       Path to existing SSH private key (override)\n'
   printf '  -t, --token <token>   Pairing token from setup screen\n'
   printf '  -m, --manual          (Kept for compat, no-op)\n'
   printf '  -h, --help            Show this help\n'
