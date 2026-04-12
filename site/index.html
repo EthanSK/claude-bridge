@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>claude-bridge &mdash; Let your Claude Code instances talk to each other</title>
+    <meta
+      name="description"
+      content="claude-bridge enables Claude-to-Claude communication between two computers over SSH. Set up in seconds with a photo-based pairing flow."
+    />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <link rel="canonical" href="https://ethansk.github.io/claude-bridge/" />
+    <meta name="application-name" content="claude-bridge" />
+    <meta name="theme-color" content="#0b0f14" />
+
+    <!-- Open Graph -->
+    <meta property="og:site_name" content="claude-bridge" />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="en_GB" />
+    <meta property="og:url" content="https://ethansk.github.io/claude-bridge/" />
+    <meta property="og:title" content="claude-bridge &mdash; Let your Claude Code instances talk to each other" />
+    <meta property="og:description" content="Enable Claude-to-Claude communication between two computers. Photo-based pairing, SSH under the hood, zero config." />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="claude-bridge &mdash; Let your Claude Code instances talk to each other" />
+    <meta name="twitter:description" content="Enable Claude-to-Claude communication between two computers. Photo-based pairing, SSH under the hood, zero config." />
+
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="bg-glow" aria-hidden="true"></div>
+
+    <div id="content">
+      <nav class="wrap">
+        <a class="logo" href="./">
+          <span class="logo-icon">&#x1F309;</span>
+          <span class="logo-copy">
+            <span class="logo-title">
+              claude-bridge <span class="logo-version">v1.0</span>
+            </span>
+            <span class="logo-sub">Claude-to-Claude, machine-to-machine</span>
+          </span>
+        </a>
+        <a class="nav-link" href="https://github.com/EthanSK/claude-bridge" target="_blank" rel="noopener">GitHub</a>
+      </nav>
+
+      <header class="hero wrap">
+        <h1>
+          Let your <span class="accent">Claudes</span> talk to each other.
+        </h1>
+        <p class="tagline">
+          claude-bridge connects Claude Code instances across machines. Run commands, edit files, and even start Claude sessions on remote computers &mdash; all over SSH, paired with a photo.
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn--primary" href="https://github.com/EthanSK/claude-bridge#quick-start">
+            <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1v9m0 0L4.5 6.5M8 10l3.5-3.5M2 13h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Get started
+          </a>
+          <a class="btn btn--ghost" href="https://github.com/EthanSK/claude-bridge" target="_blank" rel="noopener">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.37.5 0 5.87 0 12.5a12 12 0 0 0 8.21 11.39c.6.11.82-.26.82-.58v-2.05c-3.34.73-4.04-1.61-4.04-1.61-.55-1.4-1.34-1.77-1.34-1.77-1.1-.75.08-.74.08-.74 1.2.09 1.84 1.24 1.84 1.24 1.08 1.85 2.83 1.32 3.52 1.01.11-.79.42-1.32.76-1.62-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.39 1.24-3.23-.13-.31-.54-1.53.11-3.19 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.65 1.66.25 2.88.12 3.19.77.84 1.24 1.92 1.24 3.23 0 4.61-2.81 5.62-5.49 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.83.58A12 12 0 0 0 24 12.5C24 5.87 18.63.5 12 .5Z"/></svg>
+            View on GitHub
+          </a>
+          <a class="btn btn--ghost" href="#how">How it works</a>
+        </div>
+        <div class="hero-install">
+          <code class="install-cmd">npm install -g claude-bridge</code>
+        </div>
+        <p class="hero-note">
+          MIT licensed &middot; Node.js 18+ &middot; macOS &amp; Linux
+        </p>
+      </header>
+
+      <section class="demo-wrap wrap">
+        <div class="terminal">
+          <div class="terminal-bar">
+            <span class="terminal-dot red"></span>
+            <span class="terminal-dot yellow"></span>
+            <span class="terminal-dot green"></span>
+            <span class="terminal-title">Terminal &mdash; Target Machine</span>
+          </div>
+          <div class="terminal-body">
+<pre><span class="t-dim">$</span> npx claude-bridge setup
+
+  <span class="t-cyan">+----------------------------------------------+</span>
+  <span class="t-cyan">|         claude-bridge  .  setup               |</span>
+  <span class="t-cyan">+----------------------------------------------+</span>
+
+  <span class="t-bold">1. SSH Server</span>
+  <span class="t-green">[ok] SSH (Remote Login) is already enabled.</span>
+
+  <span class="t-bold">2. SSH Key Pair</span>
+  <span class="t-green">[ok] Key pair generated.</span>
+  <span class="t-green">[ok] Public key added to authorized_keys.</span>
+
+  <span class="t-bold">3. Pairing Code</span>
+  <span class="t-green">[ok] One-time pairing code generated.</span>
+
+  <span class="t-cyan">PAIRING SCREEN</span>
+
+  <span class="t-bold">Machine Name:</span>  <span class="t-yellow">MacBook-Pro</span>
+  <span class="t-bold">Username:</span>      ethan
+  <span class="t-bold">Local IP:</span>      192.168.1.50
+  <span class="t-bold">SSH Port:</span>      22
+  <span class="t-bold">Pairing Code:</span>  <span class="t-green">a7Bx9kQ2mP4n</span>
+
+  <span class="t-dim">[ok] Setup complete. Take a photo and send to controller.</span></pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="how" class="how wrap">
+        <div class="section-kicker">How it works</div>
+        <h2>Three steps. Then it&rsquo;s invisible.</h2>
+        <ol class="steps">
+          <li>
+            <div class="step-num">1</div>
+            <div>
+              <h3>Setup the target</h3>
+              <p>Run <code>npx claude-bridge setup</code> on the machine you want to control remotely. It enables SSH, generates keys, and displays a pairing screen with connection details and a QR code.</p>
+            </div>
+          </li>
+          <li>
+            <div class="step-num">2</div>
+            <div>
+              <h3>Pair via photo</h3>
+              <p>Photograph the pairing screen and send it to the controller Claude (via Telegram, chat, or any channel). Claude reads the image, extracts the connection details, and saves the pairing. Or paste the manual command.</p>
+            </div>
+          </li>
+          <li>
+            <div class="step-num">3</div>
+            <div>
+              <h3>Bridge your Claudes</h3>
+              <p>&ldquo;Run the tests on my MacBook&rdquo; just works. The controller SSH&rsquo;s into the target, executes the command, and reports back. Add <code>--claude</code> to run a full Claude Code prompt on the remote machine.</p>
+            </div>
+          </li>
+        </ol>
+      </section>
+
+      <section class="features wrap">
+        <div class="section-kicker">Features</div>
+        <h2>Everything you need for multi-machine Claude.</h2>
+        <div class="features-grid">
+          <div class="feature">
+            <div class="feature-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M13 12H3"/></svg>
+            </div>
+            <h3>Photo-based pairing</h3>
+            <p>Photograph the target&rsquo;s setup screen. Claude reads the image, extracts connection details, and pairs automatically. No typing IPs.</p>
+          </div>
+
+          <div class="feature">
+            <div class="feature-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/></svg>
+            </div>
+            <h3>Remote command execution</h3>
+            <p>Run any shell command on paired machines. Deploy apps, check status, manage processes &mdash; all from your main workstation.</p>
+          </div>
+
+          <div class="feature">
+            <div class="feature-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            </div>
+            <h3>Claude-to-Claude</h3>
+            <p>Use <code>--claude</code> to run a Claude Code prompt on the remote machine. Your controller Claude can delegate work to the target Claude.</p>
+          </div>
+
+          <div class="feature">
+            <div class="feature-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 6v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V6l-8-4Z"/></svg>
+            </div>
+            <h3>SSH key auth</h3>
+            <p>ED25519 keys, no passwords. Keys stored with restrictive permissions. One-time pairing codes. No cloud servers involved.</p>
+          </div>
+
+          <div class="feature">
+            <div class="feature-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+            </div>
+            <h3>QR code pairing</h3>
+            <p>The setup screen includes a QR code with all connection details encoded. Scan it or photograph it &mdash; either way, pairing takes seconds.</p>
+          </div>
+
+          <div class="feature">
+            <div class="feature-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+            </div>
+            <h3>Claude Code skills</h3>
+            <p>Ships with ready-made skills for both controller and target. Claude knows how to use the bridge without any extra prompting.</p>
+          </div>
+
+          <div class="feature">
+            <div class="feature-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3l3-8 4 16 3-8h5"/></svg>
+            </div>
+            <h3>Tailscale ready</h3>
+            <p>Works with Tailscale hostnames for cross-network connections. Your Claudes can talk to each other from anywhere.</p>
+          </div>
+
+          <div class="feature">
+            <div class="feature-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16M4 6h16M4 18h16"/></svg>
+            </div>
+            <h3>Zero config</h3>
+            <p>One command on each machine. No config files to edit, no ports to forward, no tokens to manage. It just works.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="architecture wrap">
+        <div class="section-kicker">Architecture</div>
+        <h2>Simple under the hood.</h2>
+        <div class="arch-diagram">
+          <div class="arch-box arch-controller">
+            <div class="arch-label">Controller</div>
+            <div class="arch-desc">Mac Mini / Main workstation</div>
+            <div class="arch-items">
+              <span>Claude Code</span>
+              <span>Controller skill</span>
+              <span>claude-bridge CLI</span>
+            </div>
+          </div>
+          <div class="arch-arrow">
+            <svg width="80" height="24" viewBox="0 0 80 24" fill="none">
+              <path d="M0 12h72M72 12l-8-6M72 12l-8 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span class="arch-arrow-label">SSH</span>
+          </div>
+          <div class="arch-box arch-target">
+            <div class="arch-label">Target</div>
+            <div class="arch-desc">MacBook Pro / Secondary machine</div>
+            <div class="arch-items">
+              <span>Claude Code</span>
+              <span>Target skill</span>
+              <span>SSH server (sshd)</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="install-section wrap">
+        <div class="download-card">
+          <div>
+            <div class="section-kicker">Install</div>
+            <h2>One command to rule them all.</h2>
+            <div class="install-options">
+              <div class="install-option">
+                <span class="install-label">npm (global)</span>
+                <code class="install-cmd">npm install -g claude-bridge</code>
+              </div>
+              <div class="install-option">
+                <span class="install-label">npx (no install)</span>
+                <code class="install-cmd">npx claude-bridge setup</code>
+              </div>
+            </div>
+          </div>
+          <div class="download-actions">
+            <a class="btn btn--primary" href="https://github.com/EthanSK/claude-bridge#quick-start" target="_blank" rel="noopener">
+              Quick start guide
+            </a>
+            <a class="btn btn--ghost" href="https://github.com/EthanSK/claude-bridge" target="_blank" rel="noopener">View on GitHub</a>
+            <a class="btn btn--ghost" href="https://www.npmjs.com/package/claude-bridge" target="_blank" rel="noopener">npm</a>
+          </div>
+        </div>
+      </section>
+
+      <footer class="site-footer wrap">
+        <div class="footer-left">
+          <span class="footer-icon">&#x1F309;</span>
+          <span>claude-bridge</span>
+        </div>
+        <div class="footer-links">
+          <a href="https://github.com/EthanSK/claude-bridge" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://github.com/EthanSK/claude-bridge/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+          <a href="https://github.com/EthanSK/claude-bridge/issues" target="_blank" rel="noopener">Issues</a>
+        </div>
+        <div class="footer-copy">
+          &copy; 2026 Ethan SK &middot; Built for multi-machine Claude workflows.
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>
