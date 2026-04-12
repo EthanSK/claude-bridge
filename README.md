@@ -14,6 +14,10 @@ Paste this into Claude Code on **each computer** you want to bridge:
 Read the README at https://github.com/EthanSK/claude-bridge and follow the setup instructions for this computer. Install claude-bridge, run the setup command, and install the Claude Code skill. Do everything automatically — don't ask me questions.
 ```
 
+**Important:** Before running setup, enable SSH on each machine:
+- **macOS:** System Settings → General → Sharing → toggle **Remote Login** ON
+- **Linux:** `sudo systemctl enable --now sshd`
+
 Then photograph the pairing screen and send it to Claude on the other machine. That's it — they can now talk to each other.
 
 ---
