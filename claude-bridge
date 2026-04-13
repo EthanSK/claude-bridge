@@ -279,6 +279,110 @@ ssh_build_args() {
   printf '%s\n' "${args[@]}"
 }
 
+# -- Harness instruction files ------------------------------------------------
+# After setup/pair, append agent-bridge instructions to detected AI harness
+# config files (CLAUDE.md, AGENTS.md, GEMINI.md) so every new session knows
+# about the bridge.
+
+HARNESS_MARKER_START="<!-- agent-bridge:start -->"
+HARNESS_MARKER_END="<!-- agent-bridge:end -->"
+
+harness_instruction_block() {
+  cat <<'BLOCK'
+<!-- agent-bridge:start -->
+## Agent Bridge
+
+This machine has agent-bridge installed for cross-machine communication.
+
+Paired machines (check with `agent-bridge list`):
+- Run `agent-bridge status` to check which machines are reachable
+- Run `agent-bridge run <machine> "command"` to execute commands remotely
+- Run `agent-bridge run <machine> "prompt" --claude` to run Claude prompts on remote machines
+- Run `agent-bridge connect <machine>` for interactive SSH
+
+Config: `~/.agent-bridge/config` | Keys: `~/.agent-bridge/keys/`
+
+If a paired machine is unreachable, check if it's powered on and SSH (Remote Login) is enabled.
+<!-- agent-bridge:end -->
+BLOCK
+}
+
+# Update a single harness instruction file. Idempotent: replaces existing block
+# or appends if not present.
+# Usage: harness_update_file <filepath>
+harness_update_file() {
+  local filepath="$1"
+  local block
+  block="$(harness_instruction_block)"
+
+  if [ ! -f "$filepath" ]; then
+    # File doesn't exist — skip (we don't create files for harnesses that aren't installed)
+    return 0
+  fi
+
+  if grep -qF "$HARNESS_MARKER_START" "$filepath" 2>/dev/null; then
+    # Replace existing block between markers
+    local tmpfile
+    tmpfile="$(mktemp)"
+    local in_block=0
+    while IFS= read -r line || [ -n "$line" ]; do
+      if [ "$line" = "$HARNESS_MARKER_START" ]; then
+        in_block=1
+        printf '%s\n' "$block" >> "$tmpfile"
+        continue
+      fi
+      if [ "$in_block" = "1" ]; then
+        if [ "$line" = "$HARNESS_MARKER_END" ]; then
+          in_block=0
+        fi
+        continue
+      fi
+      printf '%s\n' "$line" >> "$tmpfile"
+    done < "$filepath"
+    mv "$tmpfile" "$filepath"
+  else
+    # Append block to end of file
+    printf '\n%s\n' "$block" >> "$filepath"
+  fi
+}
+
+# Detect installed harnesses and update their instruction files.
+update_harness_instructions() {
+  local updated=0
+
+  # Claude Code: ~/.claude/CLAUDE.md
+  if [ -f "$HOME/.claude/CLAUDE.md" ]; then
+    harness_update_file "$HOME/.claude/CLAUDE.md"
+    ok "Updated ~/.claude/CLAUDE.md with agent-bridge instructions."
+    updated=$((updated + 1))
+  fi
+
+  # Codex: ~/.codex/AGENTS.md
+  if [ -f "$HOME/.codex/AGENTS.md" ]; then
+    harness_update_file "$HOME/.codex/AGENTS.md"
+    ok "Updated ~/.codex/AGENTS.md with agent-bridge instructions."
+    updated=$((updated + 1))
+  fi
+
+  # OpenClaw: ~/.openclaw/AGENTS.md
+  if [ -f "$HOME/.openclaw/AGENTS.md" ]; then
+    harness_update_file "$HOME/.openclaw/AGENTS.md"
+    ok "Updated ~/.openclaw/AGENTS.md with agent-bridge instructions."
+    updated=$((updated + 1))
+  fi
+
+  # Gemini CLI: ~/.gemini/GEMINI.md
+  if [ -f "$HOME/.gemini/GEMINI.md" ]; then
+    harness_update_file "$HOME/.gemini/GEMINI.md"
+    ok "Updated ~/.gemini/GEMINI.md with agent-bridge instructions."
+    updated=$((updated + 1))
+  fi
+
+  if [ "$updated" -eq 0 ]; then
+    dim "No AI harness instruction files detected. Skipping."
+  fi
+}
+
 # -- Commands -----------------------------------------------------------------
 
 cmd_setup() {
@@ -520,6 +624,12 @@ cmd_setup() {
   dim "No password required. The other machine adds your public key to its"
   dim "authorized_keys, authorizing this machine to SSH in."
   printf '\n'
+
+  # Step: Update AI harness instruction files
+  printf "${BOLD}  4. AI Harness Instructions${RESET}\n"
+  update_harness_instructions
+  printf '\n'
+
   ok "Setup complete. This screen will stay visible."
   dim "Press Ctrl+C to close."
   printf '\n'
@@ -693,6 +803,11 @@ cmd_pair() {
   printf "${DIM}    agent-bridge status %s${RESET}\n" "$machine_name"
   printf "${DIM}    agent-bridge run %s \"uname -a\"${RESET}\n" "$machine_name"
   printf "${DIM}    agent-bridge connect %s${RESET}\n" "$machine_name"
+  printf '\n'
+
+  # Update AI harness instruction files with new pairing info
+  printf "${BOLD}  5. AI Harness Instructions${RESET}\n"
+  update_harness_instructions
   printf '\n'
 }
 

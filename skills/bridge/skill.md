@@ -33,6 +33,7 @@ agent-bridge setup --port 2222             # Custom SSH port
 2. **Generates an ED25519 key pair** at `~/.agent-bridge/keys/`
 3. **Adds the public key** to `~/.ssh/authorized_keys`
 4. **Displays a pairing screen** with all connection details
+5. **Auto-adds agent-bridge instructions** to detected AI harness files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.openclaw/AGENTS.md`, `~/.gemini/GEMINI.md`) so every new session knows about the bridge. This also runs during `pair`.
 
 ### After setup
 
