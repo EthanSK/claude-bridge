@@ -16,7 +16,14 @@ Read the README at https://github.com/EthanSK/claude-bridge and follow the setup
 
 **Important — first-time setup on each machine:**
 - **macOS:** System Settings → General → Sharing → toggle **Remote Login** ON
-- **macOS (Full Disk Access):** System Settings → Privacy & Security → Full Disk Access → add `/usr/sbin/sshd`. Without this, SSH sessions can't access Desktop, Documents, or Downloads folders. The setup script will prompt you to do this.
+- **macOS (Full Disk Access):** Without this, SSH sessions can't access Desktop, Documents, or Downloads. To grant it:
+  1. Open **System Settings → Privacy & Security → Full Disk Access**
+  2. Click the **+** button
+  3. Press **Cmd+Shift+G** in the file picker (Go to folder)
+  4. Type `/usr/sbin/sshd` and press Go
+  5. Select `sshd` and click **Open**
+  6. Toggle it **ON**
+  7. Restart SSH: `sudo launchctl kickstart -k system/com.openssh.sshd`
 - **Linux:** `sudo systemctl enable --now sshd`
 
 Then photograph the pairing screen and send it to Claude on the other machine. That's it — they can now talk to each other.
