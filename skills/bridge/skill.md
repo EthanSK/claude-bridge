@@ -160,6 +160,7 @@ If the agent-bridge MCP server is configured, you have direct access to these to
 | `bridge_run_command` | Run a shell command remotely |
 | `bridge_run_agent_prompt` | Run an AI agent prompt remotely |
 | `bridge_clear_inbox` | Clear the local inbox |
+| `bridge_inbox_stats` | Get inbox statistics and watcher health |
 
 ### MCP server setup
 

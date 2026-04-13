@@ -143,6 +143,7 @@ agent-bridge v2 adds an MCP server for real-time agent-to-agent messaging. If co
 - `bridge_run_command` — run a shell command on a remote machine
 - `bridge_run_agent_prompt` — run an AI agent prompt on a remote machine
 - `bridge_clear_inbox` — clear the local inbox
+- `bridge_inbox_stats` — get inbox statistics and watcher health
 
 Setup: `cd mcp-server && npm install && npm run build`, then add to MCP config.
 

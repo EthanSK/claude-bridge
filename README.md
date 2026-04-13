@@ -362,7 +362,7 @@ npm install
 npm run build
 ```
 
-**2. Add to Claude Code MCP config** (`~/.claude.json` or project `.mcp.json`):
+**2. Add to Claude Code MCP config** (`~/.claude/.mcp.json` or project `.mcp.json`):
 
 ```json
 {
@@ -403,6 +403,7 @@ npm run build
 | `bridge_run_command` | Run a shell command on a remote machine |
 | `bridge_run_agent_prompt` | Run an agent prompt on a remote machine (default: `claude --print`) |
 | `bridge_clear_inbox` | Clear all messages from the local inbox |
+| `bridge_inbox_stats` | Get inbox statistics: pending message count, oldest message age, total size, watcher health, processed ID count, and failed message count |
 
 ### How messaging works
 
