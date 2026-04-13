@@ -19,7 +19,7 @@ agent-bridge lets AI coding agents on different machines talk to each other and 
 - **Peer-to-peer** -- no central server, no cloud, just direct SSH between machines
 - **Agent-agnostic** -- works with Claude Code, Codex, Gemini CLI, OpenClaw, Aider, or any CLI agent
 - **Zero dependencies** -- just bash, ssh, and ssh-keygen (built into every Mac and Linux)
-- **Real-time** -- messages are pushed into running Claude Code sessions automatically (channel plugin), or polled by other harnesses
+- **Real-time** -- messages are pushed into running Claude Code and OpenClaw sessions automatically (channel plugins), or polled by other harnesses
 
 ---
 
@@ -61,7 +61,7 @@ agent-bridge works with any AI coding agent that can run shell commands or MCP t
 | Agent Harness | Skill File | MCP Messaging | Delivery |
 |---------------|------------|---------------|----------|
 | **Claude Code** | `skills/bridge/skill.md` | Yes (channel plugin) | **Push** -- messages arrive automatically |
-| **OpenClaw** | `skills/openclaw/SKILL.md` | Yes (MCP server) | Polling via `bridge_receive_messages` |
+| **OpenClaw** | `skills/openclaw/SKILL.md` | Yes (MCP server) + [channel plugin](openclaw-plugin/README.md) | **Push** (with plugin/daemon) or polling fallback |
 | **Codex CLI** (OpenAI) | `AGENTS.md` | Yes (MCP server) | Polling via `bridge_receive_messages` |
 | **Gemini CLI** | `GEMINI.md` | Yes (MCP server) | Polling via `bridge_receive_messages` |
 | **Aider / others** | `INSTRUCTIONS.md` | Yes (MCP server) | Polling via `bridge_receive_messages` |
@@ -323,8 +323,8 @@ v2 adds an MCP server that enables running AI agent sessions to communicate dire
 
 | Delivery mode | How it works | Harness support |
 |---------------|--------------|-----------------|
-| **Push** (channel) | Incoming messages are pushed into the conversation as `<channel source="agent-bridge" ...>` tags. No polling needed. | Claude Code (channel plugin) |
-| **Polling** | Agent calls `bridge_receive_messages` periodically to check the inbox. | OpenClaw, Codex, Gemini CLI, any MCP client |
+| **Push** (channel) | Incoming messages are pushed into the conversation as `<channel source="agent-bridge" ...>` tags. No polling needed. | Claude Code (channel plugin), OpenClaw ([plugin/daemon](openclaw-plugin/README.md)) |
+| **Polling** | Agent calls `bridge_receive_messages` periodically to check the inbox. | Codex, Gemini CLI, any MCP client |
 
 ### MCP tools
 
@@ -407,19 +407,44 @@ cp skills/bridge/skill.md ~/.claude/skills/agent-bridge/skill.md
 }
 ```
 
-### OpenClaw (MCP server -- polling)
+### OpenClaw (MCP server + channel plugin -- push support)
 
-OpenClaw connects to agent-bridge as a standard MCP server. All bridge tools are available, but messages must be polled because OpenClaw does not support Claude's channel protocol.
+OpenClaw connects to agent-bridge as both an MCP server (for tools) and, optionally, an OpenClaw plugin or standalone daemon (for push delivery). Without the plugin/daemon, messages are polled; with it, messages arrive as a new user turn automatically — equivalent to the Claude Code channel plugin.
 
-**Setup:**
+**Step 1 -- MCP server (gives you bridge tools):**
 ```bash
 openclaw mcp set agent-bridge '{"command":"node","args":["/absolute/path/to/agent-bridge/mcp-server/build/index.js"]}'
 ```
 
-**Install the skill:**
+**Step 2 -- install the skill:**
 ```bash
 cp -r skills/openclaw ~/.openclaw/workspace/skills/agent-bridge
 ```
+
+**Step 3 -- enable push delivery (pick one):**
+
+*Option A — OpenClaw plugin (auto-starts with the gateway):*
+```bash
+openclaw plugins install --link /absolute/path/to/agent-bridge/openclaw-plugin \
+  --dangerously-force-unsafe-install
+openclaw gateway restart
+```
+The `--dangerously-force-unsafe-install` flag is required because the plugin shells out to `openclaw agent` (via `child_process`), which OpenClaw's plugin scanner flags as critical. The call is limited to the host's own CLI, so the bypass is safe here.
+
+*Option B — standalone daemon (no plugin system, no scanner bypass):*
+```bash
+node /absolute/path/to/agent-bridge/openclaw-plugin/bin/agent-bridge-openclaw-inbox.js
+```
+For persistence, wire it into launchd or systemd. A launchd plist template lives in `openclaw-plugin/README.md`.
+
+**How OpenClaw push delivery works:**
+1. Peer's bridge_send_message writes a JSON file to `~/.agent-bridge/inbox/` via SSH
+2. The plugin/daemon's file watcher sees the new file
+3. It shells `openclaw agent --to agent-bridge-<peer> --message "<channel ...>"` to inject a user turn into the per-peer session
+4. On delivery success, the message ID is appended to `~/.agent-bridge/.openclaw-delivered` to dedupe restarts
+5. The agent replies via `bridge_send_message` -- no polling required
+
+**Why shell out?** A real channel plugin per OpenClaw's SDK would require implementing DM policy, pairing flows, outbound send, threading, mention gating, etc. -- overkill for a local file-inbox. `openclaw agent --to ... --message ...` is the stable, documented primitive that drives a full agent turn through the gateway (with embedded fallback). See `openclaw-plugin/README.md` for the full rationale.
 
 ### Codex (OpenAI) (MCP server -- polling)
 
@@ -469,7 +494,17 @@ For **push** notifications, the harness must support the `claude/channel` experi
 5. Message ID is recorded in .delivered to prevent re-delivery on restart
 ```
 
-### Receive flow (polling mode -- Codex, OpenClaw, Gemini, etc.)
+### Receive flow (push mode -- OpenClaw plugin/daemon)
+
+```
+1. File watcher (fswatch/inotifywait/polling) detects new .json file in inbox/
+2. Watcher parses the message and checks .openclaw-delivered for dedup
+3. Plugin/daemon shells `openclaw agent --to agent-bridge-<peer> --message <envelope>`
+4. OpenClaw routes the message to a per-peer session; agent sees it as a new user turn formatted <channel source="agent-bridge" ...>content</channel>
+5. Message ID is recorded in .openclaw-delivered to prevent re-delivery on restart
+```
+
+### Receive flow (polling mode -- Codex, Gemini, etc.)
 
 ```
 1. File watcher detects new .json file in inbox/ and updates internal cache

@@ -53,7 +53,21 @@ If the agent-bridge MCP server is registered, these tools are available directly
 | `bridge_clear_inbox` | Clear the local inbox |
 | `bridge_inbox_stats` | Get inbox statistics and watcher health |
 
-**Important:** OpenClaw uses polling mode -- call `bridge_receive_messages` at natural breakpoints to check for incoming messages from other agents. Messages persist in the inbox until consumed (default TTL: 1 hour).
+**Delivery mode:** If the OpenClaw agent-bridge plugin (or the standalone daemon) is installed, incoming messages are **pushed** into your running session automatically as a new user turn formatted `<channel source="agent-bridge" from="..." ...>content</channel>` — no polling required. If the plugin/daemon is NOT installed, fall back to polling with `bridge_receive_messages` at natural breakpoints. Messages persist in the inbox until consumed (default TTL: 1 hour).
+
+### Install the OpenClaw push plugin (recommended)
+
+```bash
+# Option A — install as OpenClaw plugin (requires scanner bypass for child_process use)
+openclaw plugins install --link ~/Projects/agent-bridge/openclaw-plugin \
+  --dangerously-force-unsafe-install
+openclaw gateway restart
+
+# Option B — run as a standalone daemon (no plugin install)
+node ~/Projects/agent-bridge/openclaw-plugin/bin/agent-bridge-openclaw-inbox.js
+```
+
+See `openclaw-plugin/README.md` in the agent-bridge repo for a launchd plist template and full configuration reference.
 
 ## Pairing from a photo
 
