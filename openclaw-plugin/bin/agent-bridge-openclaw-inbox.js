@@ -46,12 +46,53 @@ async function main() {
     logger,
   });
 
-  const shutdown = () => {
+  let shuttingDown = false;
+  const shutdown = (reason) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info(`shutting down (${reason})`);
+    const force = setTimeout(() => process.exit(0), 2000);
+    force.unref();
     try { cleanup(); } catch { /* ignore */ }
     process.exit(0);
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGHUP", () => shutdown("SIGHUP"));
+  process.on("SIGPIPE", () => shutdown("SIGPIPE"));
+
+  // Parent-death detection: if our parent dies, this daemon should too.
+  // stdin events fire for clean disconnects; orphan watchdog catches hard crashes.
+  if (process.stdin && typeof process.stdin.on === "function") {
+    process.stdin.on("end", () => shutdown("stdin end"));
+    process.stdin.on("close", () => shutdown("stdin close"));
+    process.stdin.on("error", () => shutdown("stdin error"));
+  }
+  const bootPpid = process.ppid;
+  const watchdog = setInterval(() => {
+    if (process.platform !== "win32" && process.ppid !== bootPpid) {
+      shutdown(`orphaned (ppid ${bootPpid} -> ${process.ppid})`);
+    }
+  }, 5000);
+  watchdog.unref();
+
+  // EPIPE on stderr/stdout: parent pipe closed, we can't recover — exit.
+  process.on("uncaughtException", (err) => {
+    const code = err && err.code;
+    const msg = err && err.message ? String(err.message) : "";
+    if (code === "EPIPE" || /EPIPE|Broken pipe/i.test(msg)) {
+      process.exit(0);
+    }
+    console.error("[fatal] uncaught", err && err.stack ? err.stack : err);
+  });
+  process.on("unhandledRejection", (err) => {
+    const code = err && err.code;
+    const msg = err && err.message ? String(err.message) : "";
+    if (code === "EPIPE" || /EPIPE|Broken pipe/i.test(msg)) {
+      process.exit(0);
+    }
+    console.error("[fatal] rejection", err && err.stack ? err.stack : err);
+  });
 
   // Keep the event loop alive.
   setInterval(() => { /* heartbeat */ }, 60_000);

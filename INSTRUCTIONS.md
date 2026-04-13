@@ -104,6 +104,19 @@ Add to your harness's MCP config:
 
 Claude Code automatically detects the `claude/channel` capability and starts receiving pushed messages.
 
+### Development / manual channel launch
+
+When the MCP server is installed via a local-dev path (anything that isn't the published marketplace plugin — which is the norm for agent-bridge today), Claude Code's channel allowlist will reject it silently unless you pass `--dangerously-load-development-channels`:
+
+```bash
+claude --dangerously-load-development-channels --channels server:agent-bridge
+```
+
+Rules of thumb:
+- **Always required** for agent-bridge: the channel plugin is loaded from a local clone, not the official marketplace.
+- Without the flag, tools still work but **no `<channel>` messages will be pushed** into the session — messages go into the inbox and stay there until you call `bridge_receive_messages` manually.
+- The flag is a per-launch opt-in; it does not persist any state.
+
 ### Message flow
 
 1. Machine A's agent calls `bridge_send_message("MacBook", "check the test results")`

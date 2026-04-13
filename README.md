@@ -373,10 +373,13 @@ Claude Code connects to agent-bridge as both an MCP server (tools) and a channel
 }
 ```
 
-For development/testing, you can also launch Claude with the channel flag:
+For development/testing, you can also launch Claude with the channel flag. If the MCP server was installed via a local-dev path (not the marketplace), you must also pass `--dangerously-load-development-channels` so Claude Code's channel allowlist accepts it:
+
 ```bash
-claude --channels server:agent-bridge
+claude --dangerously-load-development-channels --channels server:agent-bridge
 ```
+
+Without `--dangerously-load-development-channels`, Claude Code's built-in channel allowlist rejects locally-loaded channels and messages will not be pushed into the session. The flag is always required for agent-bridge today since the plugin is not yet published through the official marketplace.
 
 **How it works:**
 1. The MCP server declares the `claude/channel` experimental capability

@@ -35,13 +35,37 @@ import { registerTools } from './tools.js';
 import { startWatcher, stopWatcher, replayUndeliveredMessages } from './watcher.js';
 import { logInfo, logError } from './logger.js';
 
-// Global error handlers — keep the server alive
+// Global error handlers. Most errors are logged and swallowed so the server
+// stays up, BUT broken-pipe errors (EPIPE) mean the parent Claude process
+// closed our stdout — there is no way to recover and any further write will
+// loop forever. Exit immediately in that case to prevent zombie processes
+// consuming CPU and rotating gigabytes of logs.
+function isBrokenPipe(err: unknown): boolean {
+  if (!err) return false;
+  const anyErr = err as { code?: string; message?: string };
+  if (anyErr.code === 'EPIPE' || anyErr.code === 'ERR_STREAM_DESTROYED') return true;
+  const msg = typeof anyErr.message === 'string' ? anyErr.message : String(err);
+  return /write EPIPE|Broken pipe|premature close|ERR_STREAM_DESTROYED/i.test(msg);
+}
+
 process.on('unhandledRejection', (err) => {
+  if (isBrokenPipe(err)) {
+    try { logError(`Unhandled rejection EPIPE — parent pipe closed, exiting`); } catch {}
+    process.exit(0);
+  }
   logError(`Unhandled rejection: ${err}`);
 });
 process.on('uncaughtException', (err) => {
+  if (isBrokenPipe(err)) {
+    try { logError(`Uncaught exception EPIPE — parent pipe closed, exiting`); } catch {}
+    process.exit(0);
+  }
   logError(`Uncaught exception: ${err}`);
 });
+
+// SIGPIPE: Node ignores SIGPIPE by default (converts it to EPIPE errors), but
+// be explicit — if something raises SIGPIPE to us, treat it as parent death.
+process.on('SIGPIPE', () => process.exit(0));
 
 async function main(): Promise<void> {
   // Ensure all directories exist
@@ -147,39 +171,72 @@ async function main(): Promise<void> {
   // can actually be delivered to the client.
   replayUndeliveredMessages();
 
-  // Clean shutdown
+  // Clean shutdown. Triggered by:
+  //   - SIGINT / SIGTERM / SIGHUP (explicit signals from parent)
+  //   - stdin end / close / error (MCP stdio transport hung up, i.e. parent gone)
+  //   - orphan watchdog (parent died without closing stdio cleanly — we got reparented to init)
+  //   - EPIPE detected in the global error handlers above (exits directly)
+  // The force-exit timer below guarantees we die within 2s even if server.close() hangs.
   let shuttingDown = false;
-  const shutdown = async () => {
+  const shutdown = (reason: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
 
-    logInfo('Shutting down agent-bridge MCP server...');
+    try { logInfo(`Shutting down agent-bridge MCP server (${reason})...`); } catch {}
+
+    // Hard deadline: whatever state async cleanup is in, die within 2s. Matches
+    // the Telegram channel plugin's discipline — no MCP server should ever
+    // survive its parent.
+    const forceExit = setTimeout(() => {
+      try { logError('Shutdown timeout exceeded, force-exiting'); } catch {}
+      process.exit(0);
+    }, 2000);
+    forceExit.unref();
 
     // 1. Stop the file watcher (kills fswatch/inotifywait/polling)
-    stopWatcher();
+    try { stopWatcher(); } catch (err) { try { logError(`stopWatcher error: ${err}`); } catch {} }
 
     // 2. Stop the prune timer and inbox system
-    shutdownInbox();
+    try { shutdownInbox(); } catch (err) { try { logError(`shutdownInbox error: ${err}`); } catch {} }
 
     // 3. Close the MCP server
-    try {
-      await server.close();
-    } catch (err) {
-      logError(`Error closing MCP server: ${err}`);
-    }
-
-    logInfo('agent-bridge MCP server shut down cleanly');
-    process.exit(0);
+    Promise.resolve()
+      .then(() => server.close())
+      .catch((err) => { try { logError(`Error closing MCP server: ${err}`); } catch {} })
+      .finally(() => {
+        try { logInfo('agent-bridge MCP server shut down cleanly'); } catch {}
+        process.exit(0);
+      });
   };
 
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGHUP', () => shutdown('SIGHUP'));
 
-  // When stdin closes (Claude Code disconnected), shut down
-  process.stdin.on('end', () => {
-    logInfo('stdin closed, shutting down');
-    shutdown();
+  // stdio lifecycle: when Claude Code disconnects cleanly, stdin gets 'end'.
+  // When the parent dies unexpectedly, stdin gets 'close' (or 'error' with EPIPE).
+  // All three must trigger shutdown — otherwise the process stays up forever as a zombie.
+  process.stdin.on('end', () => shutdown('stdin end'));
+  process.stdin.on('close', () => shutdown('stdin close'));
+  process.stdin.on('error', (err) => {
+    if (isBrokenPipe(err)) { process.exit(0); }
+    shutdown(`stdin error: ${err}`);
   });
+
+  // Orphan watchdog: stdin events don't reliably fire when the parent chain
+  // (wrapper → shell → us) is severed by a hard crash (SIGKILL, terminal
+  // close). Poll every 5s: if our parent has changed (we've been reparented
+  // to init = pid 1) or stdin is destroyed, self-terminate. This is the
+  // same technique the Telegram channel plugin uses.
+  const bootPpid = process.ppid;
+  const watchdog = setInterval(() => {
+    const reparented = process.platform !== 'win32' && process.ppid !== bootPpid;
+    const stdinDead = process.stdin.destroyed || (process.stdin as { readableEnded?: boolean }).readableEnded;
+    if (reparented || stdinDead) {
+      shutdown(reparented ? `orphaned (ppid changed ${bootPpid} -> ${process.ppid})` : 'stdin dead');
+    }
+  }, 5000);
+  watchdog.unref();
 }
 
 main().catch((err) => {
