@@ -2,13 +2,13 @@
 
 **Bridge AI coding agents across machines — works with Claude Code, Codex, OpenClaw, Gemini CLI, Aider, and any CLI agent.**
 
-[![Claude Code](https://img.shields.io/badge/Claude_Code-skill-blueviolet)](https://github.com/EthanSK/claude-bridge)
-[![Codex](https://img.shields.io/badge/Codex-AGENTS.md-green)](https://github.com/EthanSK/claude-bridge)
-[![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-GEMINI.md-blue)](https://github.com/EthanSK/claude-bridge)
-[![OpenClaw](https://img.shields.io/badge/OpenClaw-SKILL.md-orange)](https://github.com/EthanSK/claude-bridge)
-[![Any Agent](https://img.shields.io/badge/Any_Agent-INSTRUCTIONS.md-gray)](https://github.com/EthanSK/claude-bridge)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-skill-blueviolet)](https://github.com/EthanSK/agent-bridge)
+[![Codex](https://img.shields.io/badge/Codex-AGENTS.md-green)](https://github.com/EthanSK/agent-bridge)
+[![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-GEMINI.md-blue)](https://github.com/EthanSK/agent-bridge)
+[![OpenClaw](https://img.shields.io/badge/OpenClaw-SKILL.md-orange)](https://github.com/EthanSK/agent-bridge)
+[![Any Agent](https://img.shields.io/badge/Any_Agent-INSTRUCTIONS.md-gray)](https://github.com/EthanSK/agent-bridge)
 
-[Website](https://ethansk.github.io/claude-bridge/) · [GitHub](https://github.com/EthanSK/claude-bridge)
+[Website](https://ethansk.github.io/agent-bridge/) · [GitHub](https://github.com/EthanSK/agent-bridge)
 
 ---
 
@@ -33,7 +33,7 @@ Each file teaches the respective agent how to use agent-bridge: listing machines
 Paste this into your AI agent on **each computer** you want to bridge:
 
 ```
-Read the README at https://github.com/EthanSK/claude-bridge and follow the setup instructions for this computer. Install agent-bridge, run the setup command, and install the skill for this agent. Do everything automatically — don't ask me questions.
+Read the README at https://github.com/EthanSK/agent-bridge and follow the setup instructions for this computer. Install agent-bridge, run the setup command, and install the skill for this agent. Do everything automatically — don't ask me questions.
 ```
 
 **Important — first-time setup on each machine:**
@@ -54,10 +54,10 @@ Then photograph the pairing screen and send it to Claude on the other machine. T
 Run on each machine you want to bridge:
 
 ```
-$ claude-bridge setup
+$ agent-bridge setup
 
   +----------------------------------------------+
-  |         claude-bridge  .  setup               |
+  |         agent-bridge  .  setup               |
   +----------------------------------------------+
 
   1. SSH Server
@@ -70,7 +70,7 @@ $ claude-bridge setup
   One-time pairing token generated.
 
   ╔══════════════════════════════════════════════════════════════════════╗
-  ║                    claude-bridge pairing                            ║
+  ║                    agent-bridge pairing                            ║
   ╠══════════════════════════════════════════════════════════════════════╣
   ║  Machine:    MacBook-Pro                                           ║
   ║  User:       ethan                                                 ║
@@ -91,7 +91,7 @@ $ claude-bridge setup
 On the other machine, tell Claude the connection details (or paste the manual command). The public key from the setup screen is included -- no password needed:
 
 ```
-$ claude-bridge pair \
+$ agent-bridge pair \
     --name "MacBook-Pro" \
     --host 192.168.1.42 \
     --port 22 \
@@ -115,25 +115,25 @@ $ claude-bridge pair \
     Host:     192.168.1.42
     Port:     22
     User:     ethan
-    Key:      ~/.claude-bridge/keys/claude-bridge_Mac-Mini
+    Key:      ~/.agent-bridge/keys/agent-bridge_Mac-Mini
 ```
 
 ### Step 3: Use
 
 ```
-$ claude-bridge run MacBook-Pro "uname -a"
+$ agent-bridge run MacBook-Pro "uname -a"
   Running command on MacBook-Pro...
 Darwin MacBookPro.local 25.3.0 Darwin Kernel Version 25.3.0...
 
   [ok] command completed on MacBook-Pro (exit 0)
 
-$ claude-bridge run MacBook-Pro "what files are in ~/Projects?" --claude
+$ agent-bridge run MacBook-Pro "what files are in ~/Projects?" --claude
   Running Claude prompt on MacBook-Pro...
 The ~/Projects directory contains:
   - producer-player/
   - ai-music-video-studio/
   - OBScene/
-  - claude-bridge/
+  - agent-bridge/
 
   [ok] Claude prompt completed on MacBook-Pro (exit 0)
 ```
@@ -143,7 +143,7 @@ The ~/Projects directory contains:
 Expose your machine to the internet without port forwarding:
 
 ```
-$ claude-bridge setup --internet
+$ agent-bridge setup --internet
 
   ...
   4. Internet Tunnel
@@ -155,7 +155,7 @@ $ claude-bridge setup --internet
     Port: 43521
 
   Remote pair command:
-    claude-bridge pair --name "MacBook-Pro" --host serveo.net --port 43521 --user ethan --token "bridge-a7f3k9"
+    agent-bridge pair --name "MacBook-Pro" --host serveo.net --port 43521 --user ethan --token "bridge-a7f3k9"
 ```
 
 ---
@@ -169,7 +169,7 @@ $ claude-bridge setup --internet
  │  Claude Code         │     SSH        │  Claude Code         │
  │  + bridge skill      │ ◄────────────► │  + bridge skill      │
  │                      │                │                      │
- │  claude-bridge CLI   │                │  claude-bridge CLI   │
+ │  agent-bridge CLI   │                │  agent-bridge CLI   │
  │                      │                │                      │
  └──────────────────────┘                └──────────────────────┘
 
@@ -181,7 +181,7 @@ Both machines are **peers** — either one can run commands on the other. There'
 
 ### Three steps
 
-1. **Setup** — Run `claude-bridge setup` on each machine. It enables SSH, generates keys, and shows a pairing screen.
+1. **Setup** — Run `agent-bridge setup` on each machine. It enables SSH, generates keys, and shows a pairing screen.
 2. **Pair** — Photograph one machine's pairing screen and send it to the Claude on the other machine. Claude reads the image and extracts the connection details. Or use the manual pairing command.
 3. **Connect** — That's it. "Run X on my MacBook" just works from either machine.
 
@@ -194,23 +194,23 @@ Both machines are **peers** — either one can run commands on the other. There'
 ### Option A: One-line install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/EthanSK/claude-bridge/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/EthanSK/agent-bridge/main/install.sh | bash
 ```
 
 ### Option B: Clone and symlink
 
 ```bash
-git clone https://github.com/EthanSK/claude-bridge.git
-cd claude-bridge
-chmod +x claude-bridge
-sudo ln -sf "$(pwd)/claude-bridge" /usr/local/bin/claude-bridge
+git clone https://github.com/EthanSK/agent-bridge.git
+cd agent-bridge
+chmod +x agent-bridge
+sudo ln -sf "$(pwd)/agent-bridge" /usr/local/bin/agent-bridge
 ```
 
 ### Option C: Just download the script
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/EthanSK/claude-bridge/main/claude-bridge -o /usr/local/bin/claude-bridge
-chmod +x /usr/local/bin/claude-bridge
+curl -fsSL https://raw.githubusercontent.com/EthanSK/agent-bridge/main/agent-bridge -o /usr/local/bin/agent-bridge
+chmod +x /usr/local/bin/agent-bridge
 ```
 
 ---
@@ -220,7 +220,7 @@ chmod +x /usr/local/bin/claude-bridge
 ### On each machine you want to bridge:
 
 ```bash
-claude-bridge setup
+agent-bridge setup
 ```
 
 This will:
@@ -230,7 +230,7 @@ This will:
 
 For internet access without port forwarding, add the `--internet` flag:
 ```bash
-claude-bridge setup --internet
+agent-bridge setup --internet
 ```
 
 ### Pair the machines:
@@ -242,7 +242,7 @@ claude-bridge setup --internet
 
 **Option B: Manual pairing**
 ```bash
-claude-bridge pair \
+agent-bridge pair \
   --name "MacBook-Pro" \
   --host 192.168.1.50 \
   --port 22 \
@@ -253,15 +253,15 @@ claude-bridge pair \
 
 **Option C: Interactive pairing**
 ```bash
-claude-bridge pair
+agent-bridge pair
 # Follow the prompts
 ```
 
 ### Test the connection:
 
 ```bash
-claude-bridge status MacBook-Pro
-claude-bridge run MacBook-Pro "uname -a"
+agent-bridge status MacBook-Pro
+agent-bridge run MacBook-Pro "uname -a"
 ```
 
 ---
@@ -270,14 +270,14 @@ claude-bridge run MacBook-Pro "uname -a"
 
 | Command | Description |
 |---------|-------------|
-| `claude-bridge setup` | Enables SSH, generates keys, and displays a pairing screen. Use `--internet` for tunnel. |
-| `claude-bridge pair` | Interactive or flag-based pairing to connect to another machine. |
-| `claude-bridge connect <machine>` | Open an interactive SSH session. |
-| `claude-bridge status [machine]` | Check if machine(s) are reachable. |
-| `claude-bridge list` | List all paired machines. |
-| `claude-bridge run <machine> "cmd"` | Run a command on a paired machine. |
-| `claude-bridge run <machine> "prompt" --claude` | Run a Claude Code prompt on the remote machine. |
-| `claude-bridge unpair <machine>` | Remove a pairing. |
+| `agent-bridge setup` | Enables SSH, generates keys, and displays a pairing screen. Use `--internet` for tunnel. |
+| `agent-bridge pair` | Interactive or flag-based pairing to connect to another machine. |
+| `agent-bridge connect <machine>` | Open an interactive SSH session. |
+| `agent-bridge status [machine]` | Check if machine(s) are reachable. |
+| `agent-bridge list` | List all paired machines. |
+| `agent-bridge run <machine> "cmd"` | Run a command on a paired machine. |
+| `agent-bridge run <machine> "prompt" --claude` | Run a Claude Code prompt on the remote machine. |
+| `agent-bridge unpair <machine>` | Remove a pairing. |
 
 ### Setup options
 
@@ -313,7 +313,7 @@ agent-bridge ships with skill/instruction files for each major AI coding agent.
 cp -r skills/bridge ~/.claude/skills/agent-bridge
 
 # Or download directly:
-curl -fsSL https://raw.githubusercontent.com/EthanSK/claude-bridge/main/skills/bridge/skill.md \
+curl -fsSL https://raw.githubusercontent.com/EthanSK/agent-bridge/main/skills/bridge/skill.md \
   -o ~/.claude/skills/agent-bridge/skill.md --create-dirs
 ```
 
@@ -340,12 +340,12 @@ Reference `INSTRUCTIONS.md` in your agent's config, or paste its contents into y
 ## Architecture
 
 ```
-~/.claude-bridge/
+~/.agent-bridge/
 ├── config               # Paired machines (INI-style key-value)
 ├── .pending-token       # One-time pairing token (deleted after use)
 └── keys/                # SSH key pairs
-    ├── claude-bridge_MacBook-Pro
-    └── claude-bridge_MacBook-Pro.pub
+    ├── agent-bridge_MacBook-Pro
+    └── agent-bridge_MacBook-Pro.pub
 ```
 
 ### Config format
@@ -357,7 +357,7 @@ Simple INI-style flat file — no JSON, no YAML:
 host=192.168.1.50
 user=ethan
 port=22
-key=~/.claude-bridge/keys/claude-bridge_MacBook-Pro
+key=~/.agent-bridge/keys/agent-bridge_MacBook-Pro
 paired_at=2026-04-09T12:00:00Z
 ```
 
@@ -378,7 +378,7 @@ paired_at=2026-04-09T12:00:00Z
 ```
 Machine A                               Machine B
 ─────────                              ─────────
-claude-bridge run MacBook "cmd"
+agent-bridge run MacBook "cmd"
   └─► SSH connect (key auth)  ────────► sshd
       └─► exec "cmd"         ────────► shell
       └─► capture stdout/err  ◄──────── output
@@ -390,7 +390,7 @@ For Claude-to-Claude communication:
 Claude on Machine A                     Machine B
 ───────────────────                    ─────────
 "fix the tests on MacBook"
-  └─► claude-bridge run MacBook \
+  └─► agent-bridge run MacBook \
         "fix failing tests" --claude
       └─► SSH ──────────────────────► claude --print "fix failing tests"
       └─► capture output     ◄──────── Claude's response
@@ -405,13 +405,13 @@ Claude on Machine A                     Machine B
 - **ED25519 keys** — modern, fast, secure
 - **Restrictive file permissions** — config dir is mode 700, keys are mode 600
 - **No cloud** — all communication is direct SSH, no third-party servers
-- **Separate config** — stored in `~/.claude-bridge/`, not in `.claude/` to avoid accidental git commits
+- **Separate config** — stored in `~/.agent-bridge/`, not in `.claude/` to avoid accidental git commits
 
 ### Recommendations
 
 - Use **Tailscale** for cross-network connections (avoids exposing SSH to the internet)
 - Enable macOS **Firewall** and only allow SSH
-- Regularly rotate keys with `claude-bridge unpair` + re-setup
+- Regularly rotate keys with `agent-bridge unpair` + re-setup
 - Review `~/.ssh/authorized_keys` periodically
 
 ---
@@ -422,11 +422,11 @@ If both machines are on the same Tailscale network, use the Tailscale hostname o
 
 ```bash
 # When pairing, use the Tailscale address
-claude-bridge pair \
+agent-bridge pair \
   --name "MacBook-Pro" \
   --host macbook-pro.tail12345.ts.net \
   --user ethan \
-  --key ~/.claude-bridge/keys/claude-bridge_MacBook-Pro
+  --key ~/.agent-bridge/keys/agent-bridge_MacBook-Pro
 ```
 
 This lets your Claudes talk to each other from anywhere.
@@ -437,27 +437,27 @@ This lets your Claudes talk to each other from anywhere.
 
 ### Run a command on the other machine
 ```bash
-claude-bridge run MacBook-Pro "ls -la ~/Projects"
+agent-bridge run MacBook-Pro "ls -la ~/Projects"
 ```
 
 ### Deploy an app
 ```bash
-claude-bridge run MacBook-Pro "cd ~/Projects/myapp && git pull && npm install && npm run build"
+agent-bridge run MacBook-Pro "cd ~/Projects/myapp && git pull && npm install && npm run build"
 ```
 
 ### Ask the remote Claude to do work
 ```bash
-claude-bridge run MacBook-Pro "review the code in ~/Projects/myapp and suggest improvements" --claude
+agent-bridge run MacBook-Pro "review the code in ~/Projects/myapp and suggest improvements" --claude
 ```
 
 ### Check system status
 ```bash
-claude-bridge run MacBook-Pro "uptime && df -h && top -l 1 | head -10"
+agent-bridge run MacBook-Pro "uptime && df -h && top -l 1 | head -10"
 ```
 
 ### Start a dev server in the background
 ```bash
-claude-bridge run MacBook-Pro "cd ~/Projects/myapp && nohup npm run dev > /tmp/dev.log 2>&1 & echo started"
+agent-bridge run MacBook-Pro "cd ~/Projects/myapp && nohup npm run dev > /tmp/dev.log 2>&1 & echo started"
 ```
 
 ---
@@ -467,10 +467,10 @@ claude-bridge run MacBook-Pro "cd ~/Projects/myapp && nohup npm run dev > /tmp/d
 Contributions welcome! Please open an issue first to discuss what you'd like to change.
 
 ```bash
-git clone https://github.com/EthanSK/claude-bridge.git
-cd claude-bridge
-chmod +x claude-bridge
-./claude-bridge help
+git clone https://github.com/EthanSK/agent-bridge.git
+cd agent-bridge
+chmod +x agent-bridge
+./agent-bridge help
 ```
 
 ---
