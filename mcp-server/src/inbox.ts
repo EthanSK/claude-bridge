@@ -44,7 +44,7 @@ export interface BridgeMessage {
   id: string;
   from: string;
   to: string;
-  type: 'message' | 'command' | 'agent_prompt' | 'response';
+  type: 'message' | 'command' | 'response';
   content: string;
   timestamp: string;
   replyTo: string | null;

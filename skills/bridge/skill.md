@@ -147,18 +147,17 @@ agent-bridge run MacBook-Pro "ps aux | head -20 && df -h && free -h 2>/dev/null"
 agent-bridge run MacBook-Pro "cd ~/Projects/myapp && nohup npm run dev > /tmp/dev.log 2>&1 &"
 ```
 
-## v2: MCP Server (real-time messaging)
+## v2: MCP Server (running agent-to-agent communication)
 
-If the agent-bridge MCP server is configured, you have direct access to these tools without needing the CLI:
+If the agent-bridge MCP server is configured, you have direct access to these tools without needing the CLI. The MCP server enables EXISTING running agent sessions to communicate — it does NOT spawn new agent processes.
 
 | Tool | Description |
 |------|-------------|
 | `bridge_list_machines` | List paired machines |
 | `bridge_status` | Check if a machine is reachable |
-| `bridge_send_message` | Send a message to another machine's agent |
-| `bridge_receive_messages` | Check for incoming messages |
+| `bridge_send_message` | Send a message to another machine's running agent |
+| `bridge_receive_messages` | Check for incoming messages (polling-based) |
 | `bridge_run_command` | Run a shell command remotely |
-| `bridge_run_agent_prompt` | Run an AI agent prompt remotely |
 | `bridge_clear_inbox` | Clear the local inbox |
 | `bridge_inbox_stats` | Get inbox statistics and watcher health |
 
@@ -183,12 +182,16 @@ Add to Claude Code MCP config:
 
 ### Messaging workflow
 
-1. Call `bridge_send_message("MacBookPro", "check the test results")` to send
-2. The remote agent calls `bridge_receive_messages()` to read it
-3. The remote agent processes and responds via `bridge_send_message`
-4. Call `bridge_receive_messages()` to get the reply
+1. Machine A's Claude calls `bridge_send_message("MacBookPro", "check the test results")` to send
+2. The message is written to Machine B's `~/.agent-bridge/inbox/` via SSH
+3. Machine B's file watcher detects the new file and updates the cache
+4. Machine B's running Claude calls `bridge_receive_messages()` to read it
+5. Machine B processes and responds via `bridge_send_message` back to Machine A
+6. Machine A calls `bridge_receive_messages()` to get the reply
 
-Messages are JSON files delivered to `~/.agent-bridge/inbox/` via SSH. A file watcher detects new messages automatically.
+Messages are JSON files delivered via SSH. A file watcher (fswatch on macOS, inotifywait on Linux, polling fallback) detects new files and updates an internal cache. The running agent must call `bridge_receive_messages` to consume messages — there is no push notification to the agent.
+
+Each message includes: sender name, timestamp, content, optional `reply_to` ID for threading, and TTL (default 1 hour).
 
 ## Troubleshooting
 

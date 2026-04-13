@@ -167,14 +167,15 @@ $ agent-bridge setup --internet
  ┌──────────────────────┐                ┌──────────────────────┐
  │                      │                │                      │
  │  Claude Code         │     SSH        │  Claude Code         │
- │  + bridge skill      │ ◄────────────► │  + bridge skill      │
+ │  + MCP server        │ ◄────────────► │  + MCP server        │
+ │  + bridge skill      │  (messages)    │  + bridge skill      │
  │                      │                │                      │
  │  agent-bridge CLI   │                │  agent-bridge CLI   │
  │                      │                │                      │
  └──────────────────────┘                └──────────────────────┘
 
  "Run the tests on my MacBook"    ──►    ssh MacBook "npm test"
- "Ask the other Claude to fix it" ──►    ssh MacBook "claude --print '...'"
+ "Ask the other Claude to fix it" ──►    bridge_send_message → inbox → bridge_receive_messages
 ```
 
 Both machines are **peers** — either one can run commands on the other. There's no fixed "controller" or "target."
@@ -346,9 +347,8 @@ v2 adds an MCP server that enables running Claude Code sessions to communicate d
 | Feature | v1 (CLI) | v2 (MCP Server) |
 |---------|----------|------------------|
 | Run remote commands | `agent-bridge run` | `bridge_run_command` tool |
-| Run agent prompts | `agent-bridge run --claude` | `bridge_run_agent_prompt` tool |
-| Send messages to another agent | -- | `bridge_send_message` tool |
-| Receive messages from another agent | -- | `bridge_receive_messages` tool |
+| Send messages to another running agent | -- | `bridge_send_message` tool |
+| Receive messages from another running agent | -- | `bridge_receive_messages` tool |
 | Check machine status | `agent-bridge status` | `bridge_status` tool |
 | Works from inside Claude Code | Via bash | Native MCP tools |
 
@@ -399,11 +399,12 @@ npm run build
 | `bridge_list_machines` | List paired machines and their connection details |
 | `bridge_status` | Check if a machine is reachable via SSH |
 | `bridge_send_message` | Send a message to a running agent on another machine |
-| `bridge_receive_messages` | Check for and consume incoming messages |
+| `bridge_receive_messages` | Check for and consume incoming messages (polling-based) |
 | `bridge_run_command` | Run a shell command on a remote machine |
-| `bridge_run_agent_prompt` | Run an agent prompt on a remote machine (default: `claude --print`) |
 | `bridge_clear_inbox` | Clear all messages from the local inbox |
 | `bridge_inbox_stats` | Get inbox statistics: pending message count, oldest message age, total size, watcher health, processed ID count, and failed message count |
+
+> **Note:** The MCP server does NOT spawn new agent processes. It enables _existing running_ agent sessions to communicate. Machine A's Claude sends a message to Machine B's inbox, and Machine B's already-running Claude picks it up via `bridge_receive_messages`.
 
 ### How messaging works
 
@@ -423,7 +424,15 @@ Machine A (Claude Code)                   Machine B (Claude Code)
 └─────────────────────────┘               └─────────────────────────┘
 ```
 
-Messages are JSON files delivered to `~/.agent-bridge/inbox/` via SSH. A file watcher (fswatch on macOS, inotifywait on Linux, polling fallback) detects new messages.
+Messages are JSON files delivered to `~/.agent-bridge/inbox/` via SSH. A file watcher (fswatch on macOS, inotifywait on Linux, polling fallback) detects new files. The watcher updates an internal cache but does not push notifications to the agent — the running agent must call `bridge_receive_messages` to consume messages. This polling approach works well because the agent can check for messages at natural breakpoints in its workflow.
+
+Each message includes:
+- **`from`**: sender machine name
+- **`to`**: target machine name
+- **`timestamp`**: ISO 8601 creation time
+- **`content`**: the message body
+- **`replyTo`**: optional message ID for threading/correlation
+- **`ttl`**: time-to-live in seconds (0 = no expiry, default: 3600)
 
 ### Message format
 
@@ -435,7 +444,8 @@ Messages are JSON files delivered to `~/.agent-bridge/inbox/` via SSH. A file wa
   "type": "message",
   "content": "List the files in ~/Projects",
   "timestamp": "2026-04-13T01:15:00Z",
-  "replyTo": null
+  "replyTo": null,
+  "ttl": 3600
 }
 ```
 

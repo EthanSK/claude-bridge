@@ -5,8 +5,12 @@
  *
  * This is the v2 component of agent-bridge. It runs as an MCP server
  * that Claude Code (or any MCP-compatible client) connects to, exposing
- * tools for cross-machine messaging, remote command execution, and
- * agent prompt delegation.
+ * tools for cross-machine messaging and remote command execution.
+ *
+ * Design philosophy: enable EXISTING running agent sessions to communicate
+ * with each other, NOT spawn new agent processes. Machine A's Claude sends
+ * a message to Machine B's inbox, and Machine B's already-running Claude
+ * picks it up via bridge_receive_messages.
  *
  * Communication protocol:
  * - Messages are JSON files written to ~/.agent-bridge/inbox/ on the target
@@ -52,15 +56,22 @@ async function main(): Promise<void> {
     {
       instructions: [
         `You are connected to the agent-bridge MCP server on machine "${localName}".`,
-        'This server enables real-time communication between AI agent sessions running on different machines.',
+        'This server enables real-time communication between RUNNING AI agent sessions on different machines.',
+        'It does NOT spawn new agent processes — it connects existing, already-running sessions.',
         '',
         'Available capabilities:',
         '- List and check status of paired machines',
-        '- Send messages to agents on other machines',
+        '- Send messages to running agents on other machines',
         '- Receive messages from other machines',
         '- Run shell commands on remote machines',
-        '- Run AI agent prompts on remote machines',
         '- Check inbox statistics and watcher health',
+        '',
+        'Communication flow:',
+        '1. Machine A calls bridge_send_message to write a message to Machine B\'s inbox via SSH',
+        '2. Machine B\'s file watcher detects the new message',
+        '3. Machine B\'s running agent calls bridge_receive_messages to read it',
+        '4. Machine B responds via bridge_send_message back to Machine A',
+        '5. Machine A calls bridge_receive_messages to get the reply',
         '',
         'Messages are delivered via SSH and stored in the inbox (~/.agent-bridge/inbox/).',
         'Use bridge_receive_messages periodically to check for incoming messages.',

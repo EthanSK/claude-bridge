@@ -132,20 +132,31 @@ agent-bridge run MacBook-Pro "review the code in ~/Projects/myapp/src/ and sugge
 agent-bridge run MacBook-Pro "ps aux | head -20 && df -h && free -h 2>/dev/null"
 ```
 
-## v2: MCP Server
+## v2: MCP Server (running agent-to-agent communication)
 
-agent-bridge v2 adds an MCP server for real-time agent-to-agent messaging. If configured as an MCP server in Claude Code, the following tools become available natively:
+agent-bridge v2 adds an MCP server for real-time communication between RUNNING agent sessions. It does NOT spawn new agent processes — it connects existing, already-running sessions on different machines.
+
+If configured as an MCP server in Claude Code, the following tools become available natively:
 
 - `bridge_list_machines` — list paired machines
 - `bridge_status` — check if a machine is reachable
-- `bridge_send_message` — send a message to another machine's agent
-- `bridge_receive_messages` — check for incoming messages
+- `bridge_send_message` — send a message to another machine's running agent
+- `bridge_receive_messages` — check for incoming messages (polling-based)
 - `bridge_run_command` — run a shell command on a remote machine
-- `bridge_run_agent_prompt` — run an AI agent prompt on a remote machine
 - `bridge_clear_inbox` — clear the local inbox
 - `bridge_inbox_stats` — get inbox statistics and watcher health
 
 Setup: `cd mcp-server && npm install && npm run build`, then add to MCP config.
+
+### How messaging works
+
+1. Machine A's Claude calls `bridge_send_message` to write a message to Machine B's inbox via SSH
+2. Machine B's file watcher detects the new file
+3. Machine B's running Claude calls `bridge_receive_messages` to read it
+4. Machine B processes and responds via `bridge_send_message` back to Machine A
+5. Machine A calls `bridge_receive_messages` to get the reply
+
+Messages include sender name, timestamp, content, optional reply-to ID for threading, and TTL.
 
 ## Troubleshooting
 

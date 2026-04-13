@@ -7,7 +7,6 @@
  * - bridge_send_message: Send a message to a remote machine's running agent
  * - bridge_receive_messages: Check for and consume incoming messages
  * - bridge_run_command: Run a shell command on a remote machine
- * - bridge_run_agent_prompt: Run an agent prompt on a remote machine
  * - bridge_clear_inbox: Clear all messages from the local inbox
  * - bridge_inbox_stats: Get inbox statistics and watcher health
  */
@@ -339,99 +338,6 @@ export function registerTools(server: McpServer): void {
             {
               type: 'text' as const,
               text: `Failed to run command on ${machineName}: ${errMsg}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-    },
-  );
-
-  // -- bridge_run_agent_prompt -----------------------------------------------
-  server.registerTool(
-    'bridge_run_agent_prompt',
-    {
-      title: 'Run Agent Prompt',
-      description:
-        'Run an AI agent prompt on a remote machine. By default uses `claude --print`, but you can specify any agent command. The prompt is executed on the remote machine and the output is returned.',
-      inputSchema: {
-        machine: z.string().describe('Name of the target machine'),
-        prompt: z.string().describe('The prompt to send to the agent'),
-        agent: z
-          .string()
-          .optional()
-          .describe(
-            'Agent command to use (default: "claude --print"). Examples: "claude --print", "codex exec", "aider --message"',
-          ),
-        timeout: z
-          .number()
-          .optional()
-          .describe(
-            'Timeout in milliseconds (default: 120000 for agent prompts)',
-          ),
-      },
-    },
-    async ({ machine: machineName, prompt, agent, timeout }) => {
-      const machine = getMachine(machineName);
-      if (!machine) {
-        const all = loadConfig();
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Machine "${machineName}" not found. Available: ${all.map(m => m.name).join(', ')}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      const agentCmd = agent ?? 'claude --print';
-      const escapedPrompt = prompt.replace(/'/g, "'\\''");
-      const command = `${agentCmd} '${escapedPrompt}'`;
-
-      logInfo(
-        `Running agent prompt on ${machineName} with ${agentCmd}: ${prompt.substring(0, 100)}...`,
-      );
-
-      try {
-        const result = await sshExec(
-          machine,
-          command,
-          timeout ?? 120000,
-        );
-        const parts: string[] = [];
-
-        if (result.stdout.trim()) {
-          parts.push(result.stdout.trim());
-        }
-        if (result.stderr.trim()) {
-          parts.push(`[stderr]: ${result.stderr.trim()}`);
-        }
-        if (result.exitCode !== 0) {
-          parts.push(`[exit code: ${result.exitCode}]`);
-        }
-
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: parts.join('\n\n') || '(no output)',
-            },
-          ],
-          isError: result.exitCode !== 0,
-        };
-      } catch (err) {
-        const errMsg =
-          err instanceof Error ? err.message : String(err);
-        logError(
-          `Agent prompt failed on ${machineName}: ${errMsg}`,
-        );
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Failed to run agent prompt on ${machineName}: ${errMsg}`,
             },
           ],
           isError: true,
