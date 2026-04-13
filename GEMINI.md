@@ -1,0 +1,66 @@
+# Agent Bridge
+
+You are an AI coding agent with agent-bridge installed. This machine is a **peer** in a bidirectional bridge -- it can both send commands to and receive commands from other paired machines.
+
+## When to activate
+
+Activate when the user says things like:
+- "connect to my MacBook" / "talk to the other machine"
+- "run X on [machine name]"
+- "check if [machine] is online"
+- "pair with a new machine" / "add a remote machine"
+- "what machines are connected?"
+- "set up remote access" / "set up agent-bridge"
+
+## Setup
+
+Run on any machine you want to bridge:
+```bash
+agent-bridge setup
+```
+
+This enables SSH, generates an ED25519 key pair, and displays a pairing screen. Photograph the pairing screen and send it to the agent on the other machine.
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `agent-bridge list` | List all paired machines |
+| `agent-bridge status [machine]` | Check if machine(s) are reachable |
+| `agent-bridge run <machine> "cmd"` | Run a command on a paired machine |
+| `agent-bridge run <machine> "prompt" --agent` | Run an AI agent prompt remotely (default: claude --print) |
+| `agent-bridge run <machine> "prompt" --claude` | Shorthand for --agent "claude --print" |
+| `agent-bridge run <machine> "prompt" --codex` | Shorthand for --agent "codex exec" |
+| `agent-bridge connect <machine>` | Open an interactive SSH session |
+| `agent-bridge pair` | Pair with another machine (interactive or flags) |
+| `agent-bridge unpair <machine>` | Remove a pairing |
+
+## Pairing from a photo
+
+When the user sends a photo of another machine's pairing screen:
+1. Read the image and extract: Machine Name, Username, IP, Port, Token, Public Key
+2. Run: `agent-bridge pair --name "<name>" --host "<ip>" --port <port> --user "<user>" --token "<token>" --pubkey "<pubkey>"`
+3. Test: `agent-bridge status <name>`
+
+## Examples
+
+```bash
+# Run a command
+agent-bridge run MacBook-Pro "ls -la ~/Projects"
+
+# Deploy
+agent-bridge run MacBook-Pro "cd ~/Projects/myapp && git pull && npm install && npm run build"
+
+# Ask remote agent to review code
+agent-bridge run MacBook-Pro "review the code in ~/Projects/myapp" --agent
+
+# Check system status
+agent-bridge run MacBook-Pro "uptime && df -h"
+```
+
+## Security
+
+- SSH key-based auth only (ED25519), no passwords
+- Keys stored at `~/.agent-bridge/keys/` (mode 600)
+- Config at `~/.agent-bridge/config` (mode 600)
+- Direct SSH, no cloud servers

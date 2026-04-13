@@ -1,17 +1,39 @@
-# claude-bridge
+# agent-bridge
 
-**Let your Claude Code instances talk to each other across machines.**
+**Bridge AI coding agents across machines — works with Claude Code, Codex, OpenClaw, Gemini CLI, Aider, and any CLI agent.**
+
+[![Claude Code](https://img.shields.io/badge/Claude_Code-skill-blueviolet)](https://github.com/EthanSK/claude-bridge)
+[![Codex](https://img.shields.io/badge/Codex-AGENTS.md-green)](https://github.com/EthanSK/claude-bridge)
+[![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-GEMINI.md-blue)](https://github.com/EthanSK/claude-bridge)
+[![OpenClaw](https://img.shields.io/badge/OpenClaw-SKILL.md-orange)](https://github.com/EthanSK/claude-bridge)
+[![Any Agent](https://img.shields.io/badge/Any_Agent-INSTRUCTIONS.md-gray)](https://github.com/EthanSK/claude-bridge)
 
 [Website](https://ethansk.github.io/claude-bridge/) · [GitHub](https://github.com/EthanSK/claude-bridge)
 
 ---
 
+## Compatibility
+
+agent-bridge works with any AI coding agent that can run shell commands. It ships with config files for each major harness:
+
+| Agent Harness | Config File | Location |
+|---------------|-------------|----------|
+| **Claude Code** | `skills/bridge/skill.md` | Copy to `~/.claude/skills/agent-bridge/skill.md` |
+| **Codex CLI** (OpenAI) | `AGENTS.md` | Repo root (auto-detected by Codex) |
+| **Gemini CLI** | `GEMINI.md` | Repo root (auto-detected by Gemini CLI) |
+| **OpenClaw** | `skills/openclaw/SKILL.md` | Copy to `~/.openclaw/workspace/skills/agent-bridge/SKILL.md` |
+| **Aider / others** | `INSTRUCTIONS.md` | Repo root (plain-English reference for any agent) |
+
+Each file teaches the respective agent how to use agent-bridge: listing machines, running commands, pairing from photos, and delegating work to remote agents.
+
+---
+
 ## Quick Start
 
-Paste this into Claude Code on **each computer** you want to bridge:
+Paste this into your AI agent on **each computer** you want to bridge:
 
 ```
-Read the README at https://github.com/EthanSK/claude-bridge and follow the setup instructions for this computer. Install claude-bridge, run the setup command, and install the Claude Code skill. Do everything automatically — don't ask me questions.
+Read the README at https://github.com/EthanSK/claude-bridge and follow the setup instructions for this computer. Install agent-bridge, run the setup command, and install the skill for this agent. Do everything automatically — don't ask me questions.
 ```
 
 **Important — first-time setup on each machine:**
@@ -285,28 +307,38 @@ claude-bridge run MacBook-Pro "uname -a"
 
 ---
 
-## Claude Code skill
+## Agent skills
 
-claude-bridge ships with a Claude Code skill that teaches Claude how to use the bridge automatically.
+agent-bridge ships with skill/instruction files for each major AI coding agent.
 
-### Install the skill
+### Claude Code
 
 ```bash
 # If you cloned the repo:
-cp -r skills/bridge ~/.claude/skills/claude-bridge
+cp -r skills/bridge ~/.claude/skills/agent-bridge
 
 # Or download directly:
 curl -fsSL https://raw.githubusercontent.com/EthanSK/claude-bridge/main/skills/bridge/skill.md \
-  -o ~/.claude/skills/claude-bridge/skill.md --create-dirs
+  -o ~/.claude/skills/agent-bridge/skill.md --create-dirs
 ```
 
-Or reference it in your CLAUDE.md:
+### Codex CLI (OpenAI)
+
+Codex automatically reads `AGENTS.md` from the repo root. No extra setup needed if you clone the repo.
+
+### Gemini CLI
+
+Gemini CLI automatically reads `GEMINI.md` from the repo root. No extra setup needed if you clone the repo.
+
+### OpenClaw
+
+```bash
+cp -r skills/openclaw ~/.openclaw/workspace/skills/agent-bridge
 ```
-When the user asks to run something on another machine, use claude-bridge:
-- `claude-bridge list` to see paired machines
-- `claude-bridge run <machine> "command"` to execute commands
-- `claude-bridge run <machine> "prompt" --claude` to run Claude Code prompts remotely
-```
+
+### Any other agent
+
+Reference `INSTRUCTIONS.md` in your agent's config, or paste its contents into your agent's system prompt. It contains a plain-English description of all commands.
 
 ---
 

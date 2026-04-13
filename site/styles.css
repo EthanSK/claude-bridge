@@ -450,6 +450,11 @@ section h2 {
   line-height: 1.55;
 }
 
+/* -- Compatibility -- */
+.compat {
+  padding: 72px 24px;
+}
+
 /* -- Architecture -- */
 .architecture {
   padding: 72px 24px;

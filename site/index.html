@@ -3,28 +3,28 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>claude-bridge &mdash; Let your Claude Code instances talk to each other</title>
+    <title>agent-bridge &mdash; Bridge AI coding agents across machines</title>
     <meta
       name="description"
-      content="claude-bridge enables bidirectional Claude-to-Claude communication between two computers over SSH. Set up in seconds with a photo-based pairing flow."
+      content="agent-bridge connects AI coding agents across machines over SSH. Works with Claude Code, Codex, OpenClaw, Gemini CLI, Aider, and any CLI agent."
     />
     <meta name="robots" content="index, follow, max-image-preview:large" />
     <link rel="canonical" href="https://ethansk.github.io/claude-bridge/" />
-    <meta name="application-name" content="claude-bridge" />
+    <meta name="application-name" content="agent-bridge" />
     <meta name="theme-color" content="#0b0f14" />
 
     <!-- Open Graph -->
-    <meta property="og:site_name" content="claude-bridge" />
+    <meta property="og:site_name" content="agent-bridge" />
     <meta property="og:type" content="website" />
     <meta property="og:locale" content="en_GB" />
     <meta property="og:url" content="https://ethansk.github.io/claude-bridge/" />
-    <meta property="og:title" content="claude-bridge &mdash; Let your Claude Code instances talk to each other" />
-    <meta property="og:description" content="Bidirectional Claude-to-Claude communication between two computers. Photo-based pairing, SSH under the hood, zero config." />
+    <meta property="og:title" content="agent-bridge &mdash; Bridge AI coding agents across machines" />
+    <meta property="og:description" content="Connect AI coding agents across machines over SSH. Works with Claude Code, Codex, OpenClaw, Gemini CLI, Aider, and any CLI agent." />
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="claude-bridge &mdash; Let your Claude Code instances talk to each other" />
-    <meta name="twitter:description" content="Bidirectional Claude-to-Claude communication between two computers. Photo-based pairing, SSH under the hood, zero config." />
+    <meta name="twitter:title" content="agent-bridge &mdash; Bridge AI coding agents across machines" />
+    <meta name="twitter:description" content="Connect AI coding agents across machines over SSH. Works with Claude Code, Codex, OpenClaw, Gemini CLI, Aider, and any CLI agent." />
 
     <link rel="stylesheet" href="./styles.css" />
   </head>
@@ -37,9 +37,9 @@
           <span class="logo-icon">&#x1F309;</span>
           <span class="logo-copy">
             <span class="logo-title">
-              claude-bridge <span class="logo-version">v2.2.0</span>
+              agent-bridge <span class="logo-version">v5.0.0</span>
             </span>
-            <span class="logo-sub">Claude-to-Claude, machine-to-machine</span>
+            <span class="logo-sub">Bridge AI agents across machines</span>
           </span>
         </a>
         <a class="nav-link" href="https://github.com/EthanSK/claude-bridge" target="_blank" rel="noopener">GitHub</a>
@@ -47,10 +47,10 @@
 
       <header class="hero wrap">
         <h1>
-          Let your <span class="accent">Claudes</span> talk to each other.
+          Let your <span class="accent">AI agents</span> talk to each other.
         </h1>
         <p class="tagline">
-          claude-bridge connects Claude Code instances across machines with bidirectional communication. Run commands, edit files, and start Claude sessions on any paired computer &mdash; all over SSH, paired with a photo.
+          agent-bridge connects AI coding agents across machines &mdash; Claude Code, Codex, OpenClaw, Gemini CLI, Aider, and any CLI agent. Run commands, delegate work, and start agent sessions on any paired computer, all over SSH.
         </p>
         <div class="hero-actions">
           <a class="btn btn--primary" href="https://github.com/EthanSK/claude-bridge#quick-start">
@@ -67,21 +67,21 @@
           <code class="install-cmd">curl -fsSL https://raw.githubusercontent.com/EthanSK/claude-bridge/main/install.sh | bash</code>
         </div>
         <p class="hero-note">
-          MIT licensed &middot; Zero dependencies &middot; Pure bash &middot; macOS &amp; Linux
+          MIT licensed &middot; Zero dependencies &middot; Pure bash &middot; macOS &amp; Linux &middot; Any AI agent
         </p>
       </header>
 
       <section class="quickstart wrap" id="quickstart">
         <div class="section-kicker">Quick Start</div>
-        <h2>Paste this into Claude Code on each machine.</h2>
+        <h2>Paste this into your AI agent on each machine.</h2>
         <div class="quickstart-prompt">
-          <code class="install-cmd quickstart-cmd">Read the README at https://github.com/EthanSK/claude-bridge and follow the setup instructions for this computer. Install claude-bridge, run the setup command, and install the Claude Code skill. Do everything automatically &mdash; don&rsquo;t ask me questions.</code>
+          <code class="install-cmd quickstart-cmd">Read the README at https://github.com/EthanSK/claude-bridge and follow the setup instructions for this computer. Install agent-bridge, run the setup command, and install the skill for this agent. Do everything automatically &mdash; don&rsquo;t ask me questions.</code>
         </div>
         <div class="prereq-note">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
           <span><strong>Prerequisite:</strong> Enable SSH on each machine first &mdash; <strong>macOS:</strong> System Settings &rarr; General &rarr; Sharing &rarr; toggle <em>Remote Login</em> ON &middot; <strong>Linux:</strong> <code>sudo systemctl enable --now sshd</code></span>
         </div>
-        <p class="quickstart-sub">Then photograph the pairing screen and send it to Claude on the other machine. That&rsquo;s it &mdash; they can now talk to each other.</p>
+        <p class="quickstart-sub">Then photograph the pairing screen and send it to the agent on the other machine. That&rsquo;s it &mdash; they can now talk to each other.</p>
       </section>
 
       <section class="demo-wrap wrap">
@@ -147,7 +147,7 @@
             <div class="step-num">3</div>
             <div>
               <h3>Use</h3>
-              <p>&ldquo;Run the tests on my MacBook&rdquo; just works &mdash; from either machine. Both peers are equal. Add <code>--claude</code> to run a full Claude Code prompt on the remote machine.</p>
+              <p>&ldquo;Run the tests on my MacBook&rdquo; just works &mdash; from either machine. Both peers are equal. Add <code>--agent</code> to run an AI agent prompt on the remote machine.</p>
             </div>
           </li>
         </ol>
@@ -155,7 +155,7 @@
 
       <section class="features wrap">
         <div class="section-kicker">Features</div>
-        <h2>Everything you need for multi-machine Claude.</h2>
+        <h2>Everything you need for multi-machine AI agents.</h2>
         <div class="features-grid">
           <div class="feature">
             <div class="feature-icon">
@@ -185,8 +185,8 @@
             <div class="feature-icon">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
             </div>
-            <h3>Claude-to-Claude</h3>
-            <p>Use <code>--claude</code> to run a Claude Code prompt on the remote machine. Your Claude can delegate work to the Claude on any paired peer.</p>
+            <h3>Agent-to-agent</h3>
+            <p>Use <code>--agent</code> to run an AI prompt on the remote machine. Delegate work to Claude, Codex, Aider, or any agent on any paired peer.</p>
           </div>
 
           <div class="feature">
@@ -217,8 +217,50 @@
             <div class="feature-icon">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8M8 13h4"/></svg>
             </div>
-            <h3>Claude Code skill</h3>
-            <p>Ships with a Claude Code skill so Claude automatically knows how to list machines, run commands, and delegate work across peers.</p>
+            <h3>Multi-agent support</h3>
+            <p>Ships with config files for Claude Code, Codex, Gemini CLI, and OpenClaw. Each agent automatically knows how to use the bridge.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="compat wrap" id="compat">
+        <div class="section-kicker">Compatibility</div>
+        <h2>Works with every major AI coding agent.</h2>
+        <div class="features-grid">
+          <div class="feature">
+            <div class="feature-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            </div>
+            <h3>Claude Code</h3>
+            <p><code>skills/bridge/skill.md</code> &mdash; Copy to <code>~/.claude/skills/</code>. Claude learns to use the bridge automatically.</p>
+          </div>
+          <div class="feature">
+            <div class="feature-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+            </div>
+            <h3>Codex CLI</h3>
+            <p><code>AGENTS.md</code> &mdash; Auto-detected from repo root. No extra setup needed.</p>
+          </div>
+          <div class="feature">
+            <div class="feature-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+            </div>
+            <h3>Gemini CLI</h3>
+            <p><code>GEMINI.md</code> &mdash; Auto-detected from repo root. No extra setup needed.</p>
+          </div>
+          <div class="feature">
+            <div class="feature-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            </div>
+            <h3>OpenClaw</h3>
+            <p><code>skills/openclaw/SKILL.md</code> &mdash; Copy to <code>~/.openclaw/workspace/skills/</code>.</p>
+          </div>
+          <div class="feature">
+            <div class="feature-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M16 13H8M16 17H8M10 9H8"/></svg>
+            </div>
+            <h3>Aider &amp; others</h3>
+            <p><code>INSTRUCTIONS.md</code> &mdash; Plain-English reference that works with any agent that reads files.</p>
           </div>
         </div>
       </section>
@@ -231,9 +273,9 @@
             <div class="arch-label">Peer A</div>
             <div class="arch-desc">Any machine (e.g. Mac Mini)</div>
             <div class="arch-items">
-              <span>Claude Code</span>
+              <span>Any AI agent</span>
               <span>Bridge skill</span>
-              <span>claude-bridge CLI</span>
+              <span>agent-bridge CLI</span>
             </div>
           </div>
           <div class="arch-arrow">
@@ -246,9 +288,9 @@
             <div class="arch-label">Peer B</div>
             <div class="arch-desc">Any machine (e.g. MacBook Pro)</div>
             <div class="arch-items">
-              <span>Claude Code</span>
+              <span>Any AI agent</span>
               <span>Bridge skill</span>
-              <span>claude-bridge CLI</span>
+              <span>agent-bridge CLI</span>
             </div>
           </div>
         </div>
@@ -283,7 +325,7 @@
       <footer class="site-footer wrap">
         <div class="footer-left">
           <span class="footer-icon">&#x1F309;</span>
-          <span>claude-bridge</span>
+          <span>agent-bridge</span>
         </div>
         <div class="footer-links">
           <a href="https://github.com/EthanSK/claude-bridge" target="_blank" rel="noopener">GitHub</a>
@@ -291,7 +333,7 @@
           <a href="https://github.com/EthanSK/claude-bridge/issues" target="_blank" rel="noopener">Issues</a>
         </div>
         <div class="footer-copy">
-          &copy; 2026 Ethan SK &middot; Built for multi-machine Claude workflows.
+          &copy; 2026 Ethan SK &middot; Built for multi-machine AI agent workflows.
         </div>
       </footer>
     </div>
