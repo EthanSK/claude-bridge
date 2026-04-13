@@ -10,10 +10,20 @@ import { LOGS_DIR } from './config.js';
 const LOG_FILE_NAME = 'mcp-server.log';
 const MAX_LOG_SIZE = 10 * 1024 * 1024; // 10 MB — rotate when exceeded
 
+/**
+ * Amortize rotation checks: only stat the file every N writes.
+ * Avoids a stat() syscall on every single log line.
+ */
+const ROTATION_CHECK_INTERVAL = 50;
+let writesSinceRotationCheck = 0;
+let logsDirVerified = false;
+
 function ensureLogsDir(): void {
+  if (logsDirVerified) return;
   if (!existsSync(LOGS_DIR)) {
     mkdirSync(LOGS_DIR, { recursive: true, mode: 0o700 });
   }
+  logsDirVerified = true;
 }
 
 function getLogFile(): string {
@@ -22,8 +32,13 @@ function getLogFile(): string {
 
 /**
  * Rotate the log file if it exceeds MAX_LOG_SIZE.
+ * Called every ROTATION_CHECK_INTERVAL writes to avoid excess stat() calls.
  */
 function rotateIfNeeded(): void {
+  writesSinceRotationCheck++;
+  if (writesSinceRotationCheck < ROTATION_CHECK_INTERVAL) return;
+  writesSinceRotationCheck = 0;
+
   const logFile = getLogFile();
   try {
     if (existsSync(logFile)) {
@@ -46,7 +61,7 @@ export function logInfo(msg: string): void {
   ensureLogsDir();
   rotateIfNeeded();
   const formatted = formatMessage('INFO', msg);
-  appendFileSync(getLogFile(), formatted);
+  try { appendFileSync(getLogFile(), formatted); } catch { /* ignore */ }
   process.stderr.write(formatted);
 }
 
@@ -54,7 +69,7 @@ export function logWarn(msg: string): void {
   ensureLogsDir();
   rotateIfNeeded();
   const formatted = formatMessage('WARN', msg);
-  appendFileSync(getLogFile(), formatted);
+  try { appendFileSync(getLogFile(), formatted); } catch { /* ignore */ }
   process.stderr.write(formatted);
 }
 
@@ -65,13 +80,14 @@ export function logError(msg: string, err?: unknown): void {
   if (err instanceof Error && err.stack) {
     formatted += `  Stack: ${err.stack}\n`;
   }
-  appendFileSync(getLogFile(), formatted);
+  try { appendFileSync(getLogFile(), formatted); } catch { /* ignore */ }
   process.stderr.write(formatted);
 }
 
 export function logDebug(msg: string): void {
   ensureLogsDir();
+  rotateIfNeeded();
   const formatted = formatMessage('DEBUG', msg);
-  appendFileSync(getLogFile(), formatted);
+  try { appendFileSync(getLogFile(), formatted); } catch { /* ignore */ }
   // Debug only goes to file, not stderr, to reduce noise
 }

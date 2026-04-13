@@ -185,8 +185,8 @@ function scheduleRestart(callback: MessageCallback): void {
 
   setTimeout(async () => {
     logInfo(`Restarting native watcher (attempt ${restartCount}/${MAX_RESTARTS})...`);
-    // Re-attempt native watcher
-    await startWatcher(callback);
+    // Re-attempt native watcher, preserving the channel callback
+    await startWatcher(callback, savedChannelCallback ?? undefined);
   }, delay);
 }
 
@@ -203,12 +203,20 @@ function setupFswatchHandler(proc: ChildProcess, callback: MessageCallback): voi
       .split('\0')
       .filter(p => p.endsWith('.json'));
     if (paths.length > 0) {
+      // Dedup: fswatch can fire multiple events for the same file
       const newNames: string[] = [];
+      const seen = new Set<string>();
       for (const p of paths) {
         const name = p.split('/').pop()!;
-        knownFiles.add(name);
-        newNames.push(name);
+        if (seen.has(name)) continue;
+        seen.add(name);
+        if (!knownFiles.has(name)) {
+          knownFiles.add(name);
+          newNames.push(name);
+        }
       }
+      if (newNames.length === 0) return;
+
       notifyNewFiles(newNames);
       invalidateCache();
 
@@ -217,7 +225,7 @@ function setupFswatchHandler(proc: ChildProcess, callback: MessageCallback): voi
         emitChannelNotification(name);
       }
 
-      callback(paths);
+      callback(newNames.map(n => join(INBOX_DIR, n)));
     }
   });
 

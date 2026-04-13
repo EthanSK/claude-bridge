@@ -113,7 +113,13 @@ export function loadConfig(): MachineConfig[] {
     machines.push(current as MachineConfig);
   }
 
-  return machines;
+  // Validate that all required fields are present; skip incomplete entries
+  return machines.filter(m => {
+    if (!m.host || !m.user || !m.port || !m.key) {
+      return false;
+    }
+    return true;
+  });
 }
 
 /**

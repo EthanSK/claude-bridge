@@ -3,3 +3,5 @@
 .env
 .agent-bridge/
 .claude-bridge/
+node_modules/
+mcp-server/build/

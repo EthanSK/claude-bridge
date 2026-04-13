@@ -1,14 +1,56 @@
 # agent-bridge
 
-**Bridge AI coding agents across machines — works with Claude Code, Codex, OpenClaw, Gemini CLI, Aider, and any CLI agent.**
+**Bridge AI coding agents across machines -- works with Claude Code, Codex, OpenClaw, Gemini CLI, Aider, and any CLI agent.**
 
-[![Claude Code](https://img.shields.io/badge/Claude_Code-skill-blueviolet)](https://github.com/EthanSK/agent-bridge)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-channel_plugin-blueviolet)](https://github.com/EthanSK/agent-bridge)
 [![Codex](https://img.shields.io/badge/Codex-AGENTS.md-green)](https://github.com/EthanSK/agent-bridge)
 [![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-GEMINI.md-blue)](https://github.com/EthanSK/agent-bridge)
 [![OpenClaw](https://img.shields.io/badge/OpenClaw-SKILL.md-orange)](https://github.com/EthanSK/agent-bridge)
 [![Any Agent](https://img.shields.io/badge/Any_Agent-INSTRUCTIONS.md-gray)](https://github.com/EthanSK/agent-bridge)
 
-[Website](https://ethansk.github.io/agent-bridge/) · [GitHub](https://github.com/EthanSK/agent-bridge)
+[Website](https://ethansk.github.io/agent-bridge/) | [GitHub](https://github.com/EthanSK/agent-bridge)
+
+---
+
+## What is agent-bridge?
+
+agent-bridge lets AI coding agents on different machines talk to each other and run commands on each other's machines over SSH. It is:
+
+- **Peer-to-peer** -- no central server, no cloud, just direct SSH between machines
+- **Agent-agnostic** -- works with Claude Code, Codex, Gemini CLI, OpenClaw, Aider, or any CLI agent
+- **Zero dependencies** -- just bash, ssh, and ssh-keygen (built into every Mac and Linux)
+- **Real-time** -- messages are pushed into running Claude Code sessions automatically (channel plugin), or polled by other harnesses
+
+---
+
+## Architecture overview
+
+```
+                          agent-bridge architecture
+
+ MACHINE A (e.g. Mac Mini)                    MACHINE B (e.g. MacBook Pro)
+ ┌─────────────────────────────────┐         ┌─────────────────────────────────┐
+ │                                 │         │                                 │
+ │  AI Agent (Claude Code, etc.)   │         │  AI Agent (Claude Code, etc.)   │
+ │  ┌───────────────────────────┐  │         │  ┌───────────────────────────┐  │
+ │  │ MCP Server / Channel      │  │   SSH   │  │ MCP Server / Channel      │  │
+ │  │ ┌───────────────────────┐ │  │◄───────►│  │ ┌───────────────────────┐ │  │
+ │  │ │ bridge_send_message   │ │  │messages │  │ │ bridge_send_message   │ │  │
+ │  │ │ bridge_run_command    │ │  │         │  │ │ bridge_run_command    │ │  │
+ │  │ │ bridge_status         │ │  │         │  │ │ bridge_status         │ │  │
+ │  │ │ ...                   │ │  │         │  │ │ ...                   │ │  │
+ │  │ └───────────────────────┘ │  │         │  │ └───────────────────────┘ │  │
+ │  │ File watcher (inbox)      │  │         │  │ File watcher (inbox)      │  │
+ │  └───────────────────────────┘  │         │  └───────────────────────────┘  │
+ │                                 │         │                                 │
+ │  agent-bridge CLI              │         │  agent-bridge CLI              │
+ │  ~/.agent-bridge/              │         │  ~/.agent-bridge/              │
+ │    config, keys/, inbox/       │         │    config, keys/, inbox/       │
+ └─────────────────────────────────┘         └─────────────────────────────────┘
+
+ Both machines are PEERS -- either can run commands on the other.
+ No fixed controller or target.
+```
 
 ---
 
@@ -18,32 +60,34 @@ agent-bridge works with any AI coding agent that can run shell commands or MCP t
 
 | Agent Harness | Skill File | MCP Messaging | Delivery |
 |---------------|------------|---------------|----------|
-| **Claude Code** | `skills/bridge/skill.md` | Yes (channel plugin) | **Push** — messages arrive automatically |
+| **Claude Code** | `skills/bridge/skill.md` | Yes (channel plugin) | **Push** -- messages arrive automatically |
 | **OpenClaw** | `skills/openclaw/SKILL.md` | Yes (MCP server) | Polling via `bridge_receive_messages` |
 | **Codex CLI** (OpenAI) | `AGENTS.md` | Yes (MCP server) | Polling via `bridge_receive_messages` |
 | **Gemini CLI** | `GEMINI.md` | Yes (MCP server) | Polling via `bridge_receive_messages` |
 | **Aider / others** | `INSTRUCTIONS.md` | Yes (MCP server) | Polling via `bridge_receive_messages` |
 
-Each skill file teaches the respective agent how to use agent-bridge: listing machines, running commands, pairing from photos, and delegating work to remote agents. The MCP server adds real-time messaging between running agent sessions. See [Per-Harness Setup](#per-harness-setup) for MCP registration commands.
+Each skill file teaches the respective agent how to use agent-bridge: listing machines, running commands, pairing from photos, and delegating work to remote agents. The MCP server adds real-time messaging between running agent sessions.
 
 ---
 
-## Quick Start
+## Quick start
 
 Paste this into your AI agent on **each computer** you want to bridge:
 
 ```
-Read the README at https://github.com/EthanSK/agent-bridge and follow the setup instructions for this computer. Install agent-bridge, run the setup command, and install the skill for this agent. Do everything automatically — don't ask me questions.
+Read the README at https://github.com/EthanSK/agent-bridge and follow the setup instructions
+for this computer. Install agent-bridge, run the setup command, and install the skill for this
+agent. Do everything automatically -- don't ask me questions.
 ```
 
-**Important — first-time setup on each machine:**
-- **macOS:** System Settings → General → Sharing → toggle **Remote Login** ON → click the **ⓘ** info icon → set **"Allow access for"** to **All users**
+**Important -- first-time setup on each machine:**
+- **macOS:** System Settings > General > Sharing > toggle **Remote Login** ON > click the **(i)** info icon > set **"Allow access for"** to **All users**
 - **macOS (Full Disk Access):** Without this, SSH sessions can't access Desktop, Documents, or Downloads. To grant it:
-  - **Easy way (recommended):** System Settings → General → Sharing → click the **ⓘ** info icon next to Remote Login → toggle **"Allow full disk access for remote users"** ON
-  - **Manual way:** System Settings → Privacy & Security → Full Disk Access → click **+** → press **Cmd+Shift+G** → type `/usr/sbin/sshd` → Open → toggle ON → restart SSH: `sudo launchctl kickstart -k system/com.openssh.sshd`
+  - **Easy way (recommended):** System Settings > General > Sharing > click **(i)** next to Remote Login > toggle **"Allow full disk access for remote users"** ON
+  - **Manual way:** System Settings > Privacy & Security > Full Disk Access > click **+** > press **Cmd+Shift+G** > type `/usr/sbin/sshd` > Open > toggle ON > restart SSH: `sudo launchctl kickstart -k system/com.openssh.sshd`
 - **Linux:** `sudo systemctl enable --now sshd`
 
-Then photograph the pairing screen and send it to Claude on the other machine. That's it — they can now talk to each other.
+Then photograph the pairing screen and send it to the agent on the other machine. That's it -- they can now talk to each other.
 
 ---
 
@@ -69,26 +113,26 @@ $ agent-bridge setup
   3. Pairing Token
   One-time pairing token generated.
 
-  ╔══════════════════════════════════════════════════════════════════════╗
-  ║                    agent-bridge pairing                            ║
-  ╠══════════════════════════════════════════════════════════════════════╣
-  ║  Machine:    MacBook-Pro                                           ║
-  ║  User:       ethan                                                 ║
-  ║  Local:      MacBookPro.local                                      ║
-  ║  Local IP:   192.168.1.42                                          ║
-  ║  Public IP:  82.45.123.67                                          ║
-  ║  Port:       22                                                    ║
-  ║  Token:      bridge-a7f3k9                                         ║
-  ╠════════════════════════════════════════════════════════════════════  ╣
-  ║  Public Key: ssh-ed25519 AAAA...long...key bridge:MacBook-Pro      ║
-  ╚══════════════════════════════════════════════════════════════════════╝
+  +====================================================================+
+  |                    agent-bridge pairing                             |
+  +--------------------------------------------------------------------+
+  |  Machine:    MacBook-Pro                                           |
+  |  User:       ethan                                                 |
+  |  Local:      MacBookPro.local                                      |
+  |  Local IP:   192.168.1.42                                          |
+  |  Public IP:  82.45.123.67                                          |
+  |  Port:       22                                                    |
+  |  Token:      bridge-a7f3k9                                         |
+  +--------------------------------------------------------------------+
+  |  Public Key: ssh-ed25519 AAAA...long...key bridge:MacBook-Pro      |
+  +====================================================================+
 
   Photograph this screen and send to Claude on your other machine.
 ```
 
 ### Step 2: Pair
 
-On the other machine, tell Claude the connection details (or paste the manual command). The public key from the setup screen is included -- no password needed:
+On the other machine, tell the agent the connection details (or paste the manual command). The public key from the setup screen is included -- no password needed:
 
 ```
 $ agent-bridge pair \
@@ -104,18 +148,11 @@ $ agent-bridge pair \
 
   2. Authorize Remote Key
   [ok] Remote public key added to ~/.ssh/authorized_keys.
-  The other machine can now SSH into this one.
 
   3. Token Verification
   [ok] Token accepted: bridge-a7f3k9
 
   [ok] Paired with "MacBook-Pro"!
-
-  Connection details:
-    Host:     192.168.1.42
-    Port:     22
-    User:     ethan
-    Key:      ~/.agent-bridge/keys/agent-bridge_Mac-Mini
 ```
 
 ### Step 3: Use
@@ -132,7 +169,6 @@ $ agent-bridge run MacBook-Pro "what files are in ~/Projects?" --claude
 The ~/Projects directory contains:
   - producer-player/
   - ai-music-video-studio/
-  - OBScene/
   - agent-bridge/
 
   [ok] Claude prompt completed on MacBook-Pro (exit 0)
@@ -157,34 +193,6 @@ $ agent-bridge setup --internet
   Remote pair command:
     agent-bridge pair --name "MacBook-Pro" --host serveo.net --port 43521 --user ethan --token "bridge-a7f3k9"
 ```
-
----
-
-## How it works
-
-```
- COMPUTER A (Mac Mini)                    COMPUTER B (MacBook Pro)
- ┌──────────────────────┐                ┌──────────────────────┐
- │                      │                │                      │
- │  Claude Code         │     SSH        │  Claude Code         │
- │  + MCP server        │ ◄────────────► │  + MCP server        │
- │  + bridge skill      │  (messages)    │  + bridge skill      │
- │                      │                │                      │
- │  agent-bridge CLI   │                │  agent-bridge CLI   │
- │                      │                │                      │
- └──────────────────────┘                └──────────────────────┘
-
- "Run the tests on my MacBook"    ──►    ssh MacBook "npm test"
- "Ask the other Claude to fix it" ──►    bridge_send_message → inbox → channel push / poll
-```
-
-Both machines are **peers** — either one can run commands on the other. There's no fixed "controller" or "target."
-
-### Three steps
-
-1. **Setup** — Run `agent-bridge setup` on each machine. It enables SSH, generates keys, and shows a pairing screen.
-2. **Pair** — Photograph one machine's pairing screen and send it to the Claude on the other machine. Claude reads the image and extracts the connection details. Or use the manual pairing command.
-3. **Connect** — That's it. "Run X on my MacBook" just works from either machine.
 
 ---
 
@@ -238,8 +246,8 @@ agent-bridge setup --internet
 
 **Option A: Photo pairing (the magic way)**
 1. Take a photo of one machine's pairing screen
-2. Send it to the Claude on the other machine (via Telegram, chat, etc.)
-3. Claude reads the image, extracts the details, and runs the pair command
+2. Send it to the agent on the other machine (via Telegram, chat, etc.)
+3. The agent reads the image, extracts the details, and runs the pair command
 
 **Option B: Manual pairing**
 ```bash
@@ -278,6 +286,8 @@ agent-bridge run MacBook-Pro "uname -a"
 | `agent-bridge list` | List all paired machines. |
 | `agent-bridge run <machine> "cmd"` | Run a command on a paired machine. |
 | `agent-bridge run <machine> "prompt" --claude` | Run a Claude Code prompt on the remote machine. |
+| `agent-bridge run <machine> "prompt" --agent` | Run a prompt via any agent (default: `claude --print`). |
+| `agent-bridge run <machine> "prompt" --codex` | Run a Codex prompt on the remote machine. |
 | `agent-bridge unpair <machine>` | Remove a pairing. |
 
 ### Setup options
@@ -303,95 +313,52 @@ agent-bridge run MacBook-Pro "uname -a"
 
 ---
 
-## Agent skills
-
-agent-bridge ships with skill/instruction files that teach each AI agent how to use the bridge CLI. For MCP server / channel plugin setup (real-time messaging, push notifications), see the **[Per-Harness Setup](#per-harness-setup)** section below.
-
-### Claude Code
-
-```bash
-# If you cloned the repo:
-cp -r skills/bridge ~/.claude/skills/agent-bridge
-
-# Or download directly:
-curl -fsSL https://raw.githubusercontent.com/EthanSK/agent-bridge/main/skills/bridge/skill.md \
-  -o ~/.claude/skills/agent-bridge/skill.md --create-dirs
-```
-
-> For MCP server + channel plugin setup (push-based messaging), see [Claude Code setup](#claude-code-channel-plugin--full-push-support).
-
-### Codex CLI (OpenAI)
-
-Codex automatically reads `AGENTS.md` from the repo root. No extra setup needed if you clone the repo.
-
-> For MCP server setup (polling-based messaging), see [Codex setup](#codex-openai-mcp-server--polling).
-
-### Gemini CLI
-
-Gemini CLI automatically reads `GEMINI.md` from the repo root. No extra setup needed if you clone the repo.
-
-> For MCP server setup (polling-based messaging), see [Gemini CLI setup](#gemini-cli-mcp-server--polling).
-
-### OpenClaw
-
-```bash
-cp -r skills/openclaw ~/.openclaw/workspace/skills/agent-bridge
-```
-
-> For MCP server setup (polling-based messaging), see [OpenClaw setup](#openclaw-mcp-server--polling).
-
-### Any other agent
-
-Reference `INSTRUCTIONS.md` in your agent's config, or paste its contents into your agent's system prompt. It contains a plain-English description of all commands.
-
-> For MCP server setup, see [General setup](#general-any-mcp-compatible-agent).
-
----
-
-## v2: MCP Server & Channel Plugin (real-time agent-to-agent communication)
+## MCP Server (v2): real-time agent-to-agent communication
 
 v2 adds an MCP server that enables running AI agent sessions to communicate directly with each other across machines. Instead of one-shot CLI commands, agents can send messages back and forth in real time.
 
-**v2.1.0+** upgraded the MCP server to a **channel plugin**. Harnesses that support the `claude/channel` experimental capability (currently Claude Code) receive messages **pushed** into the conversation automatically. All other harnesses use the same MCP tools but **poll** with `bridge_receive_messages`.
+**v2.2.0** includes a **channel plugin** for Claude Code. Harnesses that support the `claude/channel` experimental capability receive messages **pushed** into the conversation automatically. All other harnesses use the same MCP tools but **poll** with `bridge_receive_messages`.
 
-### Push vs Polling
+### Push vs polling
 
 | Delivery mode | How it works | Harness support |
 |---------------|--------------|-----------------|
-| **Push** (channel) | Incoming messages are pushed into the conversation as `<channel source="agent-bridge" ...>` tags. No polling needed. | Claude Code (v2.1.0+ channel plugin) |
+| **Push** (channel) | Incoming messages are pushed into the conversation as `<channel source="agent-bridge" ...>` tags. No polling needed. | Claude Code (channel plugin) |
 | **Polling** | Agent calls `bridge_receive_messages` periodically to check the inbox. | OpenClaw, Codex, Gemini CLI, any MCP client |
 
-Messages **persist** in `~/.agent-bridge/inbox/` as JSON files until consumed or expired (default TTL: 1 hour). This means messages are never lost if the agent is temporarily unavailable — they accumulate in the inbox and are delivered on the next check or push cycle. The inbox survives agent restarts and MCP server restarts.
+### MCP tools
 
-### What's new in v2
+| Tool | Description |
+|------|-------------|
+| `bridge_list_machines` | List paired machines and their connection details |
+| `bridge_status` | Check if a machine is reachable via SSH (single or all) |
+| `bridge_send_message` | Send a message to a running agent on another machine |
+| `bridge_receive_messages` | Check for and consume incoming messages (not needed in push mode) |
+| `bridge_run_command` | Run a shell command on a remote machine via SSH |
+| `bridge_clear_inbox` | Clear all messages from the local inbox |
+| `bridge_inbox_stats` | Get inbox statistics: pending count, oldest message age, watcher health, etc. |
 
-| Feature | v1 (CLI) | v2 (MCP Server) |
-|---------|----------|------------------|
-| Run remote commands | `agent-bridge run` | `bridge_run_command` tool |
-| Send messages to another running agent | -- | `bridge_send_message` tool |
-| Receive messages from another running agent | -- | `bridge_receive_messages` tool / channel push |
-| Check machine status | `agent-bridge status` | `bridge_status` tool |
-| Works from inside Claude Code | Via bash | Native MCP tools |
+> **Note:** The MCP server does NOT spawn new agent processes. It enables _existing running_ agent sessions to communicate. Machine A's agent sends a message to Machine B's inbox, and Machine B's already-running agent picks it up via channel push (Claude Code) or `bridge_receive_messages` (all other harnesses).
 
-### MCP Server Build
+### Building the MCP server
 
 All harness setups below require building the MCP server first:
 
 ```bash
-cd ~/Projects/agent-bridge/mcp-server  # or wherever you cloned the repo
+cd /path/to/agent-bridge/mcp-server
 npm install
 npm run build
 ```
 
-This produces `mcp-server/build/index.js` — the entry point every harness registration points to.
+This produces `mcp-server/build/index.js` -- the entry point every harness registration points to.
 
 ---
 
-### Per-Harness Setup
+## Per-harness setup
 
-#### Claude Code (Channel Plugin — Full Push Support)
+### Claude Code (channel plugin -- full push support)
 
-Claude Code connects to agent-bridge as both an MCP server (tools) and a channel plugin (push notifications). Messages from other machines appear in the conversation automatically — no polling needed.
+Claude Code connects to agent-bridge as both an MCP server (tools) and a channel plugin (push notifications). Messages from other machines appear in the conversation automatically -- no polling needed.
 
 **Setup:** Add to `~/.claude/.mcp.json` (or project `.mcp.json`):
 
@@ -412,12 +379,18 @@ claude --channels server:agent-bridge
 ```
 
 **How it works:**
-- The MCP server declares the `claude/channel` experimental capability
-- When a message arrives in the inbox, the file watcher pushes it via `notifications/claude/channel`
-- It appears as: `<channel source="agent-bridge" from="MachineName" message_id="..." ts="...">content</channel>`
-- Respond using `bridge_send_message` — no need to call `bridge_receive_messages`
+1. The MCP server declares the `claude/channel` experimental capability
+2. When a message arrives in the inbox, the file watcher pushes it via `notifications/claude/channel`
+3. It appears as: `<channel source="agent-bridge" from="MachineName" message_id="..." ts="...">content</channel>`
+4. Respond using `bridge_send_message` -- no need to call `bridge_receive_messages`
 
-**For remote-only access** (connecting to a remote machine's server via SSH):
+**Install the skill:**
+```bash
+mkdir -p ~/.claude/skills/agent-bridge
+cp skills/bridge/skill.md ~/.claude/skills/agent-bridge/skill.md
+```
+
+**For remote-only access** (connecting to a remote machine's MCP server via SSH):
 
 ```json
 {
@@ -434,7 +407,7 @@ claude --channels server:agent-bridge
 }
 ```
 
-#### OpenClaw (MCP Server — Polling)
+### OpenClaw (MCP server -- polling)
 
 OpenClaw connects to agent-bridge as a standard MCP server. All bridge tools are available, but messages must be polled because OpenClaw does not support Claude's channel protocol.
 
@@ -443,147 +416,170 @@ OpenClaw connects to agent-bridge as a standard MCP server. All bridge tools are
 openclaw mcp set agent-bridge '{"command":"node","args":["/absolute/path/to/agent-bridge/mcp-server/build/index.js"]}'
 ```
 
-**Usage:**
-- All MCP tools work: `bridge_send_message`, `bridge_run_command`, `bridge_status`, `bridge_list_machines`, etc.
-- To receive messages, the agent must call `bridge_receive_messages` — there is no push
-- The OpenClaw skill at `skills/openclaw/SKILL.md` teaches the agent how to use all bridge tools
-- Install the skill: `cp -r skills/openclaw ~/.openclaw/workspace/skills/agent-bridge`
+**Install the skill:**
+```bash
+cp -r skills/openclaw ~/.openclaw/workspace/skills/agent-bridge
+```
 
-#### Codex (OpenAI) (MCP Server — Polling)
+### Codex (OpenAI) (MCP server -- polling)
 
-Codex CLI connects to agent-bridge as a standard MCP server.
-
-**Setup:**
 ```bash
 codex mcp add agent-bridge -- node /absolute/path/to/agent-bridge/mcp-server/build/index.js
 ```
 
-**Usage:**
-- Same tools available as OpenClaw
-- Polling-based receive via `bridge_receive_messages`
-- Codex automatically reads `AGENTS.md` from the repo root for bridge CLI instructions
+Codex automatically reads `AGENTS.md` from the repo root for bridge CLI instructions.
 
-#### Gemini CLI (MCP Server — Polling)
+### Gemini CLI (MCP server -- polling)
 
-Gemini CLI connects to agent-bridge as a standard MCP server.
-
-**Setup:**
 ```bash
 gemini mcp add agent-bridge node /absolute/path/to/agent-bridge/mcp-server/build/index.js
 ```
 
-**Usage:**
-- Same tools available as OpenClaw and Codex
-- Polling-based receive via `bridge_receive_messages`
-- Gemini CLI automatically reads `GEMINI.md` from the repo root for bridge CLI instructions
+Gemini CLI automatically reads `GEMINI.md` from the repo root.
 
-#### General (Any MCP-Compatible Agent)
+### General (any MCP-compatible agent)
 
-The MCP server works with **any harness that supports MCP tools** (Aider, custom agents, etc.).
-
-**Setup:** Register the server using your harness's MCP configuration mechanism, pointing to:
+Register the server using your harness's MCP configuration mechanism, pointing to:
 ```
 node /absolute/path/to/agent-bridge/mcp-server/build/index.js
 ```
 
-**Push vs polling:**
-- For **push** notifications, the harness must support the `claude/channel` experimental capability (currently only Claude Code)
-- Without push, agents poll with `bridge_receive_messages` at natural breakpoints in their workflow
-- Reference `INSTRUCTIONS.md` in the repo root for a plain-English description of all commands
+For **push** notifications, the harness must support the `claude/channel` experimental capability (currently only Claude Code). Without push, agents poll with `bridge_receive_messages`. Reference `INSTRUCTIONS.md` for a plain-English description of all commands.
 
 ---
 
-### MCP Tools
+## How messaging works
 
-| Tool | Description |
-|------|-------------|
-| `bridge_list_machines` | List paired machines and their connection details |
-| `bridge_status` | Check if a machine is reachable via SSH |
-| `bridge_send_message` | Send a message to a running agent on another machine |
-| `bridge_receive_messages` | Check for and consume incoming messages (not needed in push/channel mode) |
-| `bridge_run_command` | Run a shell command on a remote machine |
-| `bridge_clear_inbox` | Clear all messages from the local inbox |
-| `bridge_inbox_stats` | Get inbox statistics: pending message count, oldest message age, total size, watcher health, processed ID count, and failed message count |
-
-> **Note:** The MCP server does NOT spawn new agent processes. It enables _existing running_ agent sessions to communicate. Machine A's Claude sends a message to Machine B's inbox, and Machine B's already-running Claude picks it up via channel push (Claude Code) or `bridge_receive_messages` (all other harnesses).
-
-### How messaging works
+### Send flow
 
 ```
-Machine A (Claude Code — push)            Machine B (Claude Code — push)
-┌─────────────────────────┐               ┌─────────────────────────┐
-│                         │               │                         │
-│ bridge_send_message     │    SSH        │  ~/.agent-bridge/inbox/ │
-│ ("MacBookPro", "hello") │──────────────►│  msg-uuid.json          │
-│                         │               │                         │
-│                         │               │ channel push ──► Claude  │
-│                         │               │ (automatic, no polling)  │
-│                         │               │                         │
-│ channel push ◄──────────│    SSH        │ bridge_send_message     │
-│ (automatic)             │◄──────────────│ ("Mac-Mini", "hi back") │
-│                         │               │                         │
-└─────────────────────────┘               └─────────────────────────┘
-
-Machine A (Codex/OpenClaw — polling)      Machine B (any harness)
-┌─────────────────────────┐               ┌─────────────────────────┐
-│                         │               │                         │
-│ bridge_send_message     │    SSH        │  ~/.agent-bridge/inbox/ │
-│ ("MacBookPro", "hello") │──────────────►│  msg-uuid.json          │
-│                         │               │                         │
-│ bridge_receive_messages │    SSH        │ bridge_send_message     │
-│ → polls & returns msgs  │◄──────────────│ ("Mac-Mini", "hi back") │
-│                         │               │                         │
-└─────────────────────────┘               └─────────────────────────┘
+1. Agent calls bridge_send_message("MacBookPro", "check the test results")
+2. MCP server creates a JSON message file with UUID, timestamp, TTL
+3. The message is delivered to the remote machine's ~/.agent-bridge/inbox/ via SSH
+4. A copy is saved locally in ~/.agent-bridge/outbox/ for tracking
 ```
 
-Messages are JSON files delivered to `~/.agent-bridge/inbox/` via SSH. A file watcher (fswatch on macOS, inotifywait on Linux, polling fallback) detects new files. In **channel mode** (Claude Code), the watcher pushes messages directly into the conversation via `notifications/claude/channel`. In **polling mode** (all other harnesses), the watcher updates an internal cache and the agent calls `bridge_receive_messages` to consume messages.
+### Receive flow (push mode -- Claude Code)
 
-**Offline message recovery:** Messages persist in the inbox even when the agent is offline. On startup, undelivered messages are automatically replayed — the server scans the inbox for any messages that haven't been pushed as channel notifications yet and emits them in chronological order. A `.delivered` tracker file (`~/.agent-bridge/inbox/.delivered`) prevents duplicate notifications across restarts.
+```
+1. File watcher (fswatch/inotifywait/polling) detects new .json file in inbox/
+2. Watcher parses the message and checks the .delivered tracker for dedup
+3. Channel notification is pushed via notifications/claude/channel
+4. Message appears in Claude's conversation as <channel source="agent-bridge" ...>content</channel>
+5. Message ID is recorded in .delivered to prevent re-delivery on restart
+```
 
-Messages persist in the inbox until consumed or expired. If an agent is offline or restarting, messages accumulate and are delivered when the agent reconnects.
+### Receive flow (polling mode -- Codex, OpenClaw, Gemini, etc.)
 
-Each message includes:
-- **`from`**: sender machine name
-- **`to`**: target machine name
-- **`timestamp`**: ISO 8601 creation time
-- **`content`**: the message body
-- **`replyTo`**: optional message ID for threading/correlation
-- **`ttl`**: time-to-live in seconds (0 = no expiry, default: 3600)
+```
+1. File watcher detects new .json file in inbox/ and updates internal cache
+2. Agent calls bridge_receive_messages at natural breakpoints
+3. Messages are returned sorted chronologically, deduplicated, TTL-checked
+4. Consumed messages are deleted from inbox/ and their IDs tracked in .processed
+```
 
-### Message format
+### Offline recovery
+
+Messages persist in `~/.agent-bridge/inbox/` as JSON files until consumed or expired (default TTL: 1 hour). This means messages are never lost if the agent is temporarily unavailable. On MCP server startup:
+
+1. The inbox is scanned for any messages not yet marked in `.delivered`
+2. Undelivered messages are replayed as channel notifications in chronological order
+3. This happens after `server.connect()` so notifications can actually be delivered
+
+The `.delivered` tracker file (`~/.agent-bridge/inbox/.delivered`) prevents duplicate notifications across MCP server restarts.
+
+---
+
+## Message format
+
+Messages are JSON files stored in `~/.agent-bridge/inbox/`:
 
 ```json
 {
-  "id": "msg-uuid",
+  "id": "msg-550e8400-e29b-41d4-a716-446655440000",
   "from": "Mac-Mini",
   "to": "MacBookPro",
   "type": "message",
-  "content": "List the files in ~/Projects",
-  "timestamp": "2026-04-13T01:15:00Z",
+  "content": "The tests are passing now. I fixed the import path in utils.ts.",
+  "timestamp": "2026-04-13T01:15:00.000Z",
   "replyTo": null,
   "ttl": 3600
 }
 ```
 
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique message ID (`msg-` prefix + UUID) |
+| `from` | string | Sender machine name |
+| `to` | string | Target machine name |
+| `type` | `"message"` / `"command"` / `"response"` | Message type |
+| `content` | string | The message body |
+| `timestamp` | string | ISO 8601 creation time |
+| `replyTo` | string or null | Message ID this is a reply to (for threading) |
+| `ttl` | number | Time-to-live in seconds. `0` = no expiry. Default: `3600` (1 hour) |
+
 ---
 
-## Architecture
+## How messaging looks (diagrams)
+
+### Push mode (Claude Code to Claude Code)
+
+```
+Machine A (Claude Code)                   Machine B (Claude Code)
+┌─────────────────────────┐               ┌─────────────────────────┐
+│                         │               │                         │
+│ bridge_send_message     │    SSH        │  ~/.agent-bridge/inbox/ │
+│ ("MacBookPro", "hello") │──────────────>│  msg-uuid.json          │
+│                         │               │                         │
+│                         │               │ file watcher ──> push   │
+│                         │               │ <channel ...>hello      │
+│                         │               │                         │
+│ <channel ...>hi back    │    SSH        │ bridge_send_message     │
+│ (pushed automatically)  │<──────────────│ ("Mac-Mini", "hi back") │
+│                         │               │                         │
+└─────────────────────────┘               └─────────────────────────┘
+```
+
+### Polling mode (Codex/OpenClaw/Gemini to any harness)
+
+```
+Machine A (Codex)                         Machine B (any harness)
+┌─────────────────────────┐               ┌─────────────────────────┐
+│                         │               │                         │
+│ bridge_send_message     │    SSH        │  ~/.agent-bridge/inbox/ │
+│ ("MacBookPro", "hello") │──────────────>│  msg-uuid.json          │
+│                         │               │                         │
+│ bridge_receive_messages │    SSH        │ bridge_send_message     │
+│ -> polls & returns msgs │<──────────────│ ("Mac-Mini", "hi back") │
+│                         │               │                         │
+└─────────────────────────┘               └─────────────────────────┘
+```
+
+---
+
+## Directory structure
 
 ```
 ~/.agent-bridge/
 ├── config               # Paired machines (INI-style key-value)
+├── machine-name         # Optional: override local machine name
 ├── .pending-token       # One-time pairing token (deleted after use)
-├── inbox/               # Incoming messages from other machines (v2)
-├── outbox/              # Copies of sent messages (v2)
-├── logs/                # MCP server logs (v2)
-└── keys/                # SSH key pairs
+├── inbox/               # Incoming messages from other machines
+│   ├── msg-uuid.json    # Pending message files
+│   ├── .processed       # Consumed message IDs (dedup tracker)
+│   ├── .delivered        # Channel-delivered message IDs (push dedup)
+│   └── .failed/         # Quarantined malformed messages
+├── outbox/              # Copies of sent messages (local tracking)
+├── logs/                # MCP server logs (auto-rotated at 10 MB)
+│   └── mcp-server.log
+└── keys/                # SSH key pairs (ED25519)
     ├── agent-bridge_MacBook-Pro
     └── agent-bridge_MacBook-Pro.pub
 ```
 
 ### Config format
 
-Simple INI-style flat file — no JSON, no YAML:
+Simple INI-style flat file -- no JSON, no YAML:
 
 ```ini
 [MacBook-Pro]
@@ -594,12 +590,14 @@ key=~/.agent-bridge/keys/agent-bridge_MacBook-Pro
 paired_at=2026-04-09T12:00:00Z
 ```
 
-### How pairing works
+---
+
+## How pairing works
 
 1. Each machine runs `setup` which generates an ED25519 key pair
 2. The public key is added to `~/.ssh/authorized_keys` on that machine
 3. A one-time pairing token is generated and displayed on screen
-4. The pairing screen displays all connection info (local IP, public IP, token, **public key**)
+4. The pairing screen displays all connection info (local IP, public IP, token, public key)
 5. The other machine reads the pairing info (from photo or manual entry)
 6. `pair` adds the other machine's public key to the LOCAL `~/.ssh/authorized_keys`
 7. This authorizes the other machine to SSH into this one -- no password needed
@@ -610,35 +608,61 @@ paired_at=2026-04-09T12:00:00Z
 
 ```
 Machine A                               Machine B
-─────────                              ─────────
+---------                              ---------
 agent-bridge run MacBook "cmd"
-  └─► SSH connect (key auth)  ────────► sshd
-      └─► exec "cmd"         ────────► shell
-      └─► capture stdout/err  ◄──────── output
-      └─► display result
+  |-> SSH connect (key auth)  --------> sshd
+      |-> exec "cmd"         --------> shell
+      |-> capture stdout/err  <-------- output
+      |-> display result
 ```
 
-For Claude-to-Claude communication:
+For agent-to-agent communication:
 ```
 Claude on Machine A                     Machine B
-───────────────────                    ─────────
+-------------------                    ---------
 "fix the tests on MacBook"
-  └─► agent-bridge run MacBook \
+  |-> agent-bridge run MacBook \
         "fix failing tests" --claude
-      └─► SSH ──────────────────────► claude --print "fix failing tests"
-      └─► capture output     ◄──────── Claude's response
-      └─► display to user
+      |-> SSH ----------------------> claude --print "fix failing tests"
+      |-> capture output     <-------- Claude's response
+      |-> display to user
 ```
+
+---
+
+## Inbox management
+
+The MCP server includes production-grade inbox management:
+
+| Feature | Description |
+|---------|-------------|
+| **TTL expiry** | Messages expire after their TTL (default 1 hour). TTL `0` = no expiry. |
+| **Max-age pruning** | Messages older than 24 hours are pruned regardless of TTL (configurable). |
+| **Max inbox size** | Inbox is capped at 100 messages; oldest are pruned first (configurable). |
+| **Deduplication** | Processed message IDs are tracked in `.processed`; duplicates are skipped. |
+| **Malformed quarantine** | Invalid JSON files are moved to `.failed/` instead of blocking the inbox. |
+| **Periodic pruning** | A background timer runs every 5 minutes to clean up expired messages. |
+| **File rotation** | The `.processed` and `.delivered` tracker files are rotated when they exceed 512 KB. |
+
+### Environment variable overrides
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BRIDGE_DEFAULT_TTL` | `3600` | Default message TTL in seconds |
+| `BRIDGE_PRUNE_MAX_AGE_MS` | `86400000` | Max message age in milliseconds (24h) |
+| `BRIDGE_PRUNE_MAX_INBOX` | `100` | Max inbox message count |
+| `BRIDGE_PRUNE_INTERVAL_MS` | `300000` | Prune interval in milliseconds (5 min) |
 
 ---
 
 ## Security
 
-- **SSH key-based auth only** — zero passwords in the entire flow
-- **ED25519 keys** — modern, fast, secure
-- **Restrictive file permissions** — config dir is mode 700, keys are mode 600
-- **No cloud** — all communication is direct SSH, no third-party servers
-- **Separate config** — stored in `~/.agent-bridge/`, not in `.claude/` to avoid accidental git commits
+- **SSH key-based auth only** -- zero passwords in the entire flow
+- **ED25519 keys** -- modern, fast, secure
+- **Restrictive file permissions** -- config dir is mode 700, keys are mode 600
+- **No cloud** -- all communication is direct SSH, no third-party servers
+- **Separate config** -- stored in `~/.agent-bridge/`, not in `.claude/` to avoid accidental git commits
+- **Base64 transport** -- message content is base64-encoded for SSH delivery to prevent shell injection
 
 ### Recommendations
 
@@ -662,7 +686,43 @@ agent-bridge pair \
   --key ~/.agent-bridge/keys/agent-bridge_MacBook-Pro
 ```
 
-This lets your Claudes talk to each other from anywhere.
+This lets your agents talk to each other from anywhere.
+
+---
+
+## Agent skills
+
+agent-bridge ships with skill/instruction files that teach each AI agent how to use the bridge:
+
+### Claude Code
+
+```bash
+# If you cloned the repo:
+mkdir -p ~/.claude/skills/agent-bridge
+cp skills/bridge/skill.md ~/.claude/skills/agent-bridge/skill.md
+
+# Or download directly:
+curl -fsSL https://raw.githubusercontent.com/EthanSK/agent-bridge/main/skills/bridge/skill.md \
+  -o ~/.claude/skills/agent-bridge/skill.md --create-dirs
+```
+
+### Codex CLI (OpenAI)
+
+Codex automatically reads `AGENTS.md` from the repo root. No extra setup needed if you clone the repo.
+
+### Gemini CLI
+
+Gemini CLI automatically reads `GEMINI.md` from the repo root. No extra setup needed if you clone the repo.
+
+### OpenClaw
+
+```bash
+cp -r skills/openclaw ~/.openclaw/workspace/skills/agent-bridge
+```
+
+### Any other agent
+
+Reference `INSTRUCTIONS.md` in your agent's config, or paste its contents into your agent's system prompt.
 
 ---
 
@@ -678,7 +738,7 @@ agent-bridge run MacBook-Pro "ls -la ~/Projects"
 agent-bridge run MacBook-Pro "cd ~/Projects/myapp && git pull && npm install && npm run build"
 ```
 
-### Ask the remote Claude to do work
+### Ask the remote agent to do work
 ```bash
 agent-bridge run MacBook-Pro "review the code in ~/Projects/myapp and suggest improvements" --claude
 ```
@@ -695,6 +755,49 @@ agent-bridge run MacBook-Pro "cd ~/Projects/myapp && nohup npm run dev > /tmp/de
 
 ---
 
+## Troubleshooting
+
+### SSH not enabling on macOS
+
+Go to System Settings > General > Sharing > Remote Login and enable it manually. Make sure **"Allow access for"** is set to **All users**.
+
+### Firewall blocking connections
+
+```bash
+# Check if firewall is on
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate
+
+# Allow SSH through
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /usr/sbin/sshd
+```
+
+### Can't find IP address
+
+```bash
+# Get local IP (macOS)
+ipconfig getifaddr en0    # Wi-Fi
+ipconfig getifaddr en1    # Ethernet
+
+# Or use Tailscale
+tailscale ip -4
+```
+
+### Messages not arriving
+
+1. Check that the MCP server is running: `bridge_inbox_stats` tool or check `~/.agent-bridge/logs/mcp-server.log`
+2. Verify SSH connectivity: `agent-bridge status <machine>`
+3. Check inbox contents: `ls ~/.agent-bridge/inbox/`
+4. Check for quarantined messages: `ls ~/.agent-bridge/inbox/.failed/`
+5. On macOS, install `fswatch` for real-time detection: `brew install fswatch` (the server falls back to 2-second polling without it)
+
+### MCP server won't start
+
+1. Ensure Node.js >= 18 is installed: `node --version`
+2. Build the server: `cd mcp-server && npm install && npm run build`
+3. Check the log file: `~/.agent-bridge/logs/mcp-server.log`
+
+---
+
 ## Contributing
 
 Contributions welcome! Please open an issue first to discuss what you'd like to change.
@@ -702,8 +805,43 @@ Contributions welcome! Please open an issue first to discuss what you'd like to 
 ```bash
 git clone https://github.com/EthanSK/agent-bridge.git
 cd agent-bridge
+
+# CLI (zero dependencies)
 chmod +x agent-bridge
 ./agent-bridge help
+
+# MCP server
+cd mcp-server
+npm install
+npm run build
+npm run watch  # for development
+```
+
+### Project structure
+
+```
+agent-bridge/
+├── agent-bridge         # CLI script (bash, zero dependencies)
+├── install.sh           # One-line installer
+├── mcp-server/          # MCP server / channel plugin (TypeScript)
+│   ├── src/
+│   │   ├── index.ts     # Server entry point, channel notification wiring
+│   │   ├── tools.ts     # MCP tool definitions (7 tools)
+│   │   ├── config.ts    # Config loader (INI parser, directory paths)
+│   │   ├── inbox.ts     # Message inbox/outbox management, pruning, dedup
+│   │   ├── watcher.ts   # File watcher (fswatch/inotifywait/polling)
+│   │   ├── ssh.ts       # SSH execution wrapper
+│   │   └── logger.ts    # Logger (file + stderr, auto-rotation)
+│   ├── build/           # Compiled JS output
+│   └── package.json
+├── skills/
+│   ├── bridge/          # Claude Code skill
+│   └── openclaw/        # OpenClaw skill
+├── AGENTS.md            # Codex CLI instructions
+├── GEMINI.md            # Gemini CLI instructions
+├── INSTRUCTIONS.md      # Generic agent instructions
+├── README.md            # This file
+└── site/                # GitHub Pages website
 ```
 
 ---

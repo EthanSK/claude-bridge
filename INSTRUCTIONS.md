@@ -1,6 +1,6 @@
 # Agent Bridge -- Instructions for AI Agents
 
-agent-bridge lets AI coding agents run commands on other machines over SSH. It works with any CLI agent (Claude Code, Codex, Gemini CLI, Aider, etc.).
+agent-bridge lets AI coding agents run commands on other machines over SSH and send messages between running agent sessions. It works with any CLI agent (Claude Code, Codex, Gemini CLI, OpenClaw, Aider, etc.).
 
 ## Quick reference
 
@@ -52,26 +52,45 @@ agent-bridge run MacBook "fix the tests" --agent "aider --message"  # Uses Aider
 - Config directory: `~/.agent-bridge/`
 - Config file: `~/.agent-bridge/config` (INI-style, one `[section]` per machine)
 - Keys: `~/.agent-bridge/keys/` (ED25519, mode 600)
+- Inbox: `~/.agent-bridge/inbox/` (incoming messages, JSON files)
+- Outbox: `~/.agent-bridge/outbox/` (copies of sent messages)
+- Logs: `~/.agent-bridge/logs/` (MCP server logs, auto-rotated)
 - No cloud, no dependencies -- pure bash over SSH
 
-## v2: Channel Plugin (push-based agent-to-agent messaging)
+## MCP Server (agent-to-agent messaging)
 
-The MCP server is also a **Claude Code channel plugin**. When configured as a channel, incoming messages from other machines are **pushed** into the running Claude session automatically -- no polling needed.
+The MCP server enables EXISTING running agent sessions to communicate in real time. It does NOT spawn new agent processes.
 
-### How it works
+### MCP tools
 
-Messages appear in Claude's context as:
+| Tool | Description |
+|------|-------------|
+| `bridge_list_machines` | List paired machines and connection details |
+| `bridge_status` | Check if a machine is reachable via SSH |
+| `bridge_send_message` | Send a message to another machine's running agent |
+| `bridge_receive_messages` | Check for and consume incoming messages |
+| `bridge_run_command` | Run a shell command on a remote machine |
+| `bridge_clear_inbox` | Clear the local inbox |
+| `bridge_inbox_stats` | Get inbox statistics and watcher health |
+
+### Channel plugin (Claude Code only)
+
+When used with Claude Code, the MCP server acts as a **channel plugin**. Incoming messages are **pushed** into the running session automatically as:
 ```
-<channel source="agent-bridge" from="MachineName" message_id="msg-xxx" ts="2025-01-01T00:00:00Z">
+<channel source="agent-bridge" from="MachineName" message_id="msg-xxx" ts="2026-01-01T00:00:00Z">
 Message content here
 </channel>
 ```
 
-The agent responds using the `bridge_send_message` tool.
+The agent responds using the `bridge_send_message` tool. No polling needed.
+
+### Polling mode (all other harnesses)
+
+For Codex, Gemini CLI, OpenClaw, Aider, etc., agents call `bridge_receive_messages` to check for incoming messages. The watcher updates an internal cache so polling is fast.
 
 ### Channel setup
 
-Add to Claude Code's MCP config (in `~/.claude/settings.json` or project settings):
+Add to your harness's MCP config:
 ```json
 {
   "mcpServers": {
@@ -85,16 +104,34 @@ Add to Claude Code's MCP config (in `~/.claude/settings.json` or project setting
 
 Claude Code automatically detects the `claude/channel` capability and starts receiving pushed messages.
 
-### Message flow (channel mode)
+### Message flow
 
-1. Machine A's Claude calls `bridge_send_message("MacBook", "check the test results")`
+1. Machine A's agent calls `bridge_send_message("MacBook", "check the test results")`
 2. The message is written to Machine B's `~/.agent-bridge/inbox/` via SSH
 3. Machine B's file watcher detects the new file
-4. Machine B's channel plugin pushes the message into the running Claude session
-5. Machine B's Claude sees `<channel source="agent-bridge" ...>` and responds
+4. **Push mode:** Channel plugin pushes the message into the running Claude session
+5. **Polling mode:** Agent calls `bridge_receive_messages()` to consume it
+6. Machine B's agent responds via `bridge_send_message` back to Machine A
 
-No polling is needed. The `bridge_receive_messages` tool still works for manual checks but is no longer the primary way to receive messages.
+### Offline recovery
+
+Messages persist in the inbox until consumed or expired (default TTL: 1 hour). On MCP server startup, undelivered messages are replayed as channel notifications in chronological order. A `.delivered` tracker prevents duplicate notifications across restarts.
 
 ### Authentication
 
 All messages are delivered via SSH with key-based authentication. The `authenticated: ssh-key` metadata in channel notifications confirms the sender was verified by the SSH transport layer.
+
+### Message format
+
+```json
+{
+  "id": "msg-uuid",
+  "from": "Mac-Mini",
+  "to": "MacBookPro",
+  "type": "message",
+  "content": "The tests are passing now.",
+  "timestamp": "2026-04-13T01:15:00Z",
+  "replyTo": null,
+  "ttl": 3600
+}
+```

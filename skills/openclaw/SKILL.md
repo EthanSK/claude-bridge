@@ -1,6 +1,6 @@
 ---
 name: agent-bridge
-description: Bridge AI coding agents across machines over SSH. Run commands and agent prompts on paired remote machines. Use when connecting to other machines, running remote commands, or pairing new peers.
+description: Bridge AI coding agents across machines over SSH. Run commands and agent prompts on paired remote machines, and send/receive messages between running agent sessions. Use when connecting to other machines, running remote commands, sending messages, or pairing new peers.
 metadata:
   openclaw:
     emoji: "\U0001F309"
@@ -22,8 +22,9 @@ Activate when the user says things like:
 - "pair with a new machine" / "add a remote machine"
 - "what machines are connected?"
 - "set up remote access" / "set up agent-bridge"
+- "send a message to the other agent"
 
-## Commands
+## CLI commands
 
 ```bash
 agent-bridge setup                              # Enable SSH, generate keys, show pairing screen
@@ -37,6 +38,22 @@ agent-bridge connect <machine>                  # Open interactive SSH session
 agent-bridge pair                               # Pair with another machine
 agent-bridge unpair <machine>                   # Remove a pairing
 ```
+
+## MCP tools (if MCP server is configured)
+
+If the agent-bridge MCP server is registered, these tools are available directly:
+
+| Tool | Description |
+|------|-------------|
+| `bridge_list_machines` | List paired machines and connection details |
+| `bridge_status` | Check if a machine is reachable via SSH |
+| `bridge_send_message` | Send a message to another machine's running agent |
+| `bridge_receive_messages` | Check for and consume incoming messages (call periodically) |
+| `bridge_run_command` | Run a shell command on a remote machine |
+| `bridge_clear_inbox` | Clear the local inbox |
+| `bridge_inbox_stats` | Get inbox statistics and watcher health |
+
+**Important:** OpenClaw uses polling mode -- call `bridge_receive_messages` at natural breakpoints to check for incoming messages from other agents. Messages persist in the inbox until consumed (default TTL: 1 hour).
 
 ## Pairing from a photo
 

@@ -136,7 +136,7 @@ export function registerTools(server: McpServer): void {
     {
       title: 'Send Message',
       description:
-        'Send a message to a running agent on another machine. The message is delivered to their inbox and will be available when they call bridge_receive_messages.',
+        'Send a message to a running agent on another machine. The message is delivered to their inbox via SSH and will be pushed into their conversation automatically (Claude Code channel mode) or available when they call bridge_receive_messages (polling mode).',
       inputSchema: {
         machine: z.string().describe('Name of the target machine'),
         message: z.string().describe('The message content to send'),

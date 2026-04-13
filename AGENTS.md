@@ -25,6 +25,7 @@ Options:
 ```bash
 agent-bridge setup --name "MacBook-Pro"   # Custom machine name
 agent-bridge setup --port 2222             # Custom SSH port
+agent-bridge setup --internet              # Start a reverse SSH tunnel
 ```
 
 ### What setup does
@@ -33,6 +34,7 @@ agent-bridge setup --port 2222             # Custom SSH port
 2. **Generates an ED25519 key pair** at `~/.agent-bridge/keys/`
 3. **Adds the public key** to `~/.ssh/authorized_keys`
 4. **Displays a pairing screen** with all connection details
+5. **Auto-adds agent-bridge instructions** to detected AI harness files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.openclaw/AGENTS.md`, `~/.gemini/GEMINI.md`) so every new session knows about the bridge. This also runs during `pair`.
 
 ### After setup
 
@@ -132,38 +134,56 @@ agent-bridge run MacBook-Pro "review the code in ~/Projects/myapp/src/ and sugge
 agent-bridge run MacBook-Pro "ps aux | head -20 && df -h && free -h 2>/dev/null"
 ```
 
-## v2: Channel Plugin (push-based agent-to-agent communication)
+## v2: MCP Server (running agent-to-agent communication)
 
-agent-bridge v2 is a **channel plugin** for Claude Code that enables real-time communication between RUNNING agent sessions. It does NOT spawn new agent processes — it connects existing, already-running sessions on different machines.
+If the agent-bridge MCP server is configured, you have direct access to these tools without needing the CLI. The MCP server enables EXISTING running agent sessions to communicate -- it does NOT spawn new agent processes.
 
-Messages from other machines are **pushed** into your conversation automatically as:
+### MCP tools
+
+| Tool | Description |
+|------|-------------|
+| `bridge_list_machines` | List paired machines and their connection details |
+| `bridge_status` | Check if a machine is reachable via SSH |
+| `bridge_send_message` | Send a message to another machine's running agent |
+| `bridge_receive_messages` | Check for incoming messages (polling mode) |
+| `bridge_run_command` | Run a shell command on a remote machine |
+| `bridge_clear_inbox` | Clear the local inbox |
+| `bridge_inbox_stats` | Get inbox statistics and watcher health |
+
+### Channel plugin (Claude Code only)
+
+When used with Claude Code, the MCP server acts as a **channel plugin**. Incoming messages are pushed directly into the conversation as:
 ```
 <channel source="agent-bridge" from="MachineName" message_id="..." ts="...">content</channel>
 ```
-No polling needed — respond using `bridge_send_message`.
+No polling needed -- respond using `bridge_send_message`.
 
-### Available tools
+### Messaging workflow (polling mode)
 
-- `bridge_list_machines` — list paired machines
-- `bridge_status` — check if a machine is reachable
-- `bridge_send_message` — send a message to another machine's running agent
-- `bridge_receive_messages` — manually check for messages (usually not needed, channel pushes them)
-- `bridge_run_command` — run a shell command on a remote machine
-- `bridge_clear_inbox` — clear the local inbox
-- `bridge_inbox_stats` — get inbox statistics and watcher health
+For harnesses without channel support (Codex, Gemini, OpenClaw, etc.):
+1. Machine A's agent calls `bridge_send_message("MacBookPro", "check the test results")`
+2. The message is written to Machine B's `~/.agent-bridge/inbox/` via SSH
+3. Machine B's agent calls `bridge_receive_messages()` to read it
+4. Machine B responds via `bridge_send_message` back to Machine A
 
-Setup: `cd mcp-server && npm install && npm run build`, then add to MCP config.
+### MCP server setup
 
-### How messaging works (channel mode)
+```bash
+cd ~/Projects/agent-bridge/mcp-server
+npm install && npm run build
+```
 
-1. Machine A's Claude calls `bridge_send_message` to write a message to Machine B's inbox via SSH
-2. Machine B's file watcher detects the new file
-3. Machine B's channel plugin pushes the message into the running Claude session
-4. Machine B's Claude sees `<channel source="agent-bridge" ...>` and responds via `bridge_send_message`
-
-All messages are authenticated via SSH keys. The channel notification includes `authenticated: ssh-key` metadata confirming the sender was verified by the SSH transport.
-
-Messages include sender name, timestamp, content, optional reply-to ID for threading, and TTL.
+Register in your harness's MCP configuration:
+```json
+{
+  "mcpServers": {
+    "agent-bridge": {
+      "command": "node",
+      "args": ["/path/to/agent-bridge/mcp-server/build/index.js"]
+    }
+  }
+}
+```
 
 ## Troubleshooting
 

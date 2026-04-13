@@ -25,6 +25,7 @@ Options:
 ```bash
 agent-bridge setup --name "MacBook-Pro"   # Custom machine name
 agent-bridge setup --port 2222             # Custom SSH port
+agent-bridge setup --internet              # Start a reverse SSH tunnel
 ```
 
 ### What setup does
@@ -91,7 +92,7 @@ agent-bridge connect MacBook-Pro
 ### Pair a new machine
 ```bash
 # With flags:
-agent-bridge pair --name "MacBook-Pro" --host 192.168.1.50 --port 22 --user ethan --key ~/.agent-bridge/keys/agent-bridge_MacBook-Pro --token bridge-a7f3k9
+agent-bridge pair --name "MacBook-Pro" --host 192.168.1.50 --port 22 --user ethan --token bridge-a7f3k9 --pubkey "ssh-ed25519 AAAA..."
 
 # Interactive:
 agent-bridge pair
@@ -113,9 +114,10 @@ When the user sends a photo of another machine's pairing screen:
    - Local IP (or Public IP if connecting over the internet)
    - Port
    - Token
+   - Public Key
 3. Run the pair command:
 ```bash
-agent-bridge pair --name "<name>" --host "<ip>" --port <port> --user "<user>" --token "<token>"
+agent-bridge pair --name "<name>" --host "<ip>" --port <port> --user "<user>" --token "<token>" --pubkey "<pubkey>"
 ```
 4. Then test: `agent-bridge status <name>`
 
@@ -147,19 +149,31 @@ agent-bridge run MacBook-Pro "ps aux | head -20 && df -h && free -h 2>/dev/null"
 agent-bridge run MacBook-Pro "cd ~/Projects/myapp && nohup npm run dev > /tmp/dev.log 2>&1 &"
 ```
 
-## v2: MCP Server (running agent-to-agent communication)
+## v2: MCP Server & Channel Plugin (running agent-to-agent communication)
 
-If the agent-bridge MCP server is configured, you have direct access to these tools without needing the CLI. The MCP server enables EXISTING running agent sessions to communicate — it does NOT spawn new agent processes.
+If the agent-bridge MCP server is configured, you have direct access to these tools without needing the CLI. The MCP server enables EXISTING running agent sessions to communicate -- it does NOT spawn new agent processes.
+
+### MCP tools
 
 | Tool | Description |
 |------|-------------|
-| `bridge_list_machines` | List paired machines |
-| `bridge_status` | Check if a machine is reachable |
+| `bridge_list_machines` | List paired machines and their connection details |
+| `bridge_status` | Check if a machine is reachable via SSH |
 | `bridge_send_message` | Send a message to another machine's running agent |
-| `bridge_receive_messages` | Check for incoming messages (polling-based) |
-| `bridge_run_command` | Run a shell command remotely |
+| `bridge_receive_messages` | Check for incoming messages (not needed in channel mode) |
+| `bridge_run_command` | Run a shell command on a remote machine |
 | `bridge_clear_inbox` | Clear the local inbox |
 | `bridge_inbox_stats` | Get inbox statistics and watcher health |
+
+### Channel plugin (push mode -- Claude Code)
+
+When used with Claude Code, the MCP server acts as a **channel plugin**. Incoming messages from other machines are **pushed** directly into the conversation as:
+```
+<channel source="agent-bridge" from="MachineName" message_id="..." ts="...">content</channel>
+```
+No polling needed -- respond using `bridge_send_message`.
+
+On startup, any messages that arrived while Claude was offline are **automatically replayed** in chronological order, so nothing is lost.
 
 ### MCP server setup
 
@@ -168,7 +182,7 @@ cd ~/Projects/agent-bridge/mcp-server
 npm install && npm run build
 ```
 
-Add to Claude Code MCP config:
+Add to Claude Code MCP config (`~/.claude/.mcp.json`):
 ```json
 {
   "mcpServers": {
@@ -180,18 +194,17 @@ Add to Claude Code MCP config:
 }
 ```
 
-### Messaging workflow
+### Messaging workflow (channel mode)
 
-1. Machine A's Claude calls `bridge_send_message("MacBookPro", "check the test results")` to send
+1. Machine A's Claude calls `bridge_send_message("MacBookPro", "check the test results")`
 2. The message is written to Machine B's `~/.agent-bridge/inbox/` via SSH
-3. Machine B's file watcher detects the new file and updates the cache
-4. Machine B's running Claude calls `bridge_receive_messages()` to read it
-5. Machine B processes and responds via `bridge_send_message` back to Machine A
-6. Machine A calls `bridge_receive_messages()` to get the reply
+3. Machine B's file watcher detects the new file
+4. Machine B's channel plugin pushes the message into the running Claude session
+5. Machine B's Claude sees `<channel source="agent-bridge" ...>` and responds via `bridge_send_message`
 
-Messages are JSON files delivered via SSH. A file watcher (fswatch on macOS, inotifywait on Linux, polling fallback) detects new files and updates an internal cache. The running agent must call `bridge_receive_messages` to consume messages — there is no push notification to the agent.
+All messages are authenticated via SSH keys. The channel notification includes `authenticated: ssh-key` metadata confirming the sender was verified by the SSH transport.
 
-Each message includes: sender name, timestamp, content, optional `reply_to` ID for threading, and TTL (default 1 hour).
+Messages include sender name, timestamp, content, optional reply-to ID for threading, and TTL (default 1 hour, 0 = no expiry).
 
 ## Troubleshooting
 
@@ -220,6 +233,12 @@ tailscale ip -4
 ### Using Tailscale
 If both machines are on Tailscale, use the Tailscale hostname or IP instead of the local IP. This works across networks.
 
+### Messages not arriving
+1. Check watcher health: use `bridge_inbox_stats` tool
+2. Verify SSH connectivity: `agent-bridge status <machine>`
+3. Check logs: `~/.agent-bridge/logs/mcp-server.log`
+4. Install fswatch for real-time detection on macOS: `brew install fswatch`
+
 ## Security notes
 
 - All communication uses SSH with key-based authentication
@@ -227,3 +246,4 @@ If both machines are on Tailscale, use the Tailscale hostname or IP instead of t
 - Config is stored in `~/.agent-bridge/config` (mode 600)
 - No passwords are stored or transmitted
 - All files are stored in `~/.agent-bridge/` with restrictive permissions (mode 700)
+- Message content is base64-encoded for SSH transport to prevent shell injection

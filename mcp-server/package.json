@@ -1,6 +1,6 @@
 {
   "name": "agent-bridge-mcp-server",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "MCP server and channel plugin for real-time bidirectional communication between AI agent sessions across machines via SSH",
   "type": "module",
   "main": "build/index.js",
@@ -11,13 +11,29 @@
   },
   "keywords": [
     "mcp",
+    "mcp-server",
     "agent-bridge",
     "ssh",
     "remote",
-    "claude-code"
+    "claude-code",
+    "codex",
+    "openclaw",
+    "gemini-cli",
+    "cross-machine",
+    "agent-to-agent",
+    "channel-plugin"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EthanSK/agent-bridge.git",
+    "directory": "mcp-server"
+  },
+  "homepage": "https://ethansk.github.io/agent-bridge/",
   "author": "EthanSK",
   "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
     "zod": "^3.24.4"
