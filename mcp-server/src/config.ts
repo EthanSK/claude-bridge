@@ -16,6 +16,7 @@ export const OUTBOX_DIR = join(BRIDGE_DIR, 'outbox');
 export const LOGS_DIR = join(BRIDGE_DIR, 'logs');
 export const FAILED_DIR = join(INBOX_DIR, '.failed');
 export const PROCESSED_FILE = join(INBOX_DIR, '.processed');
+export const DELIVERED_FILE = join(INBOX_DIR, '.delivered');
 
 /** Pruning / TTL settings (overridable via environment variables) */
 export const PRUNE_MAX_AGE_MS = parseInt(

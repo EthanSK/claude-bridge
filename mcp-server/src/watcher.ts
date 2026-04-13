@@ -18,7 +18,7 @@ import { readdirSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { INBOX_DIR } from './config.js';
 import { logInfo, logError, logDebug, logWarn } from './logger.js';
-import { invalidateCache, notifyNewFiles, setWatcherStatus } from './inbox.js';
+import { invalidateCache, notifyNewFiles, setWatcherStatus, isDelivered, markDelivered } from './inbox.js';
 import type { BridgeMessage } from './inbox.js';
 
 type MessageCallback = (files: string[]) => void;
@@ -49,6 +49,7 @@ let savedChannelCallback: ChannelNotifyCallback | null = null;
 
 /**
  * Try to parse a message file and emit a channel notification.
+ * Marks the message as delivered to avoid re-emitting on next startup.
  * Errors are logged but never thrown — the watcher must keep running.
  */
 function emitChannelNotification(fileName: string): void {
@@ -63,7 +64,13 @@ function emitChannelNotification(fileName: string): void {
       logWarn(`Channel: skipping malformed message file ${fileName}`);
       return;
     }
+    // Skip if already delivered in a previous session
+    if (isDelivered(msg.id)) {
+      logDebug(`Channel: skipping already-delivered message ${msg.id}`);
+      return;
+    }
     savedChannelCallback(msg);
+    markDelivered(msg.id);
   } catch (err) {
     logError(`Channel: failed to emit notification for ${fileName}: ${err}`);
   }
@@ -360,6 +367,70 @@ export async function startWatcher(
 
   // Fallback: polling
   startPolling(callback);
+}
+
+/**
+ * Replay undelivered messages from the inbox.
+ *
+ * Scans the inbox for .json files that have not yet been pushed as channel
+ * notifications (i.e. messages that arrived while Claude was offline).
+ * Emits a channel notification for each, sorted oldest-first so the agent
+ * sees them in chronological order.
+ *
+ * Call this AFTER the MCP server is connected so that
+ * `notifications/claude/channel` can actually be sent.
+ */
+export function replayUndeliveredMessages(): void {
+  if (!savedChannelCallback) {
+    logWarn('Replay: no channel callback registered, skipping');
+    return;
+  }
+
+  try {
+    if (!existsSync(INBOX_DIR)) return;
+
+    const files = readdirSync(INBOX_DIR).filter(f => f.endsWith('.json'));
+    if (files.length === 0) return;
+
+    // Parse all valid messages, filter to undelivered, sort by timestamp
+    const undelivered: { fileName: string; msg: BridgeMessage }[] = [];
+
+    for (const fileName of files) {
+      const filePath = join(INBOX_DIR, fileName);
+      try {
+        const raw = readFileSync(filePath, 'utf8');
+        const msg = JSON.parse(raw) as BridgeMessage;
+        if (!msg.id || !msg.timestamp || !msg.content) continue;
+        if (isDelivered(msg.id)) continue;
+        undelivered.push({ fileName, msg });
+      } catch {
+        // Skip malformed files — the prune pass will handle them
+      }
+    }
+
+    if (undelivered.length === 0) {
+      logInfo('Replay: no undelivered messages found');
+      return;
+    }
+
+    // Sort oldest first
+    undelivered.sort(
+      (a, b) =>
+        new Date(a.msg.timestamp).getTime() - new Date(b.msg.timestamp).getTime(),
+    );
+
+    logInfo(`Replay: emitting ${undelivered.length} undelivered message(s)`);
+
+    for (const { fileName, msg } of undelivered) {
+      logInfo(`Replay: pushing message ${msg.id} from ${msg.from} (ts: ${msg.timestamp})`);
+      savedChannelCallback(msg);
+      markDelivered(msg.id);
+    }
+
+    logInfo(`Replay: completed, ${undelivered.length} message(s) delivered`);
+  } catch (err) {
+    logError(`Replay: failed to scan inbox for undelivered messages: ${err}`);
+  }
 }
 
 /**

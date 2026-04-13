@@ -28,6 +28,7 @@ import {
   OUTBOX_DIR,
   FAILED_DIR,
   PROCESSED_FILE,
+  DELIVERED_FILE,
   PROCESSED_FILE_MAX_SIZE,
   PRUNE_MAX_AGE_MS,
   PRUNE_MAX_INBOX_SIZE,
@@ -73,6 +74,9 @@ let cacheDirty = true;
 
 /** Set of message IDs that have already been consumed (dedup). */
 let processedIds = new Set<string>();
+
+/** Set of message IDs that have been delivered via channel notification. */
+let deliveredIds = new Set<string>();
 
 /** Periodic prune timer handle. */
 let pruneTimer: ReturnType<typeof setInterval> | null = null;
@@ -164,6 +168,60 @@ function rotateProcessedFileIfNeeded(): void {
     }
   } catch (err) {
     logWarn(`Failed to rotate processed file: ${err}`);
+  }
+}
+
+// ── Delivered-ID tracking (channel notification dedup) ──────────────────────
+
+function loadDeliveredIds(): void {
+  deliveredIds.clear();
+  if (!existsSync(DELIVERED_FILE)) return;
+  try {
+    const raw = readFileSync(DELIVERED_FILE, 'utf8');
+    for (const line of raw.split('\n')) {
+      const id = line.trim();
+      if (id) deliveredIds.add(id);
+    }
+    logDebug(`Loaded ${deliveredIds.size} delivered message IDs`);
+  } catch (err) {
+    logWarn(`Failed to load delivered IDs: ${err}`);
+  }
+}
+
+/**
+ * Check if a message ID has already been delivered via channel notification.
+ */
+export function isDelivered(id: string): boolean {
+  return deliveredIds.has(id);
+}
+
+/**
+ * Mark a message ID as delivered via channel notification.
+ */
+export function markDelivered(id: string): void {
+  deliveredIds.add(id);
+  try {
+    appendFileSync(DELIVERED_FILE, id + '\n');
+    rotateDeliveredFileIfNeeded();
+  } catch (err) {
+    logWarn(`Failed to append delivered ID ${id}: ${err}`);
+  }
+}
+
+function rotateDeliveredFileIfNeeded(): void {
+  try {
+    if (!existsSync(DELIVERED_FILE)) return;
+    const stat = statSync(DELIVERED_FILE);
+    if (stat.size > PROCESSED_FILE_MAX_SIZE) {
+      const ids = Array.from(deliveredIds);
+      const keepCount = Math.floor(ids.length / 2);
+      const keep = ids.slice(ids.length - keepCount);
+      deliveredIds = new Set(keep);
+      writeFileSync(DELIVERED_FILE, keep.join('\n') + '\n', { mode: 0o600 });
+      logInfo(`Rotated .delivered file: kept ${keepCount} of ${ids.length} IDs`);
+    }
+  } catch (err) {
+    logWarn(`Failed to rotate delivered file: ${err}`);
   }
 }
 
@@ -596,6 +654,7 @@ export function getInboxStats(): InboxStats {
 export function initInbox(): void {
   ensureInboxDirs();
   loadProcessedIds();
+  loadDeliveredIds();
   refreshCacheIfNeeded();
   startPruneTimer();
   logInfo('Inbox system initialized');

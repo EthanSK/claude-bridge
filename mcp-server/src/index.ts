@@ -32,7 +32,7 @@ import { ensureDirectories, getLocalMachineName } from './config.js';
 import { initInbox, shutdownInbox } from './inbox.js';
 import type { BridgeMessage } from './inbox.js';
 import { registerTools } from './tools.js';
-import { startWatcher, stopWatcher } from './watcher.js';
+import { startWatcher, stopWatcher, replayUndeliveredMessages } from './watcher.js';
 import { logInfo, logError } from './logger.js';
 
 // Global error handlers — keep the server alive
@@ -141,6 +141,11 @@ async function main(): Promise<void> {
   await server.connect(transport);
 
   logInfo('agent-bridge MCP server connected and ready (channel mode)');
+
+  // Replay any messages that arrived while Claude was offline.
+  // This must happen AFTER server.connect() so channel notifications
+  // can actually be delivered to the client.
+  replayUndeliveredMessages();
 
   // Clean shutdown
   let shuttingDown = false;
