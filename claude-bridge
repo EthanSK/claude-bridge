@@ -377,23 +377,11 @@ cmd_setup() {
   # Step 2b: Check Full Disk Access (macOS only)
   if is_macos; then
     printf "${BOLD}  2b. Full Disk Access${RESET}\n"
-    if ls ~/Desktop/ >/dev/null 2>&1; then
-      ok "Full Disk Access is granted for SSH sessions."
-    else
-      warn "Full Disk Access not granted — SSH sessions won't be able to access Desktop, Documents, Downloads."
-      dim "Opening System Settings to the right page..."
-      open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles" 2>/dev/null || true
-      printf '\n'
-      printf "${YELLOW}  Add /usr/sbin/sshd (or Terminal) to Full Disk Access, then press Enter to continue.${RESET}\n"
-      printf "  > "
-      read -r _
-      if ls ~/Desktop/ >/dev/null 2>&1; then
-        ok "Full Disk Access verified."
-      else
-        warn "Still no Full Disk Access. SSH sessions may have limited file access."
-        dim "You can fix this later in System Settings > Privacy & Security > Full Disk Access."
-      fi
-    fi
+    # FDA cannot be reliably detected without root, and "ls ~/Desktop"
+    # always succeeds locally. Just inform the user.
+    warn "SSH sessions need Full Disk Access to reach Desktop, Documents, Downloads, etc."
+    dim "Add /usr/sbin/sshd in System Settings > Privacy & Security > Full Disk Access."
+    dim "Skip this if it's already there — you can always do it later."
     printf '\n'
   fi
 
