@@ -20,7 +20,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ensureDirectories, getLocalMachineName } from './config.js';
-import { ensureInboxDirs } from './inbox.js';
+import { initInbox, shutdownInbox } from './inbox.js';
 import { registerTools } from './tools.js';
 import { startWatcher, stopWatcher } from './watcher.js';
 import { logInfo, logError } from './logger.js';
@@ -36,7 +36,9 @@ process.on('uncaughtException', (err) => {
 async function main(): Promise<void> {
   // Ensure all directories exist
   ensureDirectories();
-  ensureInboxDirs();
+
+  // Initialize the inbox system (dirs, processed IDs, cache, prune timer)
+  initInbox();
 
   const localName = getLocalMachineName();
   logInfo(`agent-bridge MCP server starting on "${localName}"`);
@@ -58,27 +60,27 @@ async function main(): Promise<void> {
         '- Receive messages from other machines',
         '- Run shell commands on remote machines',
         '- Run AI agent prompts on remote machines',
+        '- Check inbox statistics and watcher health',
         '',
         'Messages are delivered via SSH and stored in the inbox (~/.agent-bridge/inbox/).',
         'Use bridge_receive_messages periodically to check for incoming messages.',
+        'Use bridge_inbox_stats to check inbox health and watcher status.',
+        '',
+        'Messages have a TTL (default 1 hour). Expired messages are auto-pruned.',
+        'The inbox is also pruned on startup and every 5 minutes.',
         '',
         'Machines are paired using the `agent-bridge pair` CLI command (v1).',
         'SSH keys are managed in ~/.agent-bridge/keys/.',
       ].join('\n'),
-    }
+    },
   );
 
   // Register all tools
   registerTools(server);
 
   // Start the inbox file watcher
-  // The watcher currently logs when new messages arrive.
-  // In the future, this could trigger MCP notifications.
   await startWatcher((newFiles) => {
     logInfo(`New messages detected: ${newFiles.length} file(s)`);
-    // MCP doesn't have a push notification mechanism for tools,
-    // so the client must poll via bridge_receive_messages.
-    // We log here for observability.
   });
 
   // Connect to stdio transport
@@ -88,10 +90,27 @@ async function main(): Promise<void> {
   logInfo('agent-bridge MCP server connected and ready');
 
   // Clean shutdown
+  let shuttingDown = false;
   const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
     logInfo('Shutting down agent-bridge MCP server...');
+
+    // 1. Stop the file watcher (kills fswatch/inotifywait/polling)
     stopWatcher();
-    await server.close();
+
+    // 2. Stop the prune timer and inbox system
+    shutdownInbox();
+
+    // 3. Close the MCP server
+    try {
+      await server.close();
+    } catch (err) {
+      logError(`Error closing MCP server: ${err}`);
+    }
+
+    logInfo('agent-bridge MCP server shut down cleanly');
     process.exit(0);
   };
 

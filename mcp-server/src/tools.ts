@@ -9,6 +9,7 @@
  * - bridge_run_command: Run a shell command on a remote machine
  * - bridge_run_agent_prompt: Run an agent prompt on a remote machine
  * - bridge_clear_inbox: Clear all messages from the local inbox
+ * - bridge_inbox_stats: Get inbox statistics and watcher health
  */
 
 import { z } from 'zod';
@@ -17,9 +18,17 @@ import {
   loadConfig,
   getMachine,
   getLocalMachineName,
+  DEFAULT_TTL_SECONDS,
 } from './config.js';
 import { sshExec, sshPing } from './ssh.js';
-import { createMessage, sendMessage, consumeInbox, peekInbox, clearInbox } from './inbox.js';
+import {
+  createMessage,
+  sendMessage,
+  consumeInbox,
+  peekInbox,
+  clearInbox,
+  getInboxStats,
+} from './inbox.js';
 import { logInfo, logError } from './logger.js';
 
 /**
@@ -52,14 +61,14 @@ export function registerTools(server: McpServer): void {
       const lines = [`Local machine: ${localName}`, '', 'Paired machines:'];
       for (const m of machines) {
         lines.push(
-          `  - ${m.name}: ${m.user}@${m.host}:${m.port} (paired ${m.pairedAt})`
+          `  - ${m.name}: ${m.user}@${m.host}:${m.port} (paired ${m.pairedAt})`,
         );
       }
 
       return {
         content: [{ type: 'text' as const, text: lines.join('\n') }],
       };
-    }
+    },
   );
 
   // -- bridge_status ---------------------------------------------------------
@@ -92,7 +101,7 @@ export function registerTools(server: McpServer): void {
 
       const toCheck = machine
         ? machines.filter(
-            m => m.name.toLowerCase() === machine.toLowerCase()
+            m => m.name.toLowerCase() === machine.toLowerCase(),
           )
         : machines;
 
@@ -112,14 +121,14 @@ export function registerTools(server: McpServer): void {
       for (const m of toCheck) {
         const reachable = await sshPing(m);
         results.push(
-          `${m.name}: ${reachable ? 'ONLINE' : 'OFFLINE'} (${m.user}@${m.host}:${m.port})`
+          `${m.name}: ${reachable ? 'ONLINE' : 'OFFLINE'} (${m.user}@${m.host}:${m.port})`,
         );
       }
 
       return {
         content: [{ type: 'text' as const, text: results.join('\n') }],
       };
-    }
+    },
   );
 
   // -- bridge_send_message ---------------------------------------------------
@@ -136,9 +145,15 @@ export function registerTools(server: McpServer): void {
           .string()
           .optional()
           .describe('Message ID this is a reply to'),
+        ttl: z
+          .number()
+          .optional()
+          .describe(
+            `Time-to-live in seconds. 0 = no expiry. Default: ${DEFAULT_TTL_SECONDS}`,
+          ),
       },
     },
-    async ({ machine: machineName, message, reply_to }) => {
+    async ({ machine: machineName, message, reply_to, ttl }) => {
       const machine = getMachine(machineName);
       if (!machine) {
         const all = loadConfig();
@@ -159,7 +174,8 @@ export function registerTools(server: McpServer): void {
         machineName,
         'message',
         message,
-        reply_to ?? null
+        reply_to ?? null,
+        ttl ?? DEFAULT_TTL_SECONDS,
       );
 
       try {
@@ -186,7 +202,7 @@ export function registerTools(server: McpServer): void {
           isError: true,
         };
       }
-    }
+    },
   );
 
   // -- bridge_receive_messages -----------------------------------------------
@@ -195,13 +211,13 @@ export function registerTools(server: McpServer): void {
     {
       title: 'Receive Messages',
       description:
-        'Check for and consume incoming messages from other machines. Messages are removed from the inbox after reading. Use bridge_peek_inbox to check without consuming.',
+        'Check for and consume incoming messages from other machines. Messages are removed from the inbox after reading. Use peek=true to check without consuming. Messages are returned in chronological order, deduplicated, and TTL-expired messages are auto-pruned.',
       inputSchema: {
         peek: z
           .boolean()
           .optional()
           .describe(
-            'If true, check messages without consuming them. Default: false (consume).'
+            'If true, check messages without consuming them. Default: false (consume).',
           ),
       },
     },
@@ -218,12 +234,15 @@ export function registerTools(server: McpServer): void {
         const lines = [`${count} message(s) in inbox:`, ''];
         for (const msg of messages) {
           lines.push(
-            `[${msg.timestamp}] From ${msg.from} (${msg.type}): ${msg.content.substring(0, 200)}${msg.content.length > 200 ? '...' : ''}`
+            `[${msg.timestamp}] From ${msg.from} (${msg.type}): ${msg.content.substring(0, 200)}${msg.content.length > 200 ? '...' : ''}`,
           );
           if (msg.replyTo) {
             lines.push(`  (reply to: ${msg.replyTo})`);
           }
           lines.push(`  ID: ${msg.id}`);
+          if (msg.ttl !== undefined) {
+            lines.push(`  TTL: ${msg.ttl}s`);
+          }
           lines.push('');
         }
         return {
@@ -249,6 +268,9 @@ export function registerTools(server: McpServer): void {
         if (msg.replyTo) {
           lines.push(`Reply to: ${msg.replyTo}`);
         }
+        if (msg.ttl !== undefined) {
+          lines.push(`TTL: ${msg.ttl}s`);
+        }
         lines.push(`Content: ${msg.content}`);
         lines.push('');
       }
@@ -256,7 +278,7 @@ export function registerTools(server: McpServer): void {
       return {
         content: [{ type: 'text' as const, text: lines.join('\n') }],
       };
-    }
+    },
   );
 
   // -- bridge_run_command ----------------------------------------------------
@@ -322,7 +344,7 @@ export function registerTools(server: McpServer): void {
           isError: true,
         };
       }
-    }
+    },
   );
 
   // -- bridge_run_agent_prompt -----------------------------------------------
@@ -339,13 +361,13 @@ export function registerTools(server: McpServer): void {
           .string()
           .optional()
           .describe(
-            'Agent command to use (default: "claude --print"). Examples: "claude --print", "codex exec", "aider --message"'
+            'Agent command to use (default: "claude --print"). Examples: "claude --print", "codex exec", "aider --message"',
           ),
         timeout: z
           .number()
           .optional()
           .describe(
-            'Timeout in milliseconds (default: 120000 for agent prompts)'
+            'Timeout in milliseconds (default: 120000 for agent prompts)',
           ),
       },
     },
@@ -365,19 +387,18 @@ export function registerTools(server: McpServer): void {
       }
 
       const agentCmd = agent ?? 'claude --print';
-      // Escape single quotes in prompt for shell safety
       const escapedPrompt = prompt.replace(/'/g, "'\\''");
       const command = `${agentCmd} '${escapedPrompt}'`;
 
       logInfo(
-        `Running agent prompt on ${machineName} with ${agentCmd}: ${prompt.substring(0, 100)}...`
+        `Running agent prompt on ${machineName} with ${agentCmd}: ${prompt.substring(0, 100)}...`,
       );
 
       try {
         const result = await sshExec(
           machine,
           command,
-          timeout ?? 120000
+          timeout ?? 120000,
         );
         const parts: string[] = [];
 
@@ -404,7 +425,7 @@ export function registerTools(server: McpServer): void {
         const errMsg =
           err instanceof Error ? err.message : String(err);
         logError(
-          `Agent prompt failed on ${machineName}: ${errMsg}`
+          `Agent prompt failed on ${machineName}: ${errMsg}`,
         );
         return {
           content: [
@@ -416,7 +437,7 @@ export function registerTools(server: McpServer): void {
           isError: true,
         };
       }
-    }
+    },
   );
 
   // -- bridge_clear_inbox ----------------------------------------------------
@@ -439,6 +460,46 @@ export function registerTools(server: McpServer): void {
           },
         ],
       };
-    }
+    },
   );
+
+  // -- bridge_inbox_stats ----------------------------------------------------
+  server.registerTool(
+    'bridge_inbox_stats',
+    {
+      title: 'Inbox Stats',
+      description:
+        'Get inbox statistics: pending message count, oldest message age, total size, watcher health, processed ID count, and failed message count.',
+    },
+    async () => {
+      const stats = getInboxStats();
+      const lines = [
+        'Inbox Statistics:',
+        `  Pending messages: ${stats.pendingCount}`,
+        `  Oldest message age: ${stats.oldestMessageAge !== null ? `${stats.oldestMessageAge}s` : 'n/a'}`,
+        `  Total inbox size: ${formatBytes(stats.totalSizeBytes)}`,
+        `  Watcher backend: ${stats.watcherBackend}`,
+        `  Watcher healthy: ${stats.watcherHealthy ? 'yes' : 'no'}`,
+        `  Processed IDs tracked: ${stats.processedIdCount}`,
+        `  Failed/quarantined: ${stats.failedCount}`,
+      ];
+
+      logInfo('Inbox stats requested');
+
+      return {
+        content: [{ type: 'text' as const, text: lines.join('\n') }],
+      };
+    },
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.min(
+    Math.floor(Math.log(bytes) / Math.log(1024)),
+    units.length - 1,
+  );
+  const val = bytes / Math.pow(1024, i);
+  return `${val.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }

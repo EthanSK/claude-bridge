@@ -6,14 +6,18 @@
  * - Linux: inotifywait (from inotify-tools)
  * - Fallback: polling every 2 seconds
  *
- * The watcher notifies a callback when new .json files appear.
+ * Production-grade features:
+ * - Auto-restart with exponential backoff (max 3 retries, then polling fallback)
+ * - Notifies inbox cache on new files
+ * - Reports health status
  */
 
 import { spawn, type ChildProcess } from 'child_process';
 import { readdirSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { INBOX_DIR } from './config.js';
-import { logInfo, logError, logDebug } from './logger.js';
+import { logInfo, logError, logDebug, logWarn } from './logger.js';
+import { invalidateCache, notifyNewFiles, setWatcherStatus } from './inbox.js';
 
 type MessageCallback = (files: string[]) => void;
 
@@ -21,9 +25,19 @@ let watcherProcess: ChildProcess | null = null;
 let pollInterval: ReturnType<typeof setInterval> | null = null;
 let knownFiles = new Set<string>();
 
-/**
- * Initialize the set of known files in the inbox.
- */
+/** Current backend used for watching. */
+let currentBackend: 'fswatch' | 'inotifywait' | 'polling' | 'unknown' = 'unknown';
+
+/** Number of consecutive crash-restarts for the native watcher. */
+let restartCount = 0;
+const MAX_RESTARTS = 3;
+const BASE_BACKOFF_MS = 1000;
+
+/** The callback for new messages, saved for restart purposes. */
+let savedCallback: MessageCallback | null = null;
+
+// ── Known-files init ─────────────────────────────────────────────────────────
+
 function initKnownFiles(): void {
   knownFiles.clear();
   try {
@@ -38,9 +52,8 @@ function initKnownFiles(): void {
   }
 }
 
-/**
- * Check for new files in the inbox (used by polling fallback).
- */
+// ── Polling fallback ─────────────────────────────────────────────────────────
+
 function checkForNewFiles(callback: MessageCallback): void {
   try {
     if (!existsSync(INBOX_DIR)) return;
@@ -52,6 +65,9 @@ function checkForNewFiles(callback: MessageCallback): void {
       for (const f of newFiles) {
         knownFiles.add(f);
       }
+      // Notify the inbox cache
+      notifyNewFiles(newFiles);
+      invalidateCache();
       callback(newFiles.map(f => join(INBOX_DIR, f)));
     }
   } catch (err) {
@@ -59,23 +75,21 @@ function checkForNewFiles(callback: MessageCallback): void {
   }
 }
 
-/**
- * Start polling as a fallback.
- */
 function startPolling(callback: MessageCallback): void {
   if (pollInterval) return;
+  currentBackend = 'polling';
+  setWatcherStatus('polling', true);
   logInfo('Using polling watcher (2s interval)');
   pollInterval = setInterval(() => checkForNewFiles(callback), 2000);
+  if (pollInterval.unref) pollInterval.unref();
 }
 
-/**
- * Try to spawn a process and check if it starts successfully within a timeout.
- * Returns the process if successful, null if it fails to start.
- */
+// ── Spawn helper ─────────────────────────────────────────────────────────────
+
 function trySpawn(
   command: string,
   args: string[],
-  timeoutMs: number = 500
+  timeoutMs: number = 500,
 ): Promise<ChildProcess | null> {
   return new Promise((resolve) => {
     try {
@@ -85,7 +99,6 @@ function trySpawn(
 
       const timer = setTimeout(() => {
         if (proc.exitCode === null) {
-          // Still running — started successfully
           resolve(proc);
         } else {
           resolve(null);
@@ -97,7 +110,6 @@ function trySpawn(
         resolve(null);
       });
 
-      // If it exits immediately, it failed
       proc.on('close', () => {
         clearTimeout(timer);
         resolve(null);
@@ -108,11 +120,136 @@ function trySpawn(
   });
 }
 
+// ── Auto-restart with exponential backoff ────────────────────────────────────
+
+function scheduleRestart(callback: MessageCallback): void {
+  restartCount++;
+  if (restartCount > MAX_RESTARTS) {
+    logWarn(
+      `Native watcher crashed ${restartCount} times. Falling back to polling permanently.`,
+    );
+    startPolling(callback);
+    return;
+  }
+
+  const delay = BASE_BACKOFF_MS * Math.pow(2, restartCount - 1);
+  logWarn(
+    `Native watcher crashed. Restarting in ${delay}ms (attempt ${restartCount}/${MAX_RESTARTS})...`,
+  );
+
+  setTimeout(async () => {
+    logInfo(`Restarting native watcher (attempt ${restartCount}/${MAX_RESTARTS})...`);
+    // Re-attempt native watcher
+    await startWatcher(callback);
+  }, delay);
+}
+
+// ── fswatch handler (macOS) ──────────────────────────────────────────────────
+
+function setupFswatchHandler(proc: ChildProcess, callback: MessageCallback): void {
+  currentBackend = 'fswatch';
+  setWatcherStatus('fswatch', true);
+  watcherProcess = proc;
+
+  proc.stdout!.on('data', (chunk: Buffer) => {
+    const paths = chunk
+      .toString()
+      .split('\0')
+      .filter(p => p.endsWith('.json'));
+    if (paths.length > 0) {
+      const newNames: string[] = [];
+      for (const p of paths) {
+        const name = p.split('/').pop()!;
+        knownFiles.add(name);
+        newNames.push(name);
+      }
+      notifyNewFiles(newNames);
+      invalidateCache();
+      callback(paths);
+    }
+  });
+
+  proc.stderr?.on('data', (chunk: Buffer) => {
+    logDebug(`fswatch stderr: ${chunk.toString().trim()}`);
+  });
+
+  proc.on('close', (code) => {
+    if (watcherProcess === proc) {
+      watcherProcess = null;
+      setWatcherStatus('fswatch', false);
+      logWarn(`fswatch exited with code ${code}`);
+      scheduleRestart(callback);
+    }
+  });
+
+  proc.on('error', (err) => {
+    logError(`fswatch error: ${err.message}`);
+    if (watcherProcess === proc) {
+      watcherProcess = null;
+      setWatcherStatus('fswatch', false);
+      scheduleRestart(callback);
+    }
+  });
+}
+
+// ── inotifywait handler (Linux) ──────────────────────────────────────────────
+
+function setupInotifywaitHandler(
+  proc: ChildProcess,
+  callback: MessageCallback,
+): void {
+  currentBackend = 'inotifywait';
+  setWatcherStatus('inotifywait', true);
+  watcherProcess = proc;
+
+  proc.stdout!.on('data', (chunk: Buffer) => {
+    const files = chunk
+      .toString()
+      .trim()
+      .split('\n')
+      .filter(f => f.endsWith('.json'));
+    if (files.length > 0) {
+      for (const f of files) {
+        knownFiles.add(f);
+      }
+      notifyNewFiles(files);
+      invalidateCache();
+      callback(files.map(f => join(INBOX_DIR, f)));
+    }
+  });
+
+  proc.stderr?.on('data', (chunk: Buffer) => {
+    logDebug(`inotifywait stderr: ${chunk.toString().trim()}`);
+  });
+
+  proc.on('close', (code) => {
+    if (watcherProcess === proc) {
+      watcherProcess = null;
+      setWatcherStatus('inotifywait', false);
+      logWarn(`inotifywait exited with code ${code}`);
+      scheduleRestart(callback);
+    }
+  });
+
+  proc.on('error', (err) => {
+    logError(`inotifywait error: ${err.message}`);
+    if (watcherProcess === proc) {
+      watcherProcess = null;
+      setWatcherStatus('inotifywait', false);
+      scheduleRestart(callback);
+    }
+  });
+}
+
+// ── Public API ───────────────────────────────────────────────────────────────
+
 /**
  * Start watching the inbox for new messages.
  * Tries native watchers first, falls back to polling.
  */
 export async function startWatcher(callback: MessageCallback): Promise<void> {
+  savedCallback = callback;
+
   // Ensure inbox directory exists
   if (!existsSync(INBOX_DIR)) {
     mkdirSync(INBOX_DIR, { recursive: true, mode: 0o700 });
@@ -134,30 +271,8 @@ export async function startWatcher(callback: MessageCallback): Promise<void> {
 
     if (proc) {
       logInfo('fswatch watcher started');
-      watcherProcess = proc;
-
-      proc.stdout!.on('data', (chunk: Buffer) => {
-        const paths = chunk
-          .toString()
-          .split('\0')
-          .filter(p => p.endsWith('.json'));
-        if (paths.length > 0) {
-          for (const p of paths) {
-            const name = p.split('/').pop()!;
-            knownFiles.add(name);
-          }
-          callback(paths);
-        }
-      });
-
-      proc.on('close', () => {
-        if (watcherProcess === proc) {
-          watcherProcess = null;
-          logInfo('fswatch exited, falling back to polling');
-          startPolling(callback);
-        }
-      });
-
+      restartCount = 0; // reset on successful start
+      setupFswatchHandler(proc, callback);
       return;
     }
   }
@@ -176,30 +291,8 @@ export async function startWatcher(callback: MessageCallback): Promise<void> {
 
     if (proc) {
       logInfo('inotifywait watcher started');
-      watcherProcess = proc;
-
-      proc.stdout!.on('data', (chunk: Buffer) => {
-        const files = chunk
-          .toString()
-          .trim()
-          .split('\n')
-          .filter(f => f.endsWith('.json'));
-        if (files.length > 0) {
-          for (const f of files) {
-            knownFiles.add(f);
-          }
-          callback(files.map(f => join(INBOX_DIR, f)));
-        }
-      });
-
-      proc.on('close', () => {
-        if (watcherProcess === proc) {
-          watcherProcess = null;
-          logInfo('inotifywait exited, falling back to polling');
-          startPolling(callback);
-        }
-      });
-
+      restartCount = 0;
+      setupInotifywaitHandler(proc, callback);
       return;
     }
   }
@@ -213,7 +306,7 @@ export async function startWatcher(callback: MessageCallback): Promise<void> {
  */
 export function stopWatcher(): void {
   if (watcherProcess) {
-    logInfo('Stopping file watcher process');
+    logInfo(`Stopping ${currentBackend} watcher process (pid ${watcherProcess.pid})`);
     watcherProcess.kill();
     watcherProcess = null;
   }
@@ -222,4 +315,13 @@ export function stopWatcher(): void {
     clearInterval(pollInterval);
     pollInterval = null;
   }
+  setWatcherStatus(currentBackend, false);
+  logInfo('Watcher stopped');
+}
+
+/**
+ * Get the current watcher backend.
+ */
+export function getWatcherBackend(): typeof currentBackend {
+  return currentBackend;
 }

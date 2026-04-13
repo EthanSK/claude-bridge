@@ -1,12 +1,14 @@
 /**
  * SSH execution wrapper for agent-bridge.
  * Runs commands on remote machines using the SSH keys from v1.
+ *
+ * Logs all connection attempts and results.
  */
 
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { type MachineConfig } from './config.js';
-import { logDebug, logError } from './logger.js';
+import { logDebug, logError, logInfo } from './logger.js';
 
 export interface SSHResult {
   exitCode: number;
@@ -20,7 +22,7 @@ export interface SSHResult {
 export async function sshExec(
   machine: MachineConfig,
   command: string,
-  timeoutMs: number = 30000
+  timeoutMs: number = 30000,
 ): Promise<SSHResult> {
   if (!existsSync(machine.key)) {
     throw new Error(`SSH key not found: ${machine.key}`);
@@ -38,7 +40,7 @@ export async function sshExec(
     command,
   ];
 
-  logDebug(`SSH exec: ssh ${args.join(' ')}`);
+  logDebug(`SSH exec to ${machine.name}: ${command.substring(0, 200)}`);
 
   return new Promise<SSHResult>((resolve, reject) => {
     const proc = spawn('ssh', args, {
@@ -58,21 +60,22 @@ export async function sshExec(
 
     const timer = setTimeout(() => {
       proc.kill('SIGKILL');
+      logError(`SSH command timed out after ${timeoutMs}ms to ${machine.name}`);
       reject(new Error(`SSH command timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
     proc.on('close', (code) => {
       clearTimeout(timer);
-      resolve({
-        exitCode: code ?? 1,
-        stdout,
-        stderr,
-      });
+      const exitCode = code ?? 1;
+      logDebug(
+        `SSH to ${machine.name} completed: exit=${exitCode}, stdout=${stdout.length}B, stderr=${stderr.length}B`,
+      );
+      resolve({ exitCode, stdout, stderr });
     });
 
     proc.on('error', (err) => {
       clearTimeout(timer);
-      logError(`SSH spawn error: ${err.message}`);
+      logError(`SSH spawn error to ${machine.name}: ${err.message}`);
       reject(err);
     });
   });
@@ -82,10 +85,14 @@ export async function sshExec(
  * Check if a remote machine is reachable via SSH.
  */
 export async function sshPing(machine: MachineConfig): Promise<boolean> {
+  logDebug(`SSH ping to ${machine.name} (${machine.user}@${machine.host}:${machine.port})`);
   try {
     const result = await sshExec(machine, 'echo pong', 10000);
-    return result.exitCode === 0 && result.stdout.trim() === 'pong';
+    const reachable = result.exitCode === 0 && result.stdout.trim() === 'pong';
+    logInfo(`SSH ping ${machine.name}: ${reachable ? 'ONLINE' : 'OFFLINE'}`);
+    return reachable;
   } catch {
+    logInfo(`SSH ping ${machine.name}: OFFLINE (error)`);
     return false;
   }
 }
@@ -97,8 +104,9 @@ export async function sshWriteFile(
   machine: MachineConfig,
   remotePath: string,
   content: string,
-  timeoutMs: number = 15000
+  timeoutMs: number = 15000,
 ): Promise<SSHResult> {
+  logDebug(`SSH write file to ${machine.name}: ${remotePath} (${content.length}B)`);
   // Use heredoc to write file content safely
   const escapedContent = content.replace(/'/g, "'\\''");
   const command = `mkdir -p "$(dirname '${remotePath}')" && printf '%s' '${escapedContent}' > '${remotePath}'`;
@@ -111,7 +119,7 @@ export async function sshWriteFile(
 export async function sshReadFile(
   machine: MachineConfig,
   remotePath: string,
-  timeoutMs: number = 15000
+  timeoutMs: number = 15000,
 ): Promise<string> {
   const result = await sshExec(machine, `cat '${remotePath}'`, timeoutMs);
   if (result.exitCode !== 0) {
@@ -126,12 +134,12 @@ export async function sshReadFile(
 export async function sshListFiles(
   machine: MachineConfig,
   remotePath: string,
-  timeoutMs: number = 15000
+  timeoutMs: number = 15000,
 ): Promise<string[]> {
   const result = await sshExec(
     machine,
     `ls -1 '${remotePath}' 2>/dev/null || true`,
-    timeoutMs
+    timeoutMs,
   );
   if (result.exitCode !== 0) {
     return [];
