@@ -37,7 +37,7 @@ Read the README at https://github.com/EthanSK/claude-bridge and follow the setup
 ```
 
 **Important — first-time setup on each machine:**
-- **macOS:** System Settings → General → Sharing → toggle **Remote Login** ON
+- **macOS:** System Settings → General → Sharing → toggle **Remote Login** ON → click the **ⓘ** info icon → set **"Allow access for"** to **All users**
 - **macOS (Full Disk Access):** Without this, SSH sessions can't access Desktop, Documents, or Downloads. To grant it:
   - **Easy way (recommended):** System Settings → General → Sharing → click the **ⓘ** info icon next to Remote Login → toggle **"Allow full disk access for remote users"** ON
   - **Manual way:** System Settings → Privacy & Security → Full Disk Access → click **+** → press **Cmd+Shift+G** → type `/usr/sbin/sshd` → Open → toggle ON → restart SSH: `sudo launchctl kickstart -k system/com.openssh.sshd`
