@@ -10,16 +10,24 @@
  * - Auto-restart with exponential backoff (max 3 retries, then polling fallback)
  * - Notifies inbox cache on new files
  * - Reports health status
+ * - Emits channel notifications when new messages arrive (push to Claude)
  */
 
 import { spawn, type ChildProcess } from 'child_process';
-import { readdirSync, existsSync, mkdirSync } from 'fs';
+import { readdirSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { INBOX_DIR } from './config.js';
 import { logInfo, logError, logDebug, logWarn } from './logger.js';
 import { invalidateCache, notifyNewFiles, setWatcherStatus } from './inbox.js';
+import type { BridgeMessage } from './inbox.js';
 
 type MessageCallback = (files: string[]) => void;
+
+/**
+ * Callback invoked with a parsed BridgeMessage when a new inbox file arrives.
+ * Used to push channel notifications into the running Claude session.
+ */
+type ChannelNotifyCallback = (message: BridgeMessage) => void;
 
 let watcherProcess: ChildProcess | null = null;
 let pollInterval: ReturnType<typeof setInterval> | null = null;
@@ -35,6 +43,31 @@ const BASE_BACKOFF_MS = 1000;
 
 /** The callback for new messages, saved for restart purposes. */
 let savedCallback: MessageCallback | null = null;
+
+/** The channel notification callback, saved for restart purposes. */
+let savedChannelCallback: ChannelNotifyCallback | null = null;
+
+/**
+ * Try to parse a message file and emit a channel notification.
+ * Errors are logged but never thrown — the watcher must keep running.
+ */
+function emitChannelNotification(fileName: string): void {
+  if (!savedChannelCallback) return;
+
+  const filePath = join(INBOX_DIR, fileName);
+  try {
+    if (!existsSync(filePath)) return;
+    const raw = readFileSync(filePath, 'utf8');
+    const msg = JSON.parse(raw) as BridgeMessage;
+    if (!msg.id || !msg.timestamp || !msg.content) {
+      logWarn(`Channel: skipping malformed message file ${fileName}`);
+      return;
+    }
+    savedChannelCallback(msg);
+  } catch (err) {
+    logError(`Channel: failed to emit notification for ${fileName}: ${err}`);
+  }
+}
 
 // ── Known-files init ─────────────────────────────────────────────────────────
 
@@ -68,6 +101,12 @@ function checkForNewFiles(callback: MessageCallback): void {
       // Notify the inbox cache
       notifyNewFiles(newFiles);
       invalidateCache();
+
+      // Emit channel notifications for each new message
+      for (const f of newFiles) {
+        emitChannelNotification(f);
+      }
+
       callback(newFiles.map(f => join(INBOX_DIR, f)));
     }
   } catch (err) {
@@ -165,6 +204,12 @@ function setupFswatchHandler(proc: ChildProcess, callback: MessageCallback): voi
       }
       notifyNewFiles(newNames);
       invalidateCache();
+
+      // Emit channel notifications for each new message
+      for (const name of newNames) {
+        emitChannelNotification(name);
+      }
+
       callback(paths);
     }
   });
@@ -214,6 +259,12 @@ function setupInotifywaitHandler(
       }
       notifyNewFiles(files);
       invalidateCache();
+
+      // Emit channel notifications for each new message
+      for (const f of files) {
+        emitChannelNotification(f);
+      }
+
       callback(files.map(f => join(INBOX_DIR, f)));
     }
   });
@@ -246,9 +297,19 @@ function setupInotifywaitHandler(
 /**
  * Start watching the inbox for new messages.
  * Tries native watchers first, falls back to polling.
+ *
+ * @param callback - Called with file paths when new messages are detected.
+ * @param channelCallback - Optional. Called with parsed BridgeMessage for
+ *   each new message, used to push channel notifications into Claude.
  */
-export async function startWatcher(callback: MessageCallback): Promise<void> {
+export async function startWatcher(
+  callback: MessageCallback,
+  channelCallback?: ChannelNotifyCallback,
+): Promise<void> {
   savedCallback = callback;
+  if (channelCallback) {
+    savedChannelCallback = channelCallback;
+  }
 
   // Ensure inbox directory exists
   if (!existsSync(INBOX_DIR)) {

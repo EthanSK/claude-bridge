@@ -132,29 +132,36 @@ agent-bridge run MacBook-Pro "review the code in ~/Projects/myapp/src/ and sugge
 agent-bridge run MacBook-Pro "ps aux | head -20 && df -h && free -h 2>/dev/null"
 ```
 
-## v2: MCP Server (running agent-to-agent communication)
+## v2: Channel Plugin (push-based agent-to-agent communication)
 
-agent-bridge v2 adds an MCP server for real-time communication between RUNNING agent sessions. It does NOT spawn new agent processes — it connects existing, already-running sessions on different machines.
+agent-bridge v2 is a **channel plugin** for Claude Code that enables real-time communication between RUNNING agent sessions. It does NOT spawn new agent processes — it connects existing, already-running sessions on different machines.
 
-If configured as an MCP server in Claude Code, the following tools become available natively:
+Messages from other machines are **pushed** into your conversation automatically as:
+```
+<channel source="agent-bridge" from="MachineName" message_id="..." ts="...">content</channel>
+```
+No polling needed — respond using `bridge_send_message`.
+
+### Available tools
 
 - `bridge_list_machines` — list paired machines
 - `bridge_status` — check if a machine is reachable
 - `bridge_send_message` — send a message to another machine's running agent
-- `bridge_receive_messages` — check for incoming messages (polling-based)
+- `bridge_receive_messages` — manually check for messages (usually not needed, channel pushes them)
 - `bridge_run_command` — run a shell command on a remote machine
 - `bridge_clear_inbox` — clear the local inbox
 - `bridge_inbox_stats` — get inbox statistics and watcher health
 
 Setup: `cd mcp-server && npm install && npm run build`, then add to MCP config.
 
-### How messaging works
+### How messaging works (channel mode)
 
 1. Machine A's Claude calls `bridge_send_message` to write a message to Machine B's inbox via SSH
 2. Machine B's file watcher detects the new file
-3. Machine B's running Claude calls `bridge_receive_messages` to read it
-4. Machine B processes and responds via `bridge_send_message` back to Machine A
-5. Machine A calls `bridge_receive_messages` to get the reply
+3. Machine B's channel plugin pushes the message into the running Claude session
+4. Machine B's Claude sees `<channel source="agent-bridge" ...>` and responds via `bridge_send_message`
+
+All messages are authenticated via SSH keys. The channel notification includes `authenticated: ssh-key` metadata confirming the sender was verified by the SSH transport.
 
 Messages include sender name, timestamp, content, optional reply-to ID for threading, and TTL.
 

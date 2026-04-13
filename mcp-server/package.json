@@ -1,7 +1,7 @@
 {
   "name": "agent-bridge-mcp-server",
-  "version": "2.0.0",
-  "description": "MCP server for real-time bidirectional communication between AI agent sessions across machines via SSH",
+  "version": "2.1.0",
+  "description": "MCP server and channel plugin for real-time bidirectional communication between AI agent sessions across machines via SSH",
   "type": "module",
   "main": "build/index.js",
   "scripts": {
