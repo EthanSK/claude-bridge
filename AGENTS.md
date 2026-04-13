@@ -132,6 +132,20 @@ agent-bridge run MacBook-Pro "review the code in ~/Projects/myapp/src/ and sugge
 agent-bridge run MacBook-Pro "ps aux | head -20 && df -h && free -h 2>/dev/null"
 ```
 
+## v2: MCP Server
+
+agent-bridge v2 adds an MCP server for real-time agent-to-agent messaging. If configured as an MCP server in Claude Code, the following tools become available natively:
+
+- `bridge_list_machines` — list paired machines
+- `bridge_status` — check if a machine is reachable
+- `bridge_send_message` — send a message to another machine's agent
+- `bridge_receive_messages` — check for incoming messages
+- `bridge_run_command` — run a shell command on a remote machine
+- `bridge_run_agent_prompt` — run an AI agent prompt on a remote machine
+- `bridge_clear_inbox` — clear the local inbox
+
+Setup: `cd mcp-server && npm install && npm run build`, then add to MCP config.
+
 ## Troubleshooting
 
 ### SSH not enabling

@@ -337,12 +337,118 @@ Reference `INSTRUCTIONS.md` in your agent's config, or paste its contents into y
 
 ---
 
+## v2: MCP Server (real-time agent-to-agent communication)
+
+v2 adds an MCP server that enables running Claude Code sessions to communicate directly with each other across machines. Instead of one-shot CLI commands, agents can send messages back and forth in real time.
+
+### What's new in v2
+
+| Feature | v1 (CLI) | v2 (MCP Server) |
+|---------|----------|------------------|
+| Run remote commands | `agent-bridge run` | `bridge_run_command` tool |
+| Run agent prompts | `agent-bridge run --claude` | `bridge_run_agent_prompt` tool |
+| Send messages to another agent | -- | `bridge_send_message` tool |
+| Receive messages from another agent | -- | `bridge_receive_messages` tool |
+| Check machine status | `agent-bridge status` | `bridge_status` tool |
+| Works from inside Claude Code | Via bash | Native MCP tools |
+
+### MCP Server Setup
+
+**1. Build the server:**
+
+```bash
+cd ~/Projects/agent-bridge/mcp-server
+npm install
+npm run build
+```
+
+**2. Add to Claude Code MCP config** (`~/.claude.json` or project `.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "agent-bridge": {
+      "command": "node",
+      "args": ["/path/to/agent-bridge/mcp-server/build/index.js"]
+    }
+  }
+}
+```
+
+**3. For remote-only access** (connecting to a remote machine's server via SSH):
+
+```json
+{
+  "mcpServers": {
+    "remote-macbook": {
+      "command": "ssh",
+      "args": [
+        "-i", "~/.agent-bridge/keys/agent-bridge_Mac-Mini",
+        "user@192.168.1.208",
+        "node ~/Projects/agent-bridge/mcp-server/build/index.js"
+      ]
+    }
+  }
+}
+```
+
+### MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `bridge_list_machines` | List paired machines and their connection details |
+| `bridge_status` | Check if a machine is reachable via SSH |
+| `bridge_send_message` | Send a message to a running agent on another machine |
+| `bridge_receive_messages` | Check for and consume incoming messages |
+| `bridge_run_command` | Run a shell command on a remote machine |
+| `bridge_run_agent_prompt` | Run an agent prompt on a remote machine (default: `claude --print`) |
+| `bridge_clear_inbox` | Clear all messages from the local inbox |
+
+### How messaging works
+
+```
+Machine A (Claude Code)                   Machine B (Claude Code)
+┌─────────────────────────┐               ┌─────────────────────────┐
+│                         │               │                         │
+│ bridge_send_message     │    SSH        │  ~/.agent-bridge/inbox/ │
+│ ("MacBookPro", "hello") │──────────────►│  msg-uuid.json          │
+│                         │               │                         │
+│                         │               │ bridge_receive_messages  │
+│                         │               │ → reads & returns msg   │
+│                         │               │                         │
+│ bridge_receive_messages │    SSH        │ bridge_send_message     │
+│ → reads response        │◄──────────────│ ("Mac-Mini", "hi back") │
+│                         │               │                         │
+└─────────────────────────┘               └─────────────────────────┘
+```
+
+Messages are JSON files delivered to `~/.agent-bridge/inbox/` via SSH. A file watcher (fswatch on macOS, inotifywait on Linux, polling fallback) detects new messages.
+
+### Message format
+
+```json
+{
+  "id": "msg-uuid",
+  "from": "Mac-Mini",
+  "to": "MacBookPro",
+  "type": "message",
+  "content": "List the files in ~/Projects",
+  "timestamp": "2026-04-13T01:15:00Z",
+  "replyTo": null
+}
+```
+
+---
+
 ## Architecture
 
 ```
 ~/.agent-bridge/
 ├── config               # Paired machines (INI-style key-value)
 ├── .pending-token       # One-time pairing token (deleted after use)
+├── inbox/               # Incoming messages from other machines (v2)
+├── outbox/              # Copies of sent messages (v2)
+├── logs/                # MCP server logs (v2)
 └── keys/                # SSH key pairs
     ├── agent-bridge_MacBook-Pro
     └── agent-bridge_MacBook-Pro.pub
