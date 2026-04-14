@@ -2,6 +2,8 @@
 
 **Bridge AI coding agents across machines -- works with Claude Code, Codex, OpenClaw, Gemini CLI, Aider, and any CLI agent.**
 
+> ⚠️ **Tested end-to-end with Claude Code only (as of v2.3.3, 2026-04-14).** The Codex / Gemini CLI / OpenClaw / Aider integrations are designed to work via MCP config but haven't been exercised by the author yet. Use on those harnesses at your own risk and please report back.
+
 [![Claude Code](https://img.shields.io/badge/Claude_Code-channel_plugin-blueviolet)](https://github.com/EthanSK/agent-bridge)
 [![Codex](https://img.shields.io/badge/Codex-AGENTS.md-green)](https://github.com/EthanSK/agent-bridge)
 [![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-GEMINI.md-blue)](https://github.com/EthanSK/agent-bridge)
