@@ -1,19 +1,5 @@
 # Changelog
 
-## 2.4.0 — 2026-04-14
-
-### feat: drop openclaw integration
-
-Removed the OpenClaw companion plugin (`openclaw-plugin/`) and its skill file (`skills/openclaw/`).
-
-**Reason:** Enabling the plugin caused OpenClaw to spawn a new Claude Code session via its ACP agent backend for every bridge message — a feedback loop where each incoming message created a new Claude process. agent-bridge is now Claude-Code-only as a product. If OpenClaw support is revived later it will be its own contained integration, not a co-resident plugin in this repo.
-
-**Files deleted:**
-- `openclaw-plugin/` (bin/, src/, package.json, openclaw.plugin.json, README.md, PARITY_REPORT.md)
-- `skills/openclaw/` (SKILL.md)
-
-**Files edited:** README.md, INSTRUCTIONS.md, AGENTS.md, PLUGIN_DESIGN.md, site/index.html — all OpenClaw references removed. `mcp-server/package.json` and `mcp-server/src/index.ts` bumped to 2.4.0.
-
 ## 2.3.2 — 2026-04-14
 
 ### fix(mcp-server): tilde not expanded in remote inbox path — messages land in literal `~` directory
