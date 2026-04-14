@@ -1,27 +1,41 @@
 # agent-bridge
 
-**Bridge AI coding agents across machines -- works with Claude Code, Codex, OpenClaw, Gemini CLI, Aider, and any CLI agent.**
+**Bridge Claude Code sessions across machines. Agent-to-agent push comms over SSH.**
 
-> ⚠️ **Tested end-to-end with Claude Code only (as of v2.3.3, 2026-04-14).** The Codex / Gemini CLI / OpenClaw / Aider integrations are designed to work via MCP config but haven't been exercised by the author yet. Use on those harnesses at your own risk and please report back.
+> ⚠️ **Tested end-to-end with Claude Code only (as of v2.3.3, 2026-04-14).** Integrations for other harnesses (Codex, Gemini CLI, OpenClaw, Aider) are scaffolded via standard MCP but haven't been exercised yet. Don't assume cross-harness parity.
 
 [![Claude Code](https://img.shields.io/badge/Claude_Code-channel_plugin-blueviolet)](https://github.com/EthanSK/agent-bridge)
-[![Codex](https://img.shields.io/badge/Codex-AGENTS.md-green)](https://github.com/EthanSK/agent-bridge)
-[![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-GEMINI.md-blue)](https://github.com/EthanSK/agent-bridge)
-[![OpenClaw](https://img.shields.io/badge/OpenClaw-SKILL.md-orange)](https://github.com/EthanSK/agent-bridge)
-[![Any Agent](https://img.shields.io/badge/Any_Agent-INSTRUCTIONS.md-gray)](https://github.com/EthanSK/agent-bridge)
 
 [Website](https://ethansk.github.io/agent-bridge/) | [GitHub](https://github.com/EthanSK/agent-bridge)
 
 ---
 
+## Quick start
+
+Paste this into your Claude Code session on **each computer** you want to bridge:
+
+```
+Read the README at https://github.com/EthanSK/agent-bridge and follow the setup instructions
+for this computer. Install agent-bridge, run the setup command, and install the Claude Code
+plugin. Do everything automatically -- don't ask me questions.
+```
+
+**Prereqs (once per machine):**
+- **macOS:** System Settings > General > Sharing > toggle **Remote Login** ON > click **(i)** > set **"Allow access for"** to **All users**. Optionally toggle **"Allow full disk access for remote users"**.
+- **Linux:** `sudo systemctl enable --now sshd`
+
+Then photograph the pairing screen on one machine and send it to the Claude Code session on the other. That's the pair step; the agents handle the rest.
+
+---
+
 ## What is agent-bridge?
 
-agent-bridge lets AI coding agents on different machines talk to each other and run commands on each other's machines over SSH. It is:
+agent-bridge lets Claude Code sessions on different machines talk to each other agent-to-agent, and (optionally) run commands on each other's machines over SSH. Design goals:
 
-- **Peer-to-peer** -- no central server, no cloud, just direct SSH between machines
-- **Agent-agnostic** -- works with Claude Code, Codex, Gemini CLI, OpenClaw, Aider, or any CLI agent
-- **Zero dependencies** -- just bash, ssh, and ssh-keygen (built into every Mac and Linux)
-- **Real-time** -- messages are pushed into running Claude Code and OpenClaw sessions automatically (channel plugins), or polled by other harnesses
+- **Peer-to-peer** -- no central server, no cloud, direct SSH between your machines
+- **Real-time push** -- remote messages arrive as `<channel source="agent-bridge">` events in the running Claude Code session, no polling needed
+- **Zero dependencies** -- just bash, ssh, and node (bundled with Claude Code) -- no Docker, no services
+- **MCP-based** -- speaks standard Model Context Protocol, so other agents that consume MCP can in principle use it, but only Claude Code is the day-one confirmed harness
 
 ---
 
@@ -58,38 +72,15 @@ agent-bridge lets AI coding agents on different machines talk to each other and 
 
 ## Compatibility
 
-agent-bridge works with any AI coding agent that can run shell commands or MCP tools. It ships with skill files for the CLI and an MCP server for real-time messaging:
+| Agent Harness | Status | Integration |
+|---------------|--------|-------------|
+| **Claude Code** | ✅ **Tested end-to-end**, both machines confirmed | Channel plugin + MCP server — push-based, `<channel source="agent-bridge">` events auto-surface in the running session |
+| OpenClaw | 🟡 Scaffolded, not exercised yet | Companion plugin in [`openclaw-plugin/`](openclaw-plugin/README.md) + MCP server |
+| Codex CLI (OpenAI) | 🟡 Scaffolded, not exercised yet | MCP server + skill file at `AGENTS.md` — would poll via `bridge_receive_messages` |
+| Gemini CLI | 🟡 Scaffolded, not exercised yet | MCP server + skill file at `GEMINI.md` |
+| Aider / other MCP hosts | 🟡 Scaffolded, not exercised yet | MCP server + skill file at `INSTRUCTIONS.md` |
 
-| Agent Harness | Skill File | MCP Messaging | Delivery |
-|---------------|------------|---------------|----------|
-| **Claude Code** | `skills/bridge/skill.md` | Yes (channel plugin) | **Push** -- messages arrive automatically |
-| **OpenClaw** | `skills/openclaw/SKILL.md` | Yes (MCP server) + [channel plugin](openclaw-plugin/README.md) | **Push** (with plugin/daemon) or polling fallback |
-| **Codex CLI** (OpenAI) | `AGENTS.md` | Yes (MCP server) | Polling via `bridge_receive_messages` |
-| **Gemini CLI** | `GEMINI.md` | Yes (MCP server) | Polling via `bridge_receive_messages` |
-| **Aider / others** | `INSTRUCTIONS.md` | Yes (MCP server) | Polling via `bridge_receive_messages` |
-
-Each skill file teaches the respective agent how to use agent-bridge: listing machines, running commands, pairing from photos, and delegating work to remote agents. The MCP server adds real-time messaging between running agent sessions.
-
----
-
-## Quick start
-
-Paste this into your AI agent on **each computer** you want to bridge:
-
-```
-Read the README at https://github.com/EthanSK/agent-bridge and follow the setup instructions
-for this computer. Install agent-bridge, run the setup command, and install the skill for this
-agent. Do everything automatically -- don't ask me questions.
-```
-
-**Important -- first-time setup on each machine:**
-- **macOS:** System Settings > General > Sharing > toggle **Remote Login** ON > click the **(i)** info icon > set **"Allow access for"** to **All users**
-- **macOS (Full Disk Access):** Without this, SSH sessions can't access Desktop, Documents, or Downloads. To grant it:
-  - **Easy way (recommended):** System Settings > General > Sharing > click **(i)** next to Remote Login > toggle **"Allow full disk access for remote users"** ON
-  - **Manual way:** System Settings > Privacy & Security > Full Disk Access > click **+** > press **Cmd+Shift+G** > type `/usr/sbin/sshd` > Open > toggle ON > restart SSH: `sudo launchctl kickstart -k system/com.openssh.sshd`
-- **Linux:** `sudo systemctl enable --now sshd`
-
-Then photograph the pairing screen and send it to the agent on the other machine. That's it -- they can now talk to each other.
+"Scaffolded" means the files exist and the MCP server is harness-agnostic by design, but nobody has verified the non-Claude harnesses actually drive it correctly. If you try one of those and it works (or doesn't), open an issue — empirical reports are welcome.
 
 ---
 
