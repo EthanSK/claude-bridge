@@ -1,6 +1,6 @@
 # Agent Bridge -- Instructions for AI Agents
 
-agent-bridge lets AI coding agents run commands on other machines over SSH and send messages between running agent sessions. It works with any CLI agent (Claude Code, Codex, Gemini CLI, OpenClaw, Aider, etc.).
+agent-bridge lets AI coding agents run commands on other machines over SSH and send messages between running agent sessions. It works with any CLI agent (Claude Code, Codex, Gemini CLI, Aider, etc.).
 
 ## Quick reference
 
@@ -86,7 +86,7 @@ The agent responds using the `bridge_send_message` tool. No polling needed.
 
 ### Polling mode (all other harnesses)
 
-For Codex, Gemini CLI, OpenClaw, Aider, etc., agents call `bridge_receive_messages` to check for incoming messages. The watcher updates an internal cache so polling is fast.
+For Codex, Gemini CLI, Aider, etc., agents call `bridge_receive_messages` to check for incoming messages. The watcher updates an internal cache so polling is fast.
 
 ### Channel setup
 
@@ -114,7 +114,7 @@ Verify with `claude plugin list`. The plugin manifest lives at `.claude-plugin/m
 >
 > **Note:** `--dangerously-load-development-channels` takes a **tagged argument** (`plugin:<name>@<marketplace>` for an installed plugin's channel, or `server:<name>` for a raw MCP server) and does **both jobs in one entry**: activates the channel AND marks it as allowlist-exempt. Do NOT also add `--channels plugin:agent-bridge@agent-bridge` — that creates a second entry with `dev:false` that fails the allowlist check. Running the flag bare (no tag) also fails: `--dangerously-load-development-channels entries must be tagged: --channels plugin:<name>@<marketplace> | server:<name>`.
 
-**Other harnesses (Codex, Gemini CLI, OpenClaw, Aider):** Add to your harness's MCP config directly:
+**Other harnesses (Codex, Gemini CLI, Aider):** Add to your harness's MCP config directly:
 ```json
 {
   "mcpServers": {

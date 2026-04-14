@@ -6,7 +6,7 @@
     <title>agent-bridge &mdash; Bridge AI coding agents across machines</title>
     <meta
       name="description"
-      content="Bridge AI coding agents across machines. Native Claude Code plugin with push-based agent-to-agent messaging. Also works as an MCP server for Codex, Gemini CLI, OpenClaw, and Aider."
+      content="Bridge AI coding agents across machines. Native Claude Code plugin with push-based agent-to-agent messaging. Also works as an MCP server for Codex, Gemini CLI, and Aider."
     />
     <meta name="robots" content="index, follow, max-image-preview:large" />
     <link rel="canonical" href="https://ethansk.github.io/agent-bridge/" />
@@ -20,7 +20,7 @@
     <meta property="og:locale" content="en_GB" />
     <meta property="og:url" content="https://ethansk.github.io/agent-bridge/" />
     <meta property="og:title" content="agent-bridge &mdash; Bridge AI coding agents across machines" />
-    <meta property="og:description" content="Native Claude Code plugin with push-based agent-to-agent messaging over SSH. Also works as an MCP server for Codex, Gemini CLI, OpenClaw, and Aider." />
+    <meta property="og:description" content="Native Claude Code plugin with push-based agent-to-agent messaging over SSH. Also works as an MCP server for Codex, Gemini CLI, and Aider." />
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image" />
@@ -38,7 +38,7 @@
           <span class="logo-icon">&#x1F309;</span>
           <span class="logo-copy">
             <span class="logo-title">
-              agent-bridge <span class="logo-version">v2.3.2</span>
+              agent-bridge <span class="logo-version">v2.4.0</span>
             </span>
             <span class="logo-sub">Bridge AI agents across machines</span>
           </span>
@@ -53,14 +53,14 @@
       <header class="hero wrap">
         <div class="hero-badges">
           <span class="badge badge--accent">Now a native Claude Code plugin</span>
-          <span class="badge">v2.3.2</span>
+          <span class="badge">v2.4.0</span>
           <span class="badge">Tested with Claude Code 2.1.105</span>
         </div>
         <h1>
           Let your <span class="accent">AI agents</span> talk to each other.
         </h1>
         <p class="tagline">
-          agent-bridge lets a Claude session on one Mac push messages straight into a Claude session on another &mdash; agent-to-agent, not shell-to-shell. Installs as a single Claude Code plugin that bundles the MCP tools and the incoming channel. Also works under Codex, Gemini CLI, OpenClaw, and Aider as a plain MCP server.
+          agent-bridge lets a Claude session on one Mac push messages straight into a Claude session on another &mdash; agent-to-agent, not shell-to-shell. Installs as a single Claude Code plugin that bundles the MCP tools and the incoming channel. Also works under Codex, Gemini CLI, and Aider as a plain MCP server.
         </p>
         <div class="hero-actions">
           <a class="btn btn--primary" href="#install">
@@ -89,11 +89,11 @@
           </div>
           <div class="why-card">
             <h3>Running sessions, not new ones</h3>
-            <p>The MCP server connects <em>already-running</em> agent sessions. You&rsquo;re not spawning fresh processes on the remote box &mdash; you&rsquo;re piping into the Claude (or Codex, OpenClaw, Gemini) that&rsquo;s already sitting there.</p>
+            <p>The MCP server connects <em>already-running</em> agent sessions. You&rsquo;re not spawning fresh processes on the remote box &mdash; you&rsquo;re piping into the Claude (or Codex, Gemini) that&rsquo;s already sitting there.</p>
           </div>
           <div class="why-card">
             <h3>Works under every major harness</h3>
-            <p>Full push support under Claude Code and OpenClaw. MCP-tools support under Codex, Gemini CLI, Aider, or anything that speaks the Model Context Protocol.</p>
+            <p>Full push support under Claude Code. MCP-tools support under Codex, Gemini CLI, Aider, or anything that speaks the Model Context Protocol.</p>
           </div>
           <div class="why-card">
             <h3>Hardened against zombies</h3>
@@ -151,7 +151,7 @@ claude plugin install agent-bridge@agent-bridge</code></pre>
 
           <div class="install-panel">
             <div class="install-panel-head">
-              <h3>Codex &middot; Gemini CLI &middot; OpenClaw &middot; Aider</h3>
+              <h3>Codex &middot; Gemini CLI &middot; Aider</h3>
               <span class="panel-tag">MCP server</span>
             </div>
             <p class="panel-desc">
@@ -171,10 +171,6 @@ claude plugin install agent-bridge@agent-bridge</code></pre>
   }
 }</code></pre>
             </div>
-
-            <p class="panel-note">
-              OpenClaw users: the repo also ships an <code>openclaw-plugin/</code> companion that adds push-style delivery (messages arrive as a fresh user turn) on the OpenClaw side. See the README.
-            </p>
           </div>
 
           <div class="install-panel">
@@ -309,13 +305,6 @@ bridge_send_message({ <span class="t-bold">machine:</span> <span class="t-green"
           </div>
           <div class="feature">
             <div class="feature-icon">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-            </div>
-            <h3>OpenClaw <span class="pill">push via companion</span></h3>
-            <p>MCP tools out of the box; add the <code>openclaw-plugin/</code> companion for push-style delivery so remote messages arrive as a fresh user turn.</p>
-          </div>
-          <div class="feature">
-            <div class="feature-icon">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
             </div>
             <h3>Codex CLI</h3>
@@ -368,15 +357,15 @@ bridge_send_message({ <span class="t-bold">machine:</span> <span class="t-green"
         <h2>What&rsquo;s new.</h2>
         <ul class="changelog-list">
           <li>
-            <div class="cl-version">2.3.2</div>
+            <div class="cl-version">2.4.0</div>
             <div class="cl-body">
-              <strong>Tilde expansion fix.</strong> Messages were landing in a literal <code>~/.agent-bridge/inbox</code> shadow directory on the remote machine instead of the real <code>$HOME/.agent-bridge/inbox</code>. Fixed in <code>sshWriteFile</code> by substituting leading <code>~/</code> with <code>$HOME/</code> before quoting.
+              <strong>Dropped OpenClaw integration.</strong> Enabling it caused OpenClaw to spawn Claude Code sessions via its ACP agent backend for every bridge message &mdash; a feedback loop. agent-bridge is now Claude-Code-only as a product.
             </div>
           </li>
           <li>
-            <div class="cl-version">2.3.1</div>
+            <div class="cl-version">2.3.2</div>
             <div class="cl-body">
-              <strong>OpenClaw companion parity pass.</strong> Confirmed the OpenClaw side matches the v2.3.0 plugin-ification: zombie-proof, no hardcoded user paths, identical signal handling.
+              <strong>Tilde expansion fix.</strong> Messages were landing in a literal <code>~/.agent-bridge/inbox</code> shadow directory on the remote machine instead of the real <code>$HOME/.agent-bridge/inbox</code>. Fixed in <code>sshWriteFile</code> by substituting leading <code>~/</code> with <code>$HOME/</code> before quoting.
             </div>
           </li>
           <li>

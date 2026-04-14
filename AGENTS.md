@@ -34,7 +34,7 @@ agent-bridge setup --internet              # Start a reverse SSH tunnel
 2. **Generates an ED25519 key pair** at `~/.agent-bridge/keys/`
 3. **Adds the public key** to `~/.ssh/authorized_keys`
 4. **Displays a pairing screen** with all connection details
-5. **Auto-adds agent-bridge instructions** to detected AI harness files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.openclaw/AGENTS.md`, `~/.gemini/GEMINI.md`) so every new session knows about the bridge. This also runs during `pair`.
+5. **Auto-adds agent-bridge instructions** to detected AI harness files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`) so every new session knows about the bridge. This also runs during `pair`.
 
 ### After setup
 
@@ -160,7 +160,7 @@ No polling needed -- respond using `bridge_send_message`.
 
 ### Messaging workflow (polling mode)
 
-For harnesses without channel support (Codex, Gemini, OpenClaw, etc.):
+For harnesses without channel support (Codex, Gemini, etc.):
 1. Machine A's agent calls `bridge_send_message("MacBookPro", "check the test results")`
 2. The message is written to Machine B's `~/.agent-bridge/inbox/` via SSH
 3. Machine B's agent calls `bridge_receive_messages()` to read it
