@@ -3,9 +3,9 @@
  * Writes to ~/.agent-bridge/logs/mcp-server.log and stderr (never stdout — that's for JSON-RPC).
  */
 
-import { appendFileSync, existsSync, mkdirSync, statSync, renameSync } from 'fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, statSync, renameSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import { LOGS_DIR } from './config.js';
+import { LOGS_DIR, LOG_ROTATION_MAX_FILES } from './config.js';
 
 const LOG_FILE_NAME = 'mcp-server.log';
 const MAX_LOG_SIZE = 10 * 1024 * 1024; // 10 MB — rotate when exceeded
@@ -46,6 +46,19 @@ function rotateIfNeeded(): void {
       if (stat.size > MAX_LOG_SIZE) {
         const rotated = join(LOGS_DIR, `mcp-server-${new Date().toISOString().replace(/[:.]/g, '-')}.log`);
         renameSync(logFile, rotated);
+
+        // Enforce retention cap: delete oldest rotated files beyond LOG_ROTATION_MAX_FILES
+        try {
+          const rotatedFiles = readdirSync(LOGS_DIR)
+            .filter(f => f.startsWith('mcp-server-') && f.endsWith('.log'))
+            .map(f => ({ name: f, mtime: statSync(join(LOGS_DIR, f)).mtimeMs }))
+            .sort((a, b) => a.mtime - b.mtime); // oldest first
+
+          const overflow = rotatedFiles.length - LOG_ROTATION_MAX_FILES;
+          for (let i = 0; i < overflow; i++) {
+            try { unlinkSync(join(LOGS_DIR, rotatedFiles[i].name)); } catch { /* ignore */ }
+          }
+        } catch { /* ignore */ }
       }
     }
   } catch {

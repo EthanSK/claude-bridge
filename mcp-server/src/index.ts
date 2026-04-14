@@ -81,7 +81,7 @@ async function main(): Promise<void> {
   const server = new McpServer(
     {
       name: 'agent-bridge',
-      version: '2.3.2',
+      version: '2.3.3',
     },
     {
       capabilities: {

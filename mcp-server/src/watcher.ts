@@ -33,6 +33,19 @@ let watcherProcess: ChildProcess | null = null;
 let pollInterval: ReturnType<typeof setInterval> | null = null;
 let knownFiles = new Set<string>();
 
+/** Maximum entries in knownFiles before evicting oldest (insertion-order). */
+const KNOWN_FILES_MAX = 2000;
+
+function addKnownFile(name: string): void {
+  if (knownFiles.has(name)) return;
+  if (knownFiles.size >= KNOWN_FILES_MAX) {
+    // Evict the oldest entry (Sets iterate in insertion order)
+    const first = knownFiles.values().next().value;
+    if (first !== undefined) knownFiles.delete(first);
+  }
+  knownFiles.add(name);
+}
+
 /** Current backend used for watching. */
 let currentBackend: 'fswatch' | 'inotifywait' | 'polling' | 'unknown' = 'unknown';
 
@@ -103,7 +116,7 @@ function checkForNewFiles(callback: MessageCallback): void {
     if (newFiles.length > 0) {
       logDebug(`Watcher detected ${newFiles.length} new message(s)`);
       for (const f of newFiles) {
-        knownFiles.add(f);
+        addKnownFile(f);
       }
       // Notify the inbox cache
       notifyNewFiles(newFiles);
@@ -211,7 +224,7 @@ function setupFswatchHandler(proc: ChildProcess, callback: MessageCallback): voi
         if (seen.has(name)) continue;
         seen.add(name);
         if (!knownFiles.has(name)) {
-          knownFiles.add(name);
+          addKnownFile(name);
           newNames.push(name);
         }
       }
@@ -270,7 +283,7 @@ function setupInotifywaitHandler(
       .filter(f => f.endsWith('.json'));
     if (files.length > 0) {
       for (const f of files) {
-        knownFiles.add(f);
+        addKnownFile(f);
       }
       notifyNewFiles(files);
       invalidateCache();

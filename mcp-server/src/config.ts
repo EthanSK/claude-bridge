@@ -36,6 +36,14 @@ export const DEFAULT_TTL_SECONDS = parseInt(
   10,
 ); // 1 hour
 export const PROCESSED_FILE_MAX_SIZE = 512 * 1024; // 512 KB — rotate when exceeded
+export const OUTBOX_MAX_AGE_MS = parseInt(
+  process.env.BRIDGE_OUTBOX_MAX_AGE_MS ?? String(7 * 24 * 60 * 60 * 1000),
+  10,
+); // 7 days — outbox copies are for debugging only
+export const LOG_ROTATION_MAX_FILES = parseInt(
+  process.env.BRIDGE_LOG_ROTATION_MAX_FILES ?? '5',
+  10,
+); // keep at most N rotated log files
 
 export interface MachineConfig {
   name: string;

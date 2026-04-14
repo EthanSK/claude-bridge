@@ -34,6 +34,7 @@ import {
   PRUNE_MAX_INBOX_SIZE,
   PRUNE_INTERVAL_MS,
   DEFAULT_TTL_SECONDS,
+  OUTBOX_MAX_AGE_MS,
 } from './config.js';
 import { sshWriteFile } from './ssh.js';
 import { logInfo, logWarn, logError, logDebug } from './logger.js';
@@ -558,6 +559,39 @@ export function pruneInbox(): number {
 }
 
 /**
+ * Prune outbox: remove sent-message copies older than OUTBOX_MAX_AGE_MS.
+ * The outbox is purely a debugging aid — old entries have no operational value.
+ */
+export function pruneOutbox(): number {
+  let pruned = 0;
+  const nowMs = Date.now();
+
+  let files: string[];
+  try {
+    files = readdirSync(OUTBOX_DIR).filter(f => f.endsWith('.json'));
+  } catch {
+    return 0;
+  }
+
+  for (const fileName of files) {
+    const filePath = join(OUTBOX_DIR, fileName);
+    try {
+      const stat = statSync(filePath);
+      if (nowMs - stat.mtimeMs > OUTBOX_MAX_AGE_MS) {
+        unlinkSync(filePath);
+        pruned++;
+      }
+    } catch { /* ignore */ }
+  }
+
+  if (pruned > 0) {
+    logInfo(`Outbox prune: removed ${pruned} old sent-message copy(s)`);
+  }
+
+  return pruned;
+}
+
+/**
  * Start the periodic prune timer.
  */
 export function startPruneTimer(): void {
@@ -566,10 +600,12 @@ export function startPruneTimer(): void {
   // Run immediately on startup
   logInfo('Running startup prune pass...');
   pruneInbox();
+  pruneOutbox();
 
   pruneTimer = setInterval(() => {
     logDebug('Running periodic prune pass...');
     pruneInbox();
+    pruneOutbox();
   }, PRUNE_INTERVAL_MS);
 
   // Don't block shutdown
