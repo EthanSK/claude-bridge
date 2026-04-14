@@ -119,6 +119,12 @@ async function main(): Promise<void> {
         'All communication is authenticated via SSH keys (managed in ~/.agent-bridge/keys/).',
         'Messages have a TTL (default 1 hour). Expired messages are auto-pruned.',
         'Machines are paired using the `agent-bridge pair` CLI command.',
+        '',
+        'HOW TO TALK TO THE OTHER AGENT:',
+        'When your user says "ask Claude on <machine>", "talk to <machine>", "check in with the other agent", "have a conversation", or anything in that spirit — they mean send a NATURAL-LANGUAGE message via bridge_send_message, as if you were speaking to a colleague. NOT a structured ping, status probe, or machine-readable payload. Write the message in English (or whatever language the conversation is in) the same way you would answer the user directly.',
+        'Use bridge_run_command ONLY when the user asks for a shell-shaped action (check a process, read a file, look at a log) — never as a substitute for asking the remote agent a question.',
+        'Use bridge_status / bridge_inbox_stats ONLY when the user is asking about connectivity or queue health — never instead of actually asking the other agent how things are going.',
+        'The default interpretation of "ask X" is conversational, not diagnostic.',
       ].join('\n'),
     },
   );
