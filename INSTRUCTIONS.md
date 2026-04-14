@@ -109,10 +109,10 @@ Verify with `claude plugin list`. The plugin manifest lives at `.claude-plugin/m
 > The flag is required **until the plugin is published through an official GitHub marketplace** Claude Code's allowlist trusts. Add it to your launch alias, e.g.:
 >
 > ```bash
-> alias claude-tel='claude --dangerously-skip-permissions --dangerously-load-development-channels plugin:agent-bridge@agent-bridge --channels plugin:telegram@claude-plugins-official --channels plugin:agent-bridge@agent-bridge'
+> alias claude-tel='claude --dangerously-skip-permissions --channels plugin:telegram@claude-plugins-official --dangerously-load-development-channels plugin:agent-bridge@agent-bridge'
 > ```
 >
-> **Note:** `--dangerously-load-development-channels` takes a **tagged argument** (the channel it's trusting), not a bare flag. Tags are `plugin:<name>@<marketplace>` for an installed plugin's channel, or `server:<name>` for a raw MCP server. Running it bare fails with: `--dangerously-load-development-channels entries must be tagged: --channels plugin:<name>@<marketplace> | server:<name>`.
+> **Note:** `--dangerously-load-development-channels` takes a **tagged argument** (`plugin:<name>@<marketplace>` for an installed plugin's channel, or `server:<name>` for a raw MCP server) and does **both jobs in one entry**: activates the channel AND marks it as allowlist-exempt. Do NOT also add `--channels plugin:agent-bridge@agent-bridge` — that creates a second entry with `dev:false` that fails the allowlist check. Running the flag bare (no tag) also fails: `--dangerously-load-development-channels entries must be tagged: --channels plugin:<name>@<marketplace> | server:<name>`.
 
 **Other harnesses (Codex, Gemini CLI, OpenClaw, Aider):** Add to your harness's MCP config directly:
 ```json

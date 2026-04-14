@@ -379,10 +379,10 @@ Verify with `claude plugin list` — you should see `agent-bridge@agent-bridge  
 **Launch alias (both halves + dev-channel flag):**
 
 ```bash
-alias claude-tel='claude --dangerously-skip-permissions --dangerously-load-development-channels plugin:agent-bridge@agent-bridge --channels plugin:telegram@claude-plugins-official --channels plugin:agent-bridge@agent-bridge'
+alias claude-tel='claude --dangerously-skip-permissions --channels plugin:telegram@claude-plugins-official --dangerously-load-development-channels plugin:agent-bridge@agent-bridge'
 ```
 
-> **Important:** `--dangerously-load-development-channels` takes a **tagged argument** — the channel(s) you're trusting. Tags use `plugin:<name>@<marketplace>` for installed-plugin channels or `server:<name>` for raw MCP servers. Passing the flag bare fails at launch: `--dangerously-load-development-channels entries must be tagged: --channels plugin:<name>@<marketplace> | server:<name>`.
+> **Important:** `--dangerously-load-development-channels` takes a **tagged argument** (`plugin:<name>@<marketplace>` for an installed-plugin channel, or `server:<name>` for a raw MCP server) and does **both jobs in one entry**: activates the channel AND marks it as allowlist-exempt. **Do NOT also add `--channels plugin:agent-bridge@agent-bridge`** on top of it — that creates a second entry with `dev:false` that fails the allowlist check and you're back to the original error. Passing the flag bare (no tag) also fails: `--dangerously-load-development-channels entries must be tagged: --channels plugin:<name>@<marketplace> | server:<name>`.
 
 **Why the flag is still required:** Earlier versions of this doc claimed the plugin install removed the need for `--dangerously-load-development-channels`. That was wrong. Claude Code's channel allowlist gates on the marketplace's trust status, not just whether the plugin is installed. A **local directory marketplace** is by definition a dev source, so the allowlist rejects channels from it without the flag. The flag becomes unnecessary only once the plugin is published through an official marketplace Claude Code trusts.
 
