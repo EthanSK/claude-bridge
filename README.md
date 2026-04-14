@@ -2,7 +2,9 @@
 
 **Bridge Claude Code sessions across machines. Agent-to-agent push comms over SSH.**
 
-> ⚠️ **Tested end-to-end with Claude Code only (as of v2.3.3, 2026-04-14).** Integrations for other harnesses (Codex, Gemini CLI, OpenClaw, Aider) are scaffolded via standard MCP but haven't been exercised yet. Don't assume cross-harness parity.
+> ⚠️ **Tested end-to-end with Claude Code only (as of v3.0.0, 2026-04-14).** Integrations for other harnesses (Codex, Gemini CLI, OpenClaw, Aider) are scaffolded via standard MCP but haven't been exercised yet. Don't assume cross-harness parity.
+>
+> ⚠️ **Breaking change in 3.0.0:** the `--claude`, `--codex`, and `--agent` flags on `agent-bridge run` have been removed. Agent-to-agent communication is channel-mode only (`bridge_send_message` → inbox drop → running remote agent's context). See [CHANGELOG.md](CHANGELOG.md) for details. The plain-shell `agent-bridge run <machine> "<cmd>"` is still supported for diagnostics.
 
 [![Claude Code](https://img.shields.io/badge/Claude_Code-channel_plugin-blueviolet)](https://github.com/EthanSK/agent-bridge)
 
@@ -150,6 +152,22 @@ $ agent-bridge pair \
 
 ### Step 3: Use
 
+**Talking to the running agent on the other machine — from inside an agent session (the main use case):**
+
+```
+# From Claude Code on Machine A, the channel plugin gives you:
+bridge_send_message("MacBook-Pro", "can you check whether the tests pass in ~/Projects/myapp and tell me what broke?")
+
+# Over on MacBook-Pro, the running Claude session sees, pushed into its context:
+<channel source="agent-bridge" from="Mac-Mini" message_id="msg-..." ts="...">
+can you check whether the tests pass in ~/Projects/myapp and tell me what broke?
+</channel>
+
+# And it replies with bridge_send_message the same way, back to Mac-Mini.
+```
+
+**Plain remote shell — from a terminal (diagnostics only):**
+
 ```
 $ agent-bridge run MacBook-Pro "uname -a"
   Running command on MacBook-Pro...
@@ -157,15 +175,11 @@ Darwin MacBookPro.local 25.3.0 Darwin Kernel Version 25.3.0...
 
   [ok] command completed on MacBook-Pro (exit 0)
 
-$ agent-bridge run MacBook-Pro "what files are in ~/Projects?" --claude
-  Running Claude prompt on MacBook-Pro...
-The ~/Projects directory contains:
-  - producer-player/
-  - ai-music-video-studio/
-  - agent-bridge/
-
-  [ok] Claude prompt completed on MacBook-Pro (exit 0)
+$ agent-bridge run MacBook-Pro "cd ~/Projects/agent-bridge && git status"
+  ...
 ```
+
+> **Note:** `agent-bridge run` is a plain-shell utility — it does NOT invoke an agent. To talk to the running agent on the other machine, use the channel plugin's `bridge_send_message` tool (see above). The old `--claude` / `--codex` / `--agent` flags that spawned a fresh non-interactive agent session on the remote machine were removed in 3.0.0.
 
 ### Optional: Internet tunnel
 
@@ -277,11 +291,10 @@ agent-bridge run MacBook-Pro "uname -a"
 | `agent-bridge connect <machine>` | Open an interactive SSH session. |
 | `agent-bridge status [machine]` | Check if machine(s) are reachable. |
 | `agent-bridge list` | List all paired machines. |
-| `agent-bridge run <machine> "cmd"` | Run a command on a paired machine. |
-| `agent-bridge run <machine> "prompt" --claude` | Run a Claude Code prompt on the remote machine. |
-| `agent-bridge run <machine> "prompt" --agent` | Run a prompt via any agent (default: `claude --print`). |
-| `agent-bridge run <machine> "prompt" --codex` | Run a Codex prompt on the remote machine. |
+| `agent-bridge run <machine> "cmd"` | Run a PLAIN shell command on a paired machine (diagnostics only — no agent wrapping). |
 | `agent-bridge unpair <machine>` | Remove a pairing. |
+
+> To talk to the **running agent** on the other machine, use the channel plugin's `bridge_send_message` MCP tool. `agent-bridge run` does not spawn agents. The old `--claude` / `--codex` / `--agent` flags were removed in 3.0.0.
 
 ### Setup options
 
@@ -661,17 +674,20 @@ agent-bridge run MacBook "cmd"
       |-> display result
 ```
 
-For agent-to-agent communication:
+For agent-to-agent communication (channel mode — the only supported path):
 ```
-Claude on Machine A                     Machine B
--------------------                    ---------
-"fix the tests on MacBook"
-  |-> agent-bridge run MacBook \
-        "fix failing tests" --claude
-      |-> SSH ----------------------> claude --print "fix failing tests"
-      |-> capture output     <-------- Claude's response
-      |-> display to user
+Claude on Machine A                             Claude on Machine B
+-------------------                             -------------------
+bridge_send_message("MacBook", "fix the tests")
+  |-> SSH writes JSON to ~/.agent-bridge/inbox/ on MacBook
+      |-> file watcher on MacBook picks it up
+          |-> channel plugin pushes it into MacBook's RUNNING
+              Claude session as <channel source="agent-bridge" ...>
+              |-> MacBook's Claude reads it in-context and replies via
+                  bridge_send_message back to Mac-Mini
 ```
+
+No fresh agent is spawned on the remote machine — the message lands in the context of the already-running session. This is the whole point of the project. If you want the equivalent of the old `--claude` flag, you don't — use `bridge_send_message` and let the existing remote session handle it.
 
 ---
 
@@ -784,9 +800,14 @@ agent-bridge run MacBook-Pro "cd ~/Projects/myapp && git pull && npm install && 
 ```
 
 ### Ask the remote agent to do work
-```bash
-agent-bridge run MacBook-Pro "review the code in ~/Projects/myapp and suggest improvements" --claude
+
+From inside an agent session with the channel plugin loaded, call:
+
 ```
+bridge_send_message("MacBook-Pro", "review the code in ~/Projects/myapp and suggest improvements")
+```
+
+The message is pushed into the running Claude Code session on MacBook-Pro as a `<channel source="agent-bridge" ...>` event, and its reply comes back the same way. Do NOT shell out to `agent-bridge run ... --claude` — that path was removed in 3.0.0 because it spawned a fresh non-interactive agent instead of using the live session.
 
 ### Check system status
 ```bash

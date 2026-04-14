@@ -9,13 +9,12 @@ agent-bridge setup                              # Enable SSH, generate keys, sho
 agent-bridge pair --name "X" --host IP --port 22 --user U --token T --pubkey "ssh-ed25519 ..."
 agent-bridge list                               # List paired machines
 agent-bridge status [machine]                   # Check reachability
-agent-bridge run <machine> "command"            # Run a shell command remotely
-agent-bridge run <machine> "prompt" --agent     # Run an AI agent prompt remotely (default: claude --print)
-agent-bridge run <machine> "prompt" --claude    # Shorthand for --agent "claude --print"
-agent-bridge run <machine> "prompt" --codex     # Shorthand for --agent "codex exec"
+agent-bridge run <machine> "command"            # Run a PLAIN shell command remotely (diagnostics only)
 agent-bridge connect <machine>                  # Open interactive SSH session
 agent-bridge unpair <machine>                   # Remove a pairing
 ```
+
+> **Agent-to-agent communication is channel-mode only.** To talk to the running agent on another machine, use the `bridge_send_message` MCP tool — NOT a shell wrapper. The `--claude` / `--codex` / `--agent` flags on `agent-bridge run` were removed in 3.0.0 because they spawned a fresh non-interactive agent session on the remote machine, which defeats the whole point of this project (bridging EXISTING live sessions).
 
 ## Setup flow
 
@@ -38,14 +37,17 @@ Then run:
 agent-bridge pair --name "<name>" --host "<ip>" --port <port> --user "<user>" --token "<token>" --pubkey "<pubkey>"
 ```
 
-## Remote agent execution
+## Talking to the running remote agent
 
-The `--agent` flag wraps a prompt in an agent command on the remote machine:
-```bash
-agent-bridge run MacBook "fix the tests" --agent                    # Uses "claude --print"
-agent-bridge run MacBook "fix the tests" --agent "codex exec"       # Uses Codex
-agent-bridge run MacBook "fix the tests" --agent "aider --message"  # Uses Aider
+Use `bridge_send_message` from the MCP server:
+
 ```
+bridge_send_message("MacBook", "fix the failing tests in ~/Projects/myapp")
+```
+
+The message is delivered to `~/.agent-bridge/inbox/` on the remote machine over SSH. The running agent's file watcher picks it up and pushes it into the live session as a `<channel source="agent-bridge" ...>` event — no new agent is spawned.
+
+There is no fresh-spawn / `--print` equivalent. The old `agent-bridge run ... --claude` flag was removed in 3.0.0.
 
 ## Architecture
 

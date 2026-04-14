@@ -30,14 +30,13 @@ Activate when the user says things like:
 agent-bridge setup                              # Enable SSH, generate keys, show pairing screen
 agent-bridge list                               # List paired machines
 agent-bridge status [machine]                   # Check reachability
-agent-bridge run <machine> "command"            # Run a shell command remotely
-agent-bridge run <machine> "prompt" --agent     # Run an AI agent prompt (default: claude --print)
-agent-bridge run <machine> "prompt" --claude    # Shorthand for --agent "claude --print"
-agent-bridge run <machine> "prompt" --codex     # Shorthand for --agent "codex exec"
+agent-bridge run <machine> "command"            # Run a PLAIN shell command remotely (diagnostics only)
 agent-bridge connect <machine>                  # Open interactive SSH session
 agent-bridge pair                               # Pair with another machine
 agent-bridge unpair <machine>                   # Remove a pairing
 ```
+
+> To talk to the running agent on another machine, use `bridge_send_message` (see MCP tools below). `agent-bridge run` is shell-only. The `--claude`, `--codex`, and `--agent` flags were removed in 3.0.0.
 
 ## MCP tools (if MCP server is configured)
 
@@ -79,7 +78,13 @@ When given a photo of a pairing screen:
 ## Examples
 
 ```bash
+# Plain shell diagnostics:
 agent-bridge run MacBook-Pro "ls -la ~/Projects"
 agent-bridge run MacBook-Pro "cd ~/Projects/myapp && git pull && npm run build"
-agent-bridge run MacBook-Pro "review the code in ~/Projects/myapp" --agent
+```
+
+To ask the running remote agent to do work, use `bridge_send_message` (MCP), NOT the CLI:
+
+```
+bridge_send_message("MacBook-Pro", "review the code in ~/Projects/myapp")
 ```

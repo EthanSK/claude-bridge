@@ -27,13 +27,12 @@ This enables SSH, generates an ED25519 key pair, and displays a pairing screen. 
 |---------|-------------|
 | `agent-bridge list` | List all paired machines |
 | `agent-bridge status [machine]` | Check if machine(s) are reachable |
-| `agent-bridge run <machine> "cmd"` | Run a command on a paired machine |
-| `agent-bridge run <machine> "prompt" --agent` | Run an AI agent prompt remotely (default: claude --print) |
-| `agent-bridge run <machine> "prompt" --claude` | Shorthand for --agent "claude --print" |
-| `agent-bridge run <machine> "prompt" --codex` | Shorthand for --agent "codex exec" |
+| `agent-bridge run <machine> "cmd"` | Run a PLAIN shell command on a paired machine (diagnostics only — no agent wrapping) |
 | `agent-bridge connect <machine>` | Open an interactive SSH session |
 | `agent-bridge pair` | Pair with another machine (interactive or flags) |
 | `agent-bridge unpair <machine>` | Remove a pairing |
+
+> To communicate with the **running agent** on another machine, use the `bridge_send_message` MCP tool from the agent-bridge channel plugin. `agent-bridge run` does not spawn or invoke an agent. The `--claude` / `--codex` / `--agent` flags were removed in 3.0.0.
 
 ## Pairing from a photo
 
@@ -51,8 +50,8 @@ agent-bridge run MacBook-Pro "ls -la ~/Projects"
 # Deploy
 agent-bridge run MacBook-Pro "cd ~/Projects/myapp && git pull && npm install && npm run build"
 
-# Ask remote agent to review code
-agent-bridge run MacBook-Pro "review the code in ~/Projects/myapp" --agent
+# Ask remote agent to review code — use the MCP tool, NOT a shell wrapper
+#   bridge_send_message("MacBook-Pro", "review the code in ~/Projects/myapp")
 
 # Check system status
 agent-bridge run MacBook-Pro "uptime && df -h"

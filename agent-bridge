@@ -9,7 +9,7 @@ set -euo pipefail
 
 INVOKED_AS="$(basename "$0")"
 
-VERSION="5.0.0"
+VERSION="3.0.0"
 
 # -- Colours (ANSI) ----------------------------------------------------------
 RED='\033[0;31m'
@@ -296,9 +296,13 @@ This machine has agent-bridge installed for cross-machine communication.
 
 Paired machines (check with `agent-bridge list`):
 - Run `agent-bridge status` to check which machines are reachable
-- Run `agent-bridge run <machine> "command"` to execute commands remotely
-- Run `agent-bridge run <machine> "prompt" --claude` to run Claude prompts on remote machines
+- Run `agent-bridge run <machine> "command"` to execute a plain shell command remotely (diagnostics only — e.g. `git status`, `ls`, `ps aux`)
 - Run `agent-bridge connect <machine>` for interactive SSH
+
+To talk to the RUNNING agent on another paired machine, use the channel plugin's
+`bridge_send_message` MCP tool. This is the ONLY supported way to communicate
+agent-to-agent. `agent-bridge run` does NOT invoke a remote agent — it is a plain
+remote-shell utility. There are no `--claude` / `--codex` / `--agent` flags.
 
 Config: `~/.agent-bridge/config` | Keys: `~/.agent-bridge/keys/`
 
@@ -881,20 +885,14 @@ cmd_connect_help() {
 }
 
 cmd_run() {
-  local machine_name="" command="" agent_cmd=""
+  local machine_name="" command=""
 
   # Parse args — machine and command are positional
   while [ $# -gt 0 ]; do
     case "$1" in
-      --agent)
-        if [ $# -gt 1 ] && [[ ! "$2" =~ ^- ]]; then
-          agent_cmd="$2"; shift 2
-        else
-          agent_cmd="claude --print"; shift
-        fi
+      --agent|--claude|--codex)
+        die "The $1 flag was removed in agent-bridge 3.0.0. 'agent-bridge run' is a plain remote-shell utility only — it does NOT spawn agents. To talk to the running agent on another machine, use the channel plugin's bridge_send_message MCP tool."
         ;;
-      --claude)  agent_cmd="claude --print"; shift ;;
-      --codex)   agent_cmd="codex exec"; shift ;;
       --help|-h) cmd_run_help; exit 0 ;;
       -*)        die "Unknown option: $1" ;;
       *)
@@ -910,8 +908,8 @@ cmd_run() {
     esac
   done
 
-  [ -z "$machine_name" ] && die "Machine name required. Usage: agent-bridge run <machine> \"command\" [--agent \"cmd\"]"
-  [ -z "$command" ] && die "Command required. Usage: agent-bridge run <machine> \"command\" [--agent \"cmd\"]"
+  [ -z "$machine_name" ] && die "Machine name required. Usage: agent-bridge run <machine> \"shell command\""
+  [ -z "$command" ] && die "Command required. Usage: agent-bridge run <machine> \"shell command\""
 
   if ! cfg_exists "$machine_name"; then
     die "Machine \"$machine_name\" not found. Run 'agent-bridge list' to see paired machines."
@@ -924,45 +922,40 @@ cmd_run() {
   keypath="$(cfg_get "$machine_name" key 2>/dev/null || true)"
   keypath="${keypath/#\~/$HOME}"
 
-  local final_command="$command"
-  local label="command"
-  if [ -n "$agent_cmd" ]; then
-    # Escape single quotes
-    local escaped="${command//\'/\'\\\'\'}"
-    final_command="${agent_cmd} '${escaped}'"
-    label="agent prompt (${agent_cmd})"
-  fi
-
-  printf "${DIM}  Running %s on %s...${RESET}\n" "$label" "$machine_name"
+  printf "${DIM}  Running command on %s...${RESET}\n" "$machine_name"
 
   local args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-p" "$port")
   if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
     args+=("-i" "$keypath")
   fi
-  args+=("${user}@${host}" "$final_command")
+  args+=("${user}@${host}" "$command")
 
   local exit_code=0
   ssh "${args[@]}" || exit_code=$?
 
   printf '\n'
   if [ "$exit_code" -eq 0 ]; then
-    ok "$label completed on $machine_name (exit 0)"
+    ok "command completed on $machine_name (exit 0)"
   else
-    printf "${YELLOW}  %s on %s exited with code %d.${RESET}\n" "$label" "$machine_name" "$exit_code"
+    printf "${YELLOW}  command on %s exited with code %d.${RESET}\n" "$machine_name" "$exit_code"
   fi
 
   exit "$exit_code"
 }
 
 cmd_run_help() {
-  printf 'Usage: agent-bridge run <machine> "command" [--agent "cmd"]\n\n'
-  printf 'Run a command on a paired machine.\n\n'
+  printf 'Usage: agent-bridge run <machine> "shell command"\n\n'
+  printf 'Run a PLAIN shell command on a paired machine over SSH.\n\n'
+  printf 'This is a diagnostic utility — use it for things like `git status`,\n'
+  printf '`ls ~/Projects`, `ps aux`, checking file paths, tailing logs, etc.\n\n'
+  printf 'To talk to the RUNNING agent on another paired machine, use the\n'
+  printf 'agent-bridge channel plugin and its `bridge_send_message` MCP tool.\n'
+  printf 'That is the ONLY supported agent-to-agent communication path.\n\n'
+  printf 'The `--claude`, `--codex`, and `--agent` flags were REMOVED in\n'
+  printf 'agent-bridge 3.0.0. They spawned a new non-interactive agent session\n'
+  printf 'on the remote machine (e.g. `claude --print`), which is exactly what\n'
+  printf 'this project is NOT meant to encourage.\n\n'
   printf 'Options:\n'
-  printf '  --agent [cmd]  Wrap prompt in an AI agent command on the remote machine.\n'
-  printf '                 Default: "claude --print" if no cmd specified.\n'
-  printf '                 Examples: --agent "codex exec", --agent "aider --message"\n'
-  printf '  --claude       Shorthand for --agent "claude --print"\n'
-  printf '  --codex        Shorthand for --agent "codex exec"\n'
   printf '  -h, --help     Show this help\n'
 }
 
@@ -1153,20 +1146,23 @@ cmd_help() {
   printf '  setup              Enable SSH, generate keys, show pairing screen (--internet for tunnel)\n'
   printf '  pair               Pair with another machine (interactive or flags)\n'
   printf '  connect <machine>  Open an interactive SSH session\n'
-  printf '  run <machine> "cmd"  Run a command remotely (add --agent for AI agent prompts)\n'
+  printf '  run <machine> "cmd"  Run a plain shell command on a paired machine (diagnostics only)\n'
   printf '  list               List all paired machines\n'
   printf '  status [machine]   Check reachability\n'
   printf '  unpair <machine>   Remove a pairing\n'
   printf '  version            Show version\n'
   printf '  help               Show this help\n'
   printf '\n'
+  printf "${BOLD}Agent-to-agent communication:${RESET}\n"
+  printf "  Talking to the RUNNING agent on another machine is done via the\n"
+  printf "  Claude Code channel plugin and its bridge_send_message MCP tool.\n"
+  printf "  The CLI does NOT wrap or spawn agents — 'run' is shell-only.\n"
+  printf '\n'
   printf "${BOLD}Examples:${RESET}\n"
   printf '  agent-bridge setup --name MacBook-Pro\n'
   printf '  agent-bridge pair --host 192.168.1.50 --user ethan --name MacBook-Pro --pubkey "ssh-ed25519 AAAA..."\n'
   printf '  agent-bridge run MacBook-Pro "ls -la ~/Projects"\n'
-  printf '  agent-bridge run MacBook-Pro "fix the tests" --agent "claude --print"\n'
-  printf '  agent-bridge run MacBook-Pro "fix the tests" --claude\n'
-  printf '  agent-bridge run MacBook-Pro "refactor utils" --codex\n'
+  printf '  agent-bridge run MacBook-Pro "cd ~/Projects/myapp && git pull"\n'
   printf '  agent-bridge connect MacBook-Pro\n'
   printf '\n'
   printf 'https://github.com/EthanSK/agent-bridge\n'

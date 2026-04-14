@@ -1,5 +1,62 @@
 # Changelog
 
+## 3.0.0 — 2026-04-14
+
+### BREAKING: remove fresh-spawn agent wrappers — channel mode only
+
+The `--claude`, `--codex`, and `--agent` flags have been removed from
+`agent-bridge run`. These flags wrapped the user's prompt in a remote
+`claude --print` / `codex exec` / custom agent CLI invocation, spawning a
+NEW non-interactive agent session on the remote machine. That's the exact
+opposite of what this project is for.
+
+Agent-to-agent communication is now EXCLUSIVELY via channel mode:
+
+    bridge_send_message (MCP tool)
+      -> inbox file drop over SSH
+      -> remote file watcher
+      -> pushed into the RUNNING agent's conversation context
+         as <channel source="agent-bridge" ...>content</channel>
+
+The whole point of agent-bridge is to connect EXISTING, already-running
+agent sessions — not to spawn fresh ones.
+
+**What was removed:**
+
+- `agent-bridge run <machine> "..." --claude` (shorthand for `claude --print`)
+- `agent-bridge run <machine> "..." --codex` (shorthand for `codex exec`)
+- `agent-bridge run <machine> "..." --agent "<cli>"` (arbitrary wrapper)
+- All doc examples, help text, site copy, and skill/plugin instructions
+  referencing the above.
+
+**What was kept:**
+
+- `agent-bridge run <machine> "<shell cmd>"` — plain SSH remote-shell
+  utility, useful for diagnostics (`git pull`, `ls ~/Projects`, `ps aux`,
+  checking file paths, tailing a log). No agent wrapper.
+- `bridge_send_message`, `bridge_receive_messages`, and the rest of the
+  channel-mode machinery — unchanged and still the core of the project.
+- `setup` / `pair` / `list` / `status` / `unpair` / `connect` / `version` /
+  `help` — unchanged.
+
+**Migration:**
+
+| Before | After |
+|--------|-------|
+| `agent-bridge run MacBook-Pro "fix the tests" --claude` | From an agent: use `bridge_send_message("MacBook-Pro", "fix the tests")` so the running remote agent picks it up on its channel. |
+| `agent-bridge run MacBook-Pro "..." --codex` | Same — send via `bridge_send_message`; the remote agent (whichever harness it is) receives the message in its live session. |
+| `agent-bridge run MacBook-Pro "..." --agent "<cli>"` | Same. |
+| `agent-bridge run MacBook-Pro "uname -a"` | Unchanged — plain shell still works. |
+
+Running any of the removed flags now prints an explicit error pointing at
+`bridge_send_message`.
+
+**Version alignment:**
+
+- CLI (`agent-bridge`): `VERSION="3.0.0"` (previously `5.0.0`).
+- MCP server (`mcp-server/package.json`, plugin manifest, server
+  `McpServer` version string): `3.0.0` (previously `2.3.x`).
+
 ## 2.3.2 — 2026-04-14
 
 ### fix(mcp-server): tilde not expanded in remote inbox path — messages land in literal `~` directory
@@ -70,6 +127,8 @@ claude plugin install agent-bridge@agent-bridge
 - `mcp-server/.claude-plugin/plugin.json` — plugin manifest.
 - `mcp-server/.mcp.json` — registers the unified MCP+channel server with `${CLAUDE_PLUGIN_ROOT}` path resolution.
 
-The bash `agent-bridge` CLI is unchanged and still installed via `./install.sh` for pairing, SSH transport, and `agent-bridge run … --claude` agent-to-agent prompts. The plugin and the CLI coexist.
+The bash `agent-bridge` CLI is unchanged and still installed via `./install.sh` for pairing and SSH transport. The plugin and the CLI coexist.
+
+> **Historical note (3.0.0):** this release originally documented `agent-bridge run … --claude` as an agent-to-agent prompt path. That mechanism was removed in 3.0.0 — see the 3.0.0 entry above. Channel mode (`bridge_send_message`) is the only supported agent-to-agent path.
 
 The unified server logic (single Node process advertising MCP tools AND emitting `notifications/claude/channel`) was already in place from v2.2.0; this release wires it into the Claude Code plugin system. All EPIPE / SIGHUP / orphan-watchdog hardening from `a88d614` is preserved verbatim.

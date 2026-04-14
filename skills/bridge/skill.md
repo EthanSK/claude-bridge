@@ -62,27 +62,24 @@ agent-bridge status              # All machines
 agent-bridge status MacBook-Pro  # Specific machine
 ```
 
-### Run a command remotely
+### Run a plain shell command remotely (diagnostics only)
 ```bash
 agent-bridge run MacBook-Pro "ls -la ~/Projects"
+agent-bridge run MacBook-Pro "cd ~/Projects/myapp && git status"
 agent-bridge run MacBook-Pro "brew update && brew upgrade"
 ```
 
-### Run an AI agent prompt on a remote machine
-```bash
-# Default (Claude Code):
-agent-bridge run MacBook-Pro "fix the failing tests in ~/Projects/myapp" --agent
+> `agent-bridge run` is a plain remote-shell utility. It does NOT spawn or invoke an agent. The `--claude`, `--codex`, and `--agent` flags were removed in 3.0.0 — they ran a fresh non-interactive agent session on the remote machine, which is the opposite of what this project is for.
 
-# Specify an agent explicitly:
-agent-bridge run MacBook-Pro "fix the failing tests" --agent "claude --print"
-agent-bridge run MacBook-Pro "fix the failing tests" --agent "codex exec"
-agent-bridge run MacBook-Pro "fix the failing tests" --agent "aider --message"
+### Talk to the RUNNING remote agent (agent-to-agent)
 
-# Shorthands:
-agent-bridge run MacBook-Pro "fix the failing tests" --claude
-agent-bridge run MacBook-Pro "fix the failing tests" --codex
+Use the `bridge_send_message` MCP tool from the channel plugin:
+
 ```
-The `--agent` flag wraps the prompt in the specified agent command on the remote machine. Without a value, it defaults to `claude --print`.
+bridge_send_message("MacBook-Pro", "fix the failing tests in ~/Projects/myapp")
+```
+
+The message is pushed into the live Claude session on MacBook-Pro as a `<channel source="agent-bridge" ...>` event, and the reply comes back the same way. This is the only supported agent-to-agent path.
 
 ### Open an interactive SSH session
 ```bash
@@ -135,9 +132,14 @@ agent-bridge run MacBook-Pro "cd ~/Projects/myapp && git pull && npm install && 
 ```
 
 ### "Ask the remote agent to review my code"
-```bash
-agent-bridge run MacBook-Pro "review the code in ~/Projects/myapp/src/ and suggest improvements" --agent
+
+From inside your agent session (with the channel plugin loaded):
+
 ```
+bridge_send_message("MacBook-Pro", "review the code in ~/Projects/myapp/src/ and suggest improvements")
+```
+
+The running remote agent receives it in-context and replies via `bridge_send_message` back to this machine.
 
 ### "Check what's running on my other machine"
 ```bash

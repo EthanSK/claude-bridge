@@ -51,6 +51,6 @@ claude plugin marketplace add EthanSK/agent-bridge
 
 ## Coexistence
 
-- Bash `agent-bridge` CLI (root of repo) is unchanged. Still installed via `./install.sh`. Used for pairing, `agent-bridge run … --claude`, SSH transport.
+- Bash `agent-bridge` CLI (root of repo) is unchanged except for the 3.0.0 removal of `--claude` / `--codex` / `--agent` from `run`. Still installed via `./install.sh`. Used for pairing, plain remote-shell diagnostics, and SSH transport. Agent-to-agent communication is strictly via `bridge_send_message` (channel mode) — there is no fresh-spawn path.
 - OpenClaw plugin (`openclaw-plugin/`) is unchanged. Different ecosystem, different manifest format.
 - The Claude Code plugin (this work) only reads from / writes to `~/.agent-bridge/inbox/` and `~/.agent-bridge/keys/` — same shared state the CLI uses.

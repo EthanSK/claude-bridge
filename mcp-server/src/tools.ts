@@ -286,7 +286,7 @@ export function registerTools(server: McpServer): void {
     {
       title: 'Run Remote Command',
       description:
-        'Run a shell command on a remote paired machine via SSH. Returns stdout, stderr, and exit code.',
+        'Run a PLAIN shell command on a remote paired machine via SSH. Returns stdout, stderr, and exit code. Use this ONLY for diagnostic/utility shell work (e.g. `git status`, `ls ~/Projects`, `ps aux`, tailing a log). Do NOT use it to invoke an agent CLI (`claude --print`, `codex exec`, `aider`, etc.) — to communicate with the running agent on the remote machine, use bridge_send_message instead. Fresh-spawn agent wrappers are not supported and never will be.',
       inputSchema: {
         machine: z.string().describe('Name of the target machine'),
         command: z.string().describe('Shell command to execute'),

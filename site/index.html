@@ -183,7 +183,7 @@ claude plugin install agent-bridge@agent-bridge</code></pre>
               <span class="panel-tag">Non-plugin use</span>
             </div>
             <p class="panel-desc">
-              The original <code>agent-bridge</code> shell CLI is still there for pairing, status checks, and firing off prompts from a terminal instead of an agent session.
+              The <code>agent-bridge</code> shell CLI handles pairing, reachability checks, and plain remote-shell diagnostics. Talking to the running agent on another machine happens through the channel plugin's <code>bridge_send_message</code> MCP tool, not the CLI.
             </p>
 <pre><code><span class="t-comment"># install.sh puts the bash CLI on your PATH</span>
 curl -fsSL https://raw.githubusercontent.com/EthanSK/agent-bridge/main/install.sh | bash
@@ -192,8 +192,8 @@ curl -fsSL https://raw.githubusercontent.com/EthanSK/agent-bridge/main/install.s
 agent-bridge setup
 agent-bridge pair
 
-<span class="t-comment"># Talk to an agent running on a paired machine</span>
-agent-bridge run MacBook-Pro "summarize ./notes/latest.md" --claude</code></pre>
+<span class="t-comment"># Plain remote shell on a paired machine (diagnostics only)</span>
+agent-bridge run MacBook-Pro "cd ~/Projects/myapp &amp;&amp; git status"</code></pre>
           </div>
         </div>
       </section>
@@ -221,7 +221,7 @@ agent-bridge run MacBook-Pro "summarize ./notes/latest.md" --claude</code></pre>
             <div class="step-num">3</div>
             <div>
               <h3>Use</h3>
-              <p>Once paired, either side can send the other messages via <code>bridge_send_message</code> (from inside an agent) or <code>agent-bridge run &lt;machine&gt; "..." --claude</code> (from a shell). Both peers are equal &mdash; no fixed client/server roles.</p>
+              <p>Once paired, either side can send the other messages via <code>bridge_send_message</code> from inside an agent session &mdash; the message is pushed into the running remote agent's context as a <code>&lt;channel source="agent-bridge"&gt;</code> event. Both peers are equal &mdash; no fixed client/server roles, and no fresh agent is ever spawned.</p>
             </div>
           </li>
         </ol>
