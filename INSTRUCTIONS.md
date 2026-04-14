@@ -98,7 +98,19 @@ claude plugin marketplace add ~/Projects/agent-bridge
 claude plugin install agent-bridge@agent-bridge
 ```
 
-Verify with `claude plugin list`. The plugin manifest lives at `.claude-plugin/marketplace.json` (repo root) and `mcp-server/.claude-plugin/plugin.json` + `mcp-server/.mcp.json`. No `--dangerously-load-development-channels` flag is required — channels declared by an installed plugin are trusted automatically.
+Verify with `claude plugin list`. The plugin manifest lives at `.claude-plugin/marketplace.json` (repo root) and `mcp-server/.claude-plugin/plugin.json` + `mcp-server/.mcp.json`.
+
+> ⚠️ **You still need `--dangerously-load-development-channels`.** An earlier version of this doc claimed the plugin install removes that requirement — it does not. Because the marketplace is a **local directory** (`claude plugin marketplace add ~/Projects/agent-bridge`), Claude Code treats it as a dev channel and its built-in allowlist will reject it on launch with:
+>
+> ```
+> plugin agent-bridge@agent-bridge is not on the approved channels allowlist (use --dangerously-load-development-channels for local dev)
+> ```
+>
+> The flag is required **until the plugin is published through an official GitHub marketplace** Claude Code's allowlist trusts. Add it to your launch alias, e.g.:
+>
+> ```bash
+> alias claude-tel='claude --dangerously-skip-permissions --dangerously-load-development-channels --channels plugin:telegram@claude-plugins-official --channels plugin:agent-bridge@agent-bridge'
+> ```
 
 **Other harnesses (Codex, Gemini CLI, OpenClaw, Aider):** Add to your harness's MCP config directly:
 ```json

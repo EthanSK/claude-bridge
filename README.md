@@ -358,7 +358,9 @@ This produces `mcp-server/build/index.js` -- the entry point every harness regis
 
 ### Claude Code (channel plugin -- full push support)
 
-Claude Code connects to agent-bridge as a single Claude Code **plugin** that bundles BOTH the MCP server (outgoing `bridge_*` tools) AND the channel (incoming push of remote messages). One install gives you both halves — no `.mcp.json` editing, no `--dangerously-load-development-channels` flag.
+Claude Code connects to agent-bridge as a single Claude Code **plugin** that bundles BOTH the MCP server (outgoing `bridge_*` tools) AND the channel (incoming push of remote messages). One install gives you both halves — no `.mcp.json` editing needed.
+
+> ⚠️ **You still need `--dangerously-load-development-channels`.** Because the marketplace is a local directory, Claude Code's channel allowlist treats it as a dev channel and will reject it on launch with: `plugin agent-bridge@agent-bridge is not on the approved channels allowlist (use --dangerously-load-development-channels for local dev)`. The flag is required until the plugin is published through an official marketplace Claude Code's allowlist trusts. Leave it in your launch alias.
 
 **Recommended install (one machine):**
 
@@ -374,7 +376,13 @@ claude plugin install agent-bridge@agent-bridge
 
 Verify with `claude plugin list` — you should see `agent-bridge@agent-bridge   Status: ✔ enabled`. Restart any running `claude` session to pick up the plugin.
 
-**Why this works without the `--dangerously-load-development-channels` flag:** Channels are gated by Claude Code's built-in allowlist. Channels declared by a properly-installed plugin (regardless of whether the marketplace is local, GitHub, or the official directory) are trusted automatically. The flag is only needed for ad-hoc `--channels server:...` loads of MCP servers registered outside the plugin system.
+**Launch alias (both halves + dev-channel flag):**
+
+```bash
+alias claude-tel='claude --dangerously-skip-permissions --dangerously-load-development-channels --channels plugin:telegram@claude-plugins-official --channels plugin:agent-bridge@agent-bridge'
+```
+
+**Why the flag is still required:** Earlier versions of this doc claimed the plugin install removed the need for `--dangerously-load-development-channels`. That was wrong. Claude Code's channel allowlist gates on the marketplace's trust status, not just whether the plugin is installed. A **local directory marketplace** is by definition a dev source, so the allowlist rejects channels from it without the flag. The flag becomes unnecessary only once the plugin is published through an official marketplace Claude Code trusts.
 
 **How it works:**
 1. The plugin's `.mcp.json` registers a single `agent-bridge` MCP server.
