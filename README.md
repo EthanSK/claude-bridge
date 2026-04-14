@@ -358,28 +358,32 @@ This produces `mcp-server/build/index.js` -- the entry point every harness regis
 
 ### Claude Code (channel plugin -- full push support)
 
-Claude Code connects to agent-bridge as both an MCP server (tools) and a channel plugin (push notifications). Messages from other machines appear in the conversation automatically -- no polling needed.
+Claude Code connects to agent-bridge as a single Claude Code **plugin** that bundles BOTH the MCP server (outgoing `bridge_*` tools) AND the channel (incoming push of remote messages). One install gives you both halves — no `.mcp.json` editing, no `--dangerously-load-development-channels` flag.
 
-**Setup:** Add to `~/.claude/.mcp.json` (or project `.mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "agent-bridge": {
-      "command": "node",
-      "args": ["/absolute/path/to/agent-bridge/mcp-server/build/index.js"]
-    }
-  }
-}
-```
-
-For development/testing, you can also launch Claude with the channel flag. If the MCP server was installed via a local-dev path (not the marketplace), you must also pass `--dangerously-load-development-channels` so Claude Code's channel allowlist accepts it:
+**Recommended install (one machine):**
 
 ```bash
-claude --dangerously-load-development-channels --channels server:agent-bridge
+# 1. Clone the repo and build the MCP server once
+git clone https://github.com/EthanSK/agent-bridge.git ~/Projects/agent-bridge
+cd ~/Projects/agent-bridge/mcp-server && npm install && npm run build
+
+# 2. Add the repo as a local Claude Code marketplace and install the plugin
+claude plugin marketplace add ~/Projects/agent-bridge
+claude plugin install agent-bridge@agent-bridge
 ```
 
-Without `--dangerously-load-development-channels`, Claude Code's built-in channel allowlist rejects locally-loaded channels and messages will not be pushed into the session. The flag is always required for agent-bridge today since the plugin is not yet published through the official marketplace.
+Verify with `claude plugin list` — you should see `agent-bridge@agent-bridge   Status: ✔ enabled`. Restart any running `claude` session to pick up the plugin.
+
+**Why this works without the `--dangerously-load-development-channels` flag:** Channels are gated by Claude Code's built-in allowlist. Channels declared by a properly-installed plugin (regardless of whether the marketplace is local, GitHub, or the official directory) are trusted automatically. The flag is only needed for ad-hoc `--channels server:...` loads of MCP servers registered outside the plugin system.
+
+**How it works:**
+1. The plugin's `.mcp.json` registers a single `agent-bridge` MCP server.
+2. That server declares the `claude/channel` experimental capability AND the `bridge_*` tools.
+3. When a message arrives in `~/.agent-bridge/inbox/`, the file watcher pushes it via `notifications/claude/channel`.
+4. It appears in the conversation as: `<channel source="agent-bridge" from="MachineName" message_id="..." ts="...">content</channel>`.
+5. Respond using `bridge_send_message` — no need to call `bridge_receive_messages`.
+
+The bash `agent-bridge` CLI (used for `pair`, `list`, `status`, `run`, `connect`) coexists with the plugin and is still installed via `./install.sh`.
 
 **How it works:**
 1. The MCP server declares the `claude/channel` experimental capability

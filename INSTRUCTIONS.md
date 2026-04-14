@@ -90,7 +90,17 @@ For Codex, Gemini CLI, OpenClaw, Aider, etc., agents call `bridge_receive_messag
 
 ### Channel setup
 
-Add to your harness's MCP config:
+**Claude Code (recommended):** Install as a Claude Code plugin. The repo doubles as a local marketplace — one command registers BOTH the MCP server and the channel:
+
+```bash
+cd ~/Projects/agent-bridge/mcp-server && npm install && npm run build
+claude plugin marketplace add ~/Projects/agent-bridge
+claude plugin install agent-bridge@agent-bridge
+```
+
+Verify with `claude plugin list`. The plugin manifest lives at `.claude-plugin/marketplace.json` (repo root) and `mcp-server/.claude-plugin/plugin.json` + `mcp-server/.mcp.json`. No `--dangerously-load-development-channels` flag is required — channels declared by an installed plugin are trusted automatically.
+
+**Other harnesses (Codex, Gemini CLI, OpenClaw, Aider):** Add to your harness's MCP config directly:
 ```json
 {
   "mcpServers": {
@@ -102,20 +112,15 @@ Add to your harness's MCP config:
 }
 ```
 
-Claude Code automatically detects the `claude/channel` capability and starts receiving pushed messages.
+### Legacy: manual channel launch
 
-### Development / manual channel launch
-
-When the MCP server is installed via a local-dev path (anything that isn't the published marketplace plugin — which is the norm for agent-bridge today), Claude Code's channel allowlist will reject it silently unless you pass `--dangerously-load-development-channels`:
+If you load the MCP server outside of the plugin system (for example with `claude --channels server:agent-bridge` pointing at a hand-edited `.mcp.json`), Claude Code's channel allowlist requires:
 
 ```bash
 claude --dangerously-load-development-channels --channels server:agent-bridge
 ```
 
-Rules of thumb:
-- **Always required** for agent-bridge: the channel plugin is loaded from a local clone, not the official marketplace.
-- Without the flag, tools still work but **no `<channel>` messages will be pushed** into the session — messages go into the inbox and stay there until you call `bridge_receive_messages` manually.
-- The flag is a per-launch opt-in; it does not persist any state.
+Prefer the plugin install path above — it removes the need for this flag.
 
 ### Message flow
 
