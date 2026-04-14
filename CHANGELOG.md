@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.3.1 — 2026-04-14
+
+### OpenClaw companion — parity pass
+
+Audited `openclaw-plugin/` against the v2.3.0 Claude Code plugin-ification
+to confirm the OpenClaw side is in a coherent, installable state.
+
+No code changes were needed. The OpenClaw plugin was already:
+- Loading correctly on OpenClaw 2026.4.12 (`Status: loaded`).
+- Free of hardcoded `/Users/<user>/...` paths (uses `$HOME` / `os.homedir()`
+  throughout `src/` and `bin/`).
+- Hardened identically to the Claude Code MCP server — `SIGINT` / `SIGTERM` /
+  `SIGHUP` / `SIGPIPE` handlers, `stdin` end/close/error handlers, an orphan
+  watchdog on `process.ppid`, and an `EPIPE` / `Broken pipe` detector on
+  `uncaughtException` / `unhandledRejection`. All verbatim from `a88d614`.
+
+Doc-only changes:
+- `openclaw-plugin/README.md` — replaced the `/Users/USERNAME/...` launchd
+  placeholder with a shell heredoc template that expands `$HOME` and
+  `command -v node` / `command -v openclaw` before writing the plist (launchd
+  does not expand `$HOME` inside `ProgramArguments`).
+- `openclaw-plugin/PARITY_REPORT.md` — new. Documents the audit, the
+  architectural differences between the two sides, the one cosmetic
+  `reload registration missing prefixes` warning, and the install procedure
+  on a fresh machine.
+
 ## 2.3.0 — 2026-04-14
 
 ### Plugin-ification

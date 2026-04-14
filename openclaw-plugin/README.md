@@ -66,7 +66,7 @@ Or wire it into launchd so it starts at login. Example
   <key>ProgramArguments</key>
   <array>
     <string>/opt/homebrew/bin/node</string>
-    <string>/Users/USERNAME/Projects/agent-bridge/openclaw-plugin/bin/agent-bridge-openclaw-inbox.js</string>
+    <string>/Users/YOUR_USERNAME/Projects/agent-bridge/openclaw-plugin/bin/agent-bridge-openclaw-inbox.js</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -83,7 +83,43 @@ Or wire it into launchd so it starts at login. Example
 </plist>
 ```
 
-Load it with `launchctl load ~/Library/LaunchAgents/com.agent-bridge.openclaw.plist`.
+> launchd plists do **not** expand `$HOME` or `~` inside `ProgramArguments`.
+> Replace `YOUR_USERNAME` with the actual macOS username (e.g. `ethansk` on the
+> Mac Mini, `ethansarif-kattan` on the MacBook Pro). If you prefer to keep the
+> plist portable, point `ProgramArguments` at a small shell-script wrapper you
+> own (e.g. `~/bin/agent-bridge-openclaw`) that itself resolves `$HOME` and
+> execs the node script.
+
+Generate a plist with your current path already substituted:
+
+```bash
+cat > ~/Library/LaunchAgents/com.agent-bridge.openclaw.plist <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.agent-bridge.openclaw</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$(command -v node)</string>
+    <string>$HOME/Projects/agent-bridge/openclaw-plugin/bin/agent-bridge-openclaw-inbox.js</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>OPENCLAW_BIN</key><string>$(command -v openclaw)</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/agent-bridge-openclaw.log</string>
+  <key>StandardErrorPath</key><string>/tmp/agent-bridge-openclaw.err</string>
+</dict>
+</plist>
+PLIST
+launchctl load ~/Library/LaunchAgents/com.agent-bridge.openclaw.plist
+```
+
+The heredoc expands `$HOME`, `$(command -v node)`, and `$(command -v openclaw)`
+from your shell **before** the file is written, so the resulting plist contains
+absolute paths with no placeholders left over.
 
 ## Configuration
 
