@@ -128,7 +128,15 @@ export async function sshWriteFile(
   // Base64-encode the content to avoid shell escaping issues with quotes,
   // newlines, backslashes, dollar signs, etc. in JSON payloads.
   const b64 = Buffer.from(content, 'utf8').toString('base64');
-  const command = `mkdir -p "$(dirname '${remotePath}')" && echo '${b64}' | base64 -d > '${remotePath}'`;
+  // Replace a leading `~` with `$HOME` so the remote shell expands it correctly.
+  // Single-quoting a path that starts with `~` prevents tilde expansion, causing
+  // files to land in a literal `~/` directory instead of the user's home dir.
+  const expandedPath = remotePath.startsWith('~/')
+    ? `$HOME/${remotePath.slice(2)}`
+    : remotePath;
+  // Use double-quotes around the path so $HOME is expanded by the remote shell.
+  // base64 output only contains [A-Za-z0-9+/=] so single-quoting is safe there.
+  const command = `mkdir -p "$(dirname "${expandedPath}")" && echo '${b64}' | base64 -d > "${expandedPath}"`;
   return sshExec(machine, command, timeoutMs);
 }
 

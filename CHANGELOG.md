@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.3.2 — 2026-04-14
+
+### fix(mcp-server): tilde not expanded in remote inbox path — messages land in literal `~` directory
+
+**Bug:** Every message sent via `bridge_send_message` wrote to a literal `~/.agent-bridge/inbox/`
+directory on the remote machine instead of the user's real `$HOME/.agent-bridge/inbox/`. This
+caused messages to accumulate silently in the shadow dir while the file watcher watched the real
+inbox, so no messages were delivered.
+
+**Root cause:** `sshWriteFile` in `src/ssh.ts` single-quoted the remote path:
+```
+mkdir -p "$(dirname '~/.agent-bridge/inbox/msg-XXX.json')" && ... > '~/.agent-bridge/inbox/msg-XXX.json'
+```
+Single quotes prevent shell tilde expansion — the shell treats `~` as a literal directory name.
+
+**Fix:** Before building the remote command, replace a leading `~/` in the path with `$HOME/`
+and wrap the path in double quotes so the remote shell expands `$HOME` correctly. The base64
+payload remains single-quoted (safe, as it only contains `[A-Za-z0-9+/=]`).
+
+**Files changed:** `mcp-server/src/ssh.ts` (8 lines added/changed in `sshWriteFile`).
+
 ## 2.3.1 — 2026-04-14
 
 ### OpenClaw companion — parity pass
