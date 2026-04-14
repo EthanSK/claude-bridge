@@ -11,7 +11,7 @@
     <meta name="robots" content="index, follow, max-image-preview:large" />
     <link rel="canonical" href="https://ethansk.github.io/agent-bridge/" />
     <meta name="application-name" content="agent-bridge" />
-    <meta name="theme-color" content="#0b0f14" />
+    <meta name="theme-color" content="#0a0a0b" />
     <link rel="icon" type="image/svg+xml" href="./assets/favicon.svg" />
 
     <!-- Open Graph -->
@@ -30,106 +30,165 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="bg-glow" aria-hidden="true"></div>
-
     <div id="content">
-      <nav class="wrap">
-        <a class="logo" href="./">
-          <span class="logo-icon">&#x1F309;</span>
+
+      <!-- NAV -->
+      <nav class="wrap" aria-label="Primary">
+        <a class="logo" href="./" aria-label="agent-bridge home">
+          <span class="logo-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" fill="none">
+              <circle cx="7" cy="16" r="3.5" fill="#ff7a1a"/>
+              <circle cx="25" cy="16" r="3.5" fill="#4dd0e1"/>
+              <path d="M11 16 L21 16" stroke="#ff7a1a" stroke-width="1.3" stroke-dasharray="2 2"/>
+            </svg>
+          </span>
           <span class="logo-copy">
             <span class="logo-title">
               agent-bridge <span class="logo-version">v3.0.0</span>
             </span>
-            <span class="logo-sub">Bridge Claude Code sessions across machines</span>
+            <span class="logo-sub">channel-mode · peer-to-peer · SSH</span>
           </span>
         </a>
         <div class="nav-right">
-          <a class="nav-link" href="#install">Install</a>
-          <a class="nav-link" href="#tools">Tools</a>
-          <a class="nav-link" href="https://github.com/EthanSK/agent-bridge" target="_blank" rel="noopener">GitHub</a>
+          <a class="nav-link" href="#quickstart">quickstart</a>
+          <a class="nav-link" href="#install">install</a>
+          <a class="nav-link" href="#tools">tools</a>
+          <a class="nav-link" href="https://github.com/EthanSK/agent-bridge" target="_blank" rel="noopener">github</a>
         </div>
       </nav>
 
+      <!-- HERO -->
       <header class="hero wrap">
-        <div class="hero-badges">
-          <span class="badge badge--accent">Claude Code plugin &middot; channel mode</span>
-          <span class="badge">v3.0.0</span>
-          <span class="badge">Tested end-to-end on Claude Code</span>
+        <div class="hero-meta reveal reveal-1">
+          <span><span class="dot" aria-hidden="true"></span> channel open</span>
+          <span class="ver">v3.0.0</span>
+          <span>Claude Code plugin</span>
+          <span>tested end-to-end</span>
         </div>
-        <h1>
-          Let your <span class="accent">Claude sessions</span> talk to each other.
+
+        <h1 class="hero-title reveal reveal-2">
+          <span class="line">Let your</span>
+          <span class="line"><span class="peer-a">Claude</span></span>
+          <span class="line">sessions</span>
+          <span class="line">talk to each <span class="peer-b">other.</span></span>
         </h1>
-        <p class="tagline">
-          agent-bridge lets a Claude Code session on one Mac push messages straight into a Claude Code session on another &mdash; agent-to-agent, not shell-to-shell. One plugin per machine. Messages land as live <code>&lt;channel source="agent-bridge"&gt;</code> events in the already-running conversation. No broker, no cloud, no fresh agents spawned on the remote side.
+
+        <p class="hero-lede reveal reveal-3">
+          <strong>agent-bridge</strong> lets a Claude Code session on one Mac push messages straight into a Claude Code session on another &mdash; agent-to-agent, not shell-to-shell. One plugin per machine. Messages land as live <code>&lt;channel source="agent-bridge"&gt;</code> events inside the already-running conversation. No broker, no cloud, no fresh agents spawned on the remote side.
         </p>
-        <div class="hero-actions">
+
+        <div class="hero-actions reveal reveal-4">
           <a class="btn btn--primary" href="#install">
-            <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1v9m0 0L4.5 6.5M8 10l3.5-3.5M2 13h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1v9m0 0L4.5 6.5M8 10l3.5-3.5M2 13h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
             Install the plugin
           </a>
           <a class="btn btn--ghost" href="https://github.com/EthanSK/agent-bridge" target="_blank" rel="noopener">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.37.5 0 5.87 0 12.5a12 12 0 0 0 8.21 11.39c.6.11.82-.26.82-.58v-2.05c-3.34.73-4.04-1.61-4.04-1.61-.55-1.4-1.34-1.77-1.34-1.77-1.1-.75.08-.74.08-.74 1.2.09 1.84 1.24 1.84 1.24 1.08 1.85 2.83 1.32 3.52 1.01.11-.79.42-1.32.76-1.62-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.39 1.24-3.23-.13-.31-.54-1.53.11-3.19 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.65 1.66.25 2.88.12 3.19.77.84 1.24 1.92 1.24 3.23 0 4.61-2.81 5.62-5.49 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.83.58A12 12 0 0 0 24 12.5C24 5.87 18.63.5 12 .5Z"/></svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.37.5 0 5.87 0 12.5a12 12 0 0 0 8.21 11.39c.6.11.82-.26.82-.58v-2.05c-3.34.73-4.04-1.61-4.04-1.61-.55-1.4-1.34-1.77-1.34-1.77-1.1-.75.08-.74.08-.74 1.2.09 1.84 1.24 1.84 1.24 1.08 1.85 2.83 1.32 3.52 1.01.11-.79.42-1.32.76-1.62-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.39 1.24-3.23-.13-.31-.54-1.53.11-3.19 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.65 1.66.25 2.88.12 3.19.77.84 1.24 1.92 1.24 3.23 0 4.61-2.81 5.62-5.49 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.83.58A12 12 0 0 0 24 12.5C24 5.87 18.63.5 12 .5Z"/></svg>
             View on GitHub
           </a>
           <a class="btn btn--ghost" href="#how">How it works</a>
         </div>
-        <p class="hero-note">
-          MIT licensed &middot; SSH-authenticated &middot; Push-based (no polling) &middot; macOS &amp; Linux
-        </p>
+
+        <div class="hero-peer-panel reveal reveal-5" role="img" aria-label="Two paired peers exchanging messages over SSH">
+          <div class="peer-diagram">
+            <div class="peer-node peer-node--a">
+              <span class="label">peer a</span>
+              <span class="name">Mac-Mini</span>
+              <span class="host">ethansk@192.168.0.14 · Claude Code session</span>
+            </div>
+            <div class="peer-wire" aria-hidden="true">
+              <span class="chan">&lt;channel&gt;</span>
+              <span class="wire"><span class="dash-a">━━━</span>◆<span class="dash-b">━━━</span></span>
+              <span class="proto">SSH · ED25519 · TTL 1h</span>
+            </div>
+            <div class="peer-node peer-node--b">
+              <span class="label">peer b</span>
+              <span class="name">MacBook-Pro</span>
+              <span class="host">ethansk@100.64.0.7 · Claude Code session</span>
+            </div>
+          </div>
+        </div>
+
+        <dl class="hero-stats" aria-label="Project stats">
+          <div class="hero-stat">
+            <span class="k">Transport</span>
+            <span class="v"><span class="mark">SSH</span> · ED25519</span>
+          </div>
+          <div class="hero-stat">
+            <span class="k">Delivery</span>
+            <span class="v"><span class="mark">push</span> · no poll</span>
+          </div>
+          <div class="hero-stat">
+            <span class="k">MCP tools</span>
+            <span class="v"><span class="mark">7</span> · one concept each</span>
+          </div>
+          <div class="hero-stat">
+            <span class="k">License</span>
+            <span class="v"><span class="mark">MIT</span> · macOS & Linux</span>
+          </div>
+        </dl>
       </header>
 
       <!-- QUICK START -->
       <section class="quickstart wrap" id="quickstart">
-        <div class="section-kicker">Quick start</div>
-        <h2>One prompt. Paste it into Claude on each Mac.</h2>
-        <p class="quickstart-sub" style="margin-bottom: 20px;">
-          This is the fast path. It works because Claude Code can read the README, install the CLI, build the MCP server, and register the plugin for you.
-        </p>
-        <div class="terminal" style="max-width: 760px; margin: 0 auto 20px;">
-          <div class="terminal-bar">
-            <span class="terminal-dot red"></span>
-            <span class="terminal-dot yellow"></span>
-            <span class="terminal-dot green"></span>
-            <span class="terminal-title">Paste into Claude Code on each computer</span>
-          </div>
-          <div class="terminal-body">
+        <div class="quickstart-inner">
+          <div class="kicker"><span class="num">01 /</span> Quickstart</div>
+          <h2 class="section-title">One prompt. <span class="accent">Paste it</span> into Claude on each Mac.</h2>
+          <p class="section-sub">
+            This is the fast path. It works because Claude Code can read the README, install the CLI, build the MCP server, and register the plugin for you.
+          </p>
+
+          <div class="terminal">
+            <div class="terminal-bar">
+              <span class="dot red"></span>
+              <span class="dot yellow"></span>
+              <span class="dot green"></span>
+              <span class="terminal-title"><span class="prompt">▸</span> paste into Claude Code · each computer</span>
+            </div>
+            <div class="terminal-body">
 <pre><span class="t-dim">Read the README at https://github.com/EthanSK/agent-bridge and follow</span>
 <span class="t-dim">the setup instructions for this computer. Install agent-bridge, run</span>
 <span class="t-dim">the setup command, and install the Claude Code plugin. Do everything</span>
 <span class="t-dim">automatically -- don't ask me questions.</span></pre>
+            </div>
           </div>
-        </div>
-        <div class="prereq-note">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
-          <div>
-            <strong style="color: var(--text);">Prereqs (once per machine).</strong>
-            <span style="display: block; margin-top: 2px;"><strong style="color: var(--text);">macOS:</strong> System Settings &gt; General &gt; Sharing &gt; toggle <strong style="color: var(--text);">Remote Login</strong> ON &gt; click <strong style="color: var(--text);">(i)</strong> &gt; set <strong style="color: var(--text);">"Allow access for"</strong> to <strong style="color: var(--text);">All users</strong>. Optionally toggle <strong style="color: var(--text);">"Allow full disk access for remote users"</strong>.</span>
-            <span style="display: block; margin-top: 4px;"><strong style="color: var(--text);">Linux:</strong> <code>sudo systemctl enable --now sshd</code></span>
+
+          <div class="prereq">
+            <span class="icon" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+            </span>
+            <div>
+              <strong>Prereqs (once per machine).</strong>
+              <span class="os"><strong>macOS:</strong> System Settings &gt; General &gt; Sharing &gt; toggle <strong>Remote Login</strong> ON &gt; click <strong>(i)</strong> &gt; set <strong>&ldquo;Allow access for&rdquo;</strong> to <strong>All users</strong>. Optionally toggle <strong>&ldquo;Allow full disk access for remote users&rdquo;</strong>.</span>
+              <span class="os"><strong>Linux:</strong> <code>sudo systemctl enable --now sshd</code></span>
+            </div>
           </div>
+
+          <p class="section-sub" style="margin-top: 28px; margin-bottom: 0;">
+            After the agents finish installing, photograph the pairing screen on one machine and send the photo to Claude on the other. That&rsquo;s the pair step; the agents handle the rest.
+          </p>
         </div>
-        <p class="quickstart-sub">
-          After the agents finish installing, photograph the pairing screen on one machine and send the photo to Claude on the other. That's the pair step; the agents handle the rest.
-        </p>
       </section>
 
       <!-- WHY -->
       <section class="why wrap" id="why">
-        <div class="section-kicker">Why</div>
-        <h2>Agent-to-agent, not shell-to-shell.</h2>
-        <div class="why-grid">
-          <div class="why-card">
+        <div class="kicker"><span class="num">02 /</span> Why</div>
+        <h2 class="section-title">Agent-to-agent, <span class="accent">not</span> shell-to-shell.</h2>
+
+        <div class="card-grid">
+          <div class="card" data-tag="01">
             <h3>Push, not poll</h3>
             <p>Messages from a remote machine arrive as real-time <code>&lt;channel source="agent-bridge"&gt;</code> events inside your running Claude session. No timers, no busy loops, no stale inbox.</p>
           </div>
-          <div class="why-card">
+          <div class="card" data-tag="02">
             <h3>Running sessions, not new ones</h3>
-            <p>The plugin connects <em>already-running</em> Claude sessions. Machine A's <code>bridge_send_message</code> drops a signed file into Machine B's inbox; Machine B's watcher pushes it into the live conversation. No fresh <code>claude --print</code> spawned on the far side &mdash; that whole shape was removed in 3.0.0.</p>
+            <p>The plugin connects <em>already-running</em> Claude sessions. Machine A&rsquo;s <code>bridge_send_message</code> drops a signed file into Machine B&rsquo;s inbox; Machine B&rsquo;s watcher pushes it into the live conversation. No fresh <code>claude --print</code> spawned on the far side &mdash; that whole shape was removed in 3.0.0.</p>
           </div>
-          <div class="why-card">
+          <div class="card" data-tag="03">
             <h3>Peer-to-peer over SSH</h3>
             <p>Direct machine-to-machine SSH on the ports you already allow. No relay, no broker, no vendor. Tailscale works great; plain LAN works great; serveo reverse tunnels work when you need them.</p>
           </div>
-          <div class="why-card">
+          <div class="card" data-tag="04">
             <h3>Hardened against zombies</h3>
             <p>The MCP server exits cleanly on parent death, handles <code>EPIPE</code>, detects stdin close, watchdogs its own <code>ppid</code>, and expands remote tildes correctly. No shadow <code>~/.agent-bridge/inbox</code> directories, no orphaned Node processes chewing CPU after Claude quits.</p>
           </div>
@@ -138,182 +197,181 @@
 
       <!-- INSTALL -->
       <section class="install-section wrap" id="install">
-        <div class="section-kicker">Install</div>
-        <h2>Manual install, step by step.</h2>
-        <p class="panel-desc" style="max-width: 760px; margin-bottom: 20px;">
+        <div class="kicker"><span class="num">03 /</span> Install</div>
+        <h2 class="section-title">Manual install, <span class="accent">step by step.</span></h2>
+        <p class="section-sub">
           Prefer doing it yourself? This is exactly what the quick-start prompt above tells Claude to do. Run these on <em>each</em> machine you want to bridge.
         </p>
 
-        <div class="install-tabs">
-          <div class="install-panel install-panel--featured">
-            <div class="install-panel-head">
-              <h3>Claude Code</h3>
-              <span class="panel-tag">Tested end-to-end</span>
-            </div>
-            <p class="panel-desc">
-              Installs as a single Claude Code plugin that bundles the <code>bridge_*</code> MCP tools <em>and</em> the incoming channel. One install, both halves.
-            </p>
+        <div class="install-panel install-panel--featured">
+          <div class="panel-head">
+            <h3>Claude Code</h3>
+            <span class="panel-tag">Tested end-to-end</span>
+          </div>
+          <p class="panel-desc">
+            Installs as a single Claude Code plugin that bundles the <code>bridge_*</code> MCP tools <em>and</em> the incoming channel. One install, both halves.
+          </p>
 
-            <div class="code-block">
-              <div class="code-block-head">
-                <span class="code-block-label">Step 1 &mdash; install the bash CLI (pairing &amp; SSH transport)</span>
-              </div>
-<pre><code>curl -fsSL https://raw.githubusercontent.com/EthanSK/agent-bridge/main/install.sh | bash</code></pre>
+          <div class="step-block">
+            <div class="step-block-head">
+              <span class="n">1</span>
+              <span class="lbl">install the bash CLI (pairing &amp; SSH transport)</span>
             </div>
-
-            <div class="code-block">
-              <div class="code-block-head">
-                <span class="code-block-label">Step 2 &mdash; clone the repo &amp; build the MCP server</span>
-              </div>
-<pre><code>git clone https://github.com/EthanSK/agent-bridge.git ~/Projects/agent-bridge
-cd ~/Projects/agent-bridge/mcp-server &amp;&amp; npm install &amp;&amp; npm run build</code></pre>
-            </div>
-
-            <div class="code-block">
-              <div class="code-block-head">
-                <span class="code-block-label">Step 3 &mdash; register the repo as a local marketplace &amp; install the plugin</span>
-              </div>
-<pre><code>claude plugin marketplace add ~/Projects/agent-bridge
-claude plugin install agent-bridge@agent-bridge</code></pre>
-            </div>
-
-            <div class="code-block">
-              <div class="code-block-head">
-                <span class="code-block-label">Step 4 &mdash; launch alias (both halves active)</span>
-              </div>
-<pre><code>alias claude-bridge='claude --dangerously-skip-permissions \
-  --dangerously-load-development-channels plugin:agent-bridge@agent-bridge'</code></pre>
-            </div>
-
-            <div class="callout callout--warn">
-              <strong>The dev-channel flag is required.</strong>
-              The marketplace is a local directory, so Claude Code's channel allowlist treats it as a dev source and rejects it on launch without <code>--dangerously-load-development-channels</code>. The flag takes a tagged argument (<code>plugin:&lt;name&gt;@&lt;marketplace&gt;</code>) and does two jobs at once: activates the channel <em>and</em> marks it as allowlist-exempt. Don't <em>also</em> add <code>--channels plugin:agent-bridge@agent-bridge</code> &mdash; that creates a second <code>dev:false</code> entry that fails the allowlist check. Passing the flag bare with no tag also errors.
-            </div>
+<pre><span class="t-prompt"></span><span class="t-kw">curl</span> -fsSL <span class="t-str">https://raw.githubusercontent.com/EthanSK/agent-bridge/main/install.sh</span> | bash</pre>
           </div>
 
-          <div class="install-panel">
-            <div class="install-panel-head">
-              <h3>Pair the two machines</h3>
-              <span class="panel-tag">Bash CLI</span>
+          <div class="step-block">
+            <div class="step-block-head">
+              <span class="n">2</span>
+              <span class="lbl">clone the repo &amp; build the MCP server</span>
             </div>
-            <p class="panel-desc">
-              The bash <code>agent-bridge</code> CLI handles setup, pairing, and SSH-level diagnostics. It coexists with the plugin &mdash; the plugin drives agent-to-agent messages, the CLI drives the transport.
-            </p>
-<pre><code><span class="t-comment"># On each machine: enable SSH, generate keys, show pairing screen</span>
-agent-bridge setup
+<pre><span class="t-prompt"></span><span class="t-kw">git</span> clone <span class="t-str">https://github.com/EthanSK/agent-bridge.git</span> <span class="t-var">~/Projects/agent-bridge</span>
+<span class="t-prompt"></span><span class="t-kw">cd</span> <span class="t-var">~/Projects/agent-bridge/mcp-server</span> &amp;&amp; <span class="t-kw">npm</span> install &amp;&amp; <span class="t-kw">npm</span> run build</pre>
+          </div>
+
+          <div class="step-block">
+            <div class="step-block-head">
+              <span class="n">3</span>
+              <span class="lbl">register the repo as a local marketplace &amp; install the plugin</span>
+            </div>
+<pre><span class="t-prompt"></span><span class="t-kw">claude</span> plugin marketplace add <span class="t-var">~/Projects/agent-bridge</span>
+<span class="t-prompt"></span><span class="t-kw">claude</span> plugin install <span class="t-str">agent-bridge@agent-bridge</span></pre>
+          </div>
+
+          <div class="step-block">
+            <div class="step-block-head">
+              <span class="n">4</span>
+              <span class="lbl">launch alias (both halves active)</span>
+            </div>
+<pre><span class="t-prompt"></span><span class="t-kw">alias</span> claude-bridge=<span class="t-str">'claude --dangerously-skip-permissions \
+  --dangerously-load-development-channels plugin:agent-bridge@agent-bridge'</span></pre>
+          </div>
+
+          <div class="callout callout--warn">
+            <strong>The dev-channel flag is required.</strong>
+            The marketplace is a local directory, so Claude Code&rsquo;s channel allowlist treats it as a dev source and rejects it on launch without <code>--dangerously-load-development-channels</code>. The flag takes a tagged argument (<code>plugin:&lt;name&gt;@&lt;marketplace&gt;</code>) and does two jobs at once: activates the channel <em>and</em> marks it as allowlist-exempt. Don&rsquo;t <em>also</em> add <code>--channels plugin:agent-bridge@agent-bridge</code> &mdash; that creates a second <code>dev:false</code> entry that fails the allowlist check. Passing the flag bare with no tag also errors.
+          </div>
+        </div>
+
+        <div class="install-panel">
+          <div class="panel-head">
+            <h3>Pair the two machines</h3>
+            <span class="panel-tag panel-tag--muted">Bash CLI</span>
+          </div>
+          <p class="panel-desc">
+            The bash <code>agent-bridge</code> CLI handles setup, pairing, and SSH-level diagnostics. It coexists with the plugin &mdash; the plugin drives agent-to-agent messages, the CLI drives the transport.
+          </p>
+          <div class="step-block">
+            <div class="step-block-head">
+              <span class="lbl">pairing &amp; diagnostics</span>
+            </div>
+<pre><span class="t-comment"># On each machine: enable SSH, generate keys, show pairing screen</span>
+<span class="t-prompt"></span>agent-bridge setup
 
 <span class="t-comment"># Optional: internet tunnel (reverse SSH via serveo.net, no port forwarding)</span>
-agent-bridge setup --internet
+<span class="t-prompt"></span>agent-bridge setup --internet
 
 <span class="t-comment"># Then photograph the pairing screen on one machine</span>
 <span class="t-comment"># and send the photo to Claude on the other. It runs `agent-bridge pair` for you.</span>
 
 <span class="t-comment"># Verify</span>
-agent-bridge list
-agent-bridge status MacBook-Pro
+<span class="t-prompt"></span>agent-bridge list
+<span class="t-prompt"></span>agent-bridge status MacBook-Pro
 
 <span class="t-comment"># Plain remote shell on a paired machine (diagnostics only)</span>
-agent-bridge run MacBook-Pro "cd ~/Projects/myapp &amp;&amp; git status"</code></pre>
-            <p class="panel-note">
-              <strong style="color: var(--text);">Note.</strong> <code>agent-bridge run</code> is a plain SSH remote-shell utility &mdash; it does NOT invoke an agent. To talk to the running agent on the other machine, use the plugin's <code>bridge_send_message</code> MCP tool. The old <code>--claude</code> / <code>--codex</code> / <code>--agent</code> flags that spawned a fresh non-interactive agent session on the remote machine were removed in 3.0.0.
-            </p>
+<span class="t-prompt"></span>agent-bridge run MacBook-Pro <span class="t-str">"cd ~/Projects/myapp &amp;&amp; git status"</span></pre>
           </div>
+          <p class="panel-note">
+            <strong>Note.</strong> <code>agent-bridge run</code> is a plain SSH remote-shell utility &mdash; it does NOT invoke an agent. To talk to the running agent on the other machine, use the plugin&rsquo;s <code>bridge_send_message</code> MCP tool. The old <code>--claude</code> / <code>--codex</code> / <code>--agent</code> flags that spawned a fresh non-interactive agent session on the remote machine were removed in 3.0.0.
+          </p>
+        </div>
 
-          <div class="install-panel">
-            <div class="install-panel-head">
-              <h3>Other MCP-capable harnesses</h3>
-              <span class="panel-tag">Scaffolded &middot; not exercised</span>
+        <div class="install-panel">
+          <div class="panel-head">
+            <h3>Other MCP-capable harnesses</h3>
+            <span class="panel-tag panel-tag--muted">Scaffolded · not exercised</span>
+          </div>
+          <p class="panel-desc">
+            Codex CLI, Gemini CLI, OpenClaw, Aider, and anything else that speaks the Model Context Protocol can in principle call the <code>bridge_*</code> tools. The server is harness-agnostic by design &mdash; but as of v3.0.0, only Claude Code is confirmed end-to-end. If you try one of these and it works (or doesn&rsquo;t), please open an issue.
+          </p>
+          <div class="step-block">
+            <div class="step-block-head">
+              <span class="lbl">.mcp.json (or your harness&rsquo;s equivalent)</span>
             </div>
-            <p class="panel-desc">
-              Codex CLI, Gemini CLI, OpenClaw, Aider, and anything else that speaks the Model Context Protocol can in principle call the <code>bridge_*</code> tools. The server is harness-agnostic by design &mdash; but as of v3.0.0, only Claude Code is confirmed end-to-end. If you try one of these and it works (or doesn't), please open an issue.
-            </p>
-
-            <div class="code-block">
-              <div class="code-block-head">
-                <span class="code-block-label">.mcp.json (or your harness's equivalent)</span>
-              </div>
-<pre><code>{
-  "mcpServers": {
-    "agent-bridge": {
-      "command": "node",
-      "args": ["/absolute/path/to/agent-bridge/mcp-server/build/index.js"]
+<pre>{
+  <span class="t-str">"mcpServers"</span>: {
+    <span class="t-str">"agent-bridge"</span>: {
+      <span class="t-str">"command"</span>: <span class="t-str">"node"</span>,
+      <span class="t-str">"args"</span>: [<span class="t-str">"/absolute/path/to/agent-bridge/mcp-server/build/index.js"</span>]
     }
   }
-}</code></pre>
-            </div>
-
-            <p class="panel-note">
-              Without the Claude Code channel, harnesses run in <strong style="color: var(--text);">polling mode</strong>: the agent calls <code>bridge_receive_messages</code> at natural breakpoints to drain the inbox. Companion instruction files ship in the repo: <code>AGENTS.md</code> (Codex), <code>GEMINI.md</code> (Gemini), <code>INSTRUCTIONS.md</code> (generic), and an <code>openclaw-plugin/</code> companion for OpenClaw push delivery.
-            </p>
+}</pre>
           </div>
+          <p class="panel-note">
+            Without the Claude Code channel, harnesses run in <strong>polling mode</strong>: the agent calls <code>bridge_receive_messages</code> at natural breakpoints to drain the inbox. Companion instruction files ship in the repo: <code>AGENTS.md</code> (Codex), <code>GEMINI.md</code> (Gemini), <code>INSTRUCTIONS.md</code> (generic), and an <code>openclaw-plugin/</code> companion for OpenClaw push delivery.
+          </p>
         </div>
       </section>
 
       <!-- PAIR -->
       <section class="how wrap" id="how">
-        <div class="section-kicker">Pair two machines</div>
-        <h2>Three steps. Then it&rsquo;s invisible.</h2>
+        <div class="kicker"><span class="num">04 /</span> Pair two machines</div>
+        <h2 class="section-title">Three steps. Then it&rsquo;s <span class="accent">invisible.</span></h2>
+        <p class="section-sub" style="margin-bottom: 32px;">
+          No fixed client/server roles &mdash; both peers are equal. After the handshake, bi-directional messaging just works.
+        </p>
         <ol class="steps">
           <li>
-            <div class="step-num">1</div>
-            <div>
-              <h3>Setup</h3>
-              <p>On each machine, run <code>agent-bridge setup</code>. It enables SSH if needed, generates an ED25519 key pair under <code>~/.agent-bridge/keys/</code>, and prints a pairing screen with the machine name, user, IPs, port, one-time token, and public key.</p>
-            </div>
+            <h3>Setup</h3>
+            <p>On each machine, run <code>agent-bridge setup</code>. It enables SSH if needed, generates an ED25519 key pair under <code>~/.agent-bridge/keys/</code>, and prints a pairing screen with the machine name, user, IPs, port, one-time token, and public key.</p>
           </li>
           <li>
-            <div class="step-num">2</div>
-            <div>
-              <h3>Pair</h3>
-              <p>Photograph the pairing screen on one machine and send the image to Claude Code on the other. Claude reads the photo, extracts the fields, and runs <code>agent-bridge pair --name ... --host ... --token ... --pubkey ...</code>. No password, no manual typing. Both peers are equal &mdash; no fixed client/server roles.</p>
-            </div>
+            <h3>Pair</h3>
+            <p>Photograph the pairing screen on one machine and send the image to Claude Code on the other. Claude reads the photo, extracts the fields, and runs <code>agent-bridge pair --name ... --host ... --token ... --pubkey ...</code>. No password, no manual typing.</p>
           </li>
           <li>
-            <div class="step-num">3</div>
-            <div>
-              <h3>Use</h3>
-              <p>Once paired, either side calls <code>bridge_send_message</code> from inside its Claude session. The message lands in the remote inbox over SSH and is pushed into the running remote Claude's context as a <code>&lt;channel source="agent-bridge"&gt;</code> event. No fresh agent is ever spawned on either side.</p>
-            </div>
+            <h3>Use</h3>
+            <p>Once paired, either side calls <code>bridge_send_message</code> from inside its Claude session. The message lands in the remote inbox over SSH and is pushed into the running remote Claude&rsquo;s context as a <code>&lt;channel source="agent-bridge"&gt;</code> event. No fresh agent is ever spawned on either side.</p>
           </li>
         </ol>
       </section>
 
       <!-- CHANNEL -->
       <section class="channel wrap">
-        <div class="section-kicker">How the channel works</div>
-        <h2>Push into a running session.</h2>
-        <p class="channel-lede">
+        <div class="kicker"><span class="num">05 /</span> The channel</div>
+        <h2 class="section-title">Push into a <span class="accent">running session.</span></h2>
+        <p class="section-sub">
           The plugin registers a single MCP server that advertises the experimental <code>claude/channel</code> capability <em>and</em> the <code>bridge_*</code> tools. A file watcher on <code>~/.agent-bridge/inbox/</code> detects new message files and emits <code>notifications/claude/channel</code> into the Claude session &mdash; no polling, no manual <code>bridge_receive_messages</code> call needed.
         </p>
         <div class="terminal">
           <div class="terminal-bar">
-            <span class="terminal-dot red"></span>
-            <span class="terminal-dot yellow"></span>
-            <span class="terminal-dot green"></span>
-            <span class="terminal-title">Inside your Claude Code session</span>
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+            <span class="terminal-title"><span class="prompt">▸</span> inside your Claude Code session</span>
           </div>
           <div class="terminal-body">
 <pre><span class="t-dim">// Machine A's Claude calls:</span>
-bridge_send_message({
+<span class="t-cyan">bridge_send_message</span>({
   <span class="t-bold">machine:</span> <span class="t-green">"MacBook-Pro"</span>,
   <span class="t-bold">content:</span> <span class="t-green">"can you run the e2e suite and paste the failures?"</span>
 })
 
 <span class="t-dim">// A few hundred ms later, Machine B's Claude sees:</span>
-<span class="t-cyan">&lt;channel source="agent-bridge" from="Mac-Mini" message_id="msg-91c..." ts="2026-04-14T22:11:03Z"&gt;</span>
+<span class="t-tag">&lt;channel source="agent-bridge" from="Mac-Mini" message_id="msg-91c..." ts="2026-04-14T22:11:03Z"&gt;</span>
   can you run the e2e suite and paste the failures?
-<span class="t-cyan">&lt;/channel&gt;</span>
+<span class="t-tag">&lt;/channel&gt;</span>
 
 <span class="t-dim">// ...and responds the same way:</span>
-bridge_send_message({ <span class="t-bold">machine:</span> <span class="t-green">"Mac-Mini"</span>, <span class="t-bold">content:</span> <span class="t-green">"3 failed, logs attached: ..."</span> })</pre>
+<span class="t-cyan">bridge_send_message</span>({ <span class="t-bold">machine:</span> <span class="t-green">"Mac-Mini"</span>, <span class="t-bold">content:</span> <span class="t-green">"3 failed, logs attached: ..."</span> })</pre>
           </div>
         </div>
       </section>
 
       <!-- TOOLS -->
       <section class="tools wrap" id="tools">
-        <div class="section-kicker">Tool reference</div>
-        <h2>Seven MCP tools. One concept per tool.</h2>
+        <div class="kicker"><span class="num">06 /</span> Tool reference</div>
+        <h2 class="section-title">Seven MCP tools. <span class="accent">One concept</span> per tool.</h2>
         <div class="tools-grid">
           <div class="tool">
             <div class="tool-name">bridge_send_message</div>
@@ -348,95 +406,120 @@ bridge_send_message({ <span class="t-bold">machine:</span> <span class="t-green"
 
       <!-- COMPAT -->
       <section class="compat wrap" id="compat">
-        <div class="section-kicker">Compatibility</div>
-        <h2>Tested &amp; scaffolded harnesses.</h2>
-        <div class="features-grid">
-          <div class="feature">
-            <div class="feature-icon">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            </div>
-            <h3>Claude Code <span class="pill">tested end-to-end</span></h3>
-            <p>Full push via the native plugin. Install with the local-directory marketplace flow above. The plugin bundles both the <code>bridge_*</code> MCP tools and the channel in one Node process.</p>
+        <div class="kicker"><span class="num">07 /</span> Compatibility</div>
+        <h2 class="section-title">Tested &amp; <span class="accent">scaffolded</span> harnesses.</h2>
+        <div class="compat-table" role="table">
+          <div class="compat-row compat-row--head" role="row">
+            <div role="columnheader">Harness</div>
+            <div role="columnheader">Status</div>
+            <div role="columnheader">Notes</div>
           </div>
-          <div class="feature">
-            <div class="feature-icon">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+
+          <div class="compat-row" role="row">
+            <div class="compat-name" role="cell">
+              <span class="glyph" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              </span>
+              Claude Code
             </div>
-            <h3>OpenClaw <span class="pill">scaffolded</span></h3>
-            <p>MCP tools out of the box. The <code>openclaw-plugin/</code> companion adds push-style delivery by shelling <code>openclaw agent --to ... --message ...</code> when a new inbox file arrives. Not yet exercised end-to-end on v3.0.0 &mdash; empirical reports welcome.</p>
+            <div class="compat-status" role="cell"><span class="pill pill--live">● live</span></div>
+            <div class="compat-desc" role="cell">Full push via the native plugin. Install with the local-directory marketplace flow above. The plugin bundles both the <code>bridge_*</code> MCP tools and the channel in one Node process.</div>
           </div>
-          <div class="feature">
-            <div class="feature-icon">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+
+          <div class="compat-row" role="row">
+            <div class="compat-name" role="cell">
+              <span class="glyph" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              </span>
+              OpenClaw
             </div>
-            <h3>Codex CLI <span class="pill">scaffolded</span></h3>
-            <p>MCP tools via <code>codex mcp add agent-bridge ...</code>. <code>AGENTS.md</code> in the repo root is auto-picked-up by Codex as instructions. Polling mode &mdash; call <code>bridge_receive_messages</code> at breakpoints.</p>
+            <div class="compat-status" role="cell"><span class="pill pill--scaffold">scaffolded</span></div>
+            <div class="compat-desc" role="cell">MCP tools out of the box. The <code>openclaw-plugin/</code> companion adds push-style delivery by shelling <code>openclaw agent --to ... --message ...</code> when a new inbox file arrives. Not yet exercised end-to-end on v3.0.0 &mdash; empirical reports welcome.</div>
           </div>
-          <div class="feature">
-            <div class="feature-icon">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+
+          <div class="compat-row" role="row">
+            <div class="compat-name" role="cell">
+              <span class="glyph" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+              </span>
+              Codex CLI
             </div>
-            <h3>Gemini CLI <span class="pill">scaffolded</span></h3>
-            <p>MCP tools via <code>gemini mcp add agent-bridge ...</code>. <code>GEMINI.md</code> in the repo root is picked up for guidance. Polling mode.</p>
+            <div class="compat-status" role="cell"><span class="pill pill--scaffold">scaffolded</span></div>
+            <div class="compat-desc" role="cell">MCP tools via <code>codex mcp add agent-bridge ...</code>. <code>AGENTS.md</code> in the repo root is auto-picked-up by Codex as instructions. Polling mode &mdash; call <code>bridge_receive_messages</code> at breakpoints.</div>
           </div>
-          <div class="feature">
-            <div class="feature-icon">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M16 13H8M16 17H8M10 9H8"/></svg>
+
+          <div class="compat-row" role="row">
+            <div class="compat-name" role="cell">
+              <span class="glyph" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+              </span>
+              Gemini CLI
             </div>
-            <h3>Aider &amp; other MCP agents <span class="pill">scaffolded</span></h3>
-            <p>Anything that speaks MCP can call the <code>bridge_*</code> tools. See <code>INSTRUCTIONS.md</code> in the repo root for plain-English guidance a generic agent can follow.</p>
+            <div class="compat-status" role="cell"><span class="pill pill--scaffold">scaffolded</span></div>
+            <div class="compat-desc" role="cell">MCP tools via <code>gemini mcp add agent-bridge ...</code>. <code>GEMINI.md</code> in the repo root is picked up for guidance. Polling mode.</div>
+          </div>
+
+          <div class="compat-row" role="row">
+            <div class="compat-name" role="cell">
+              <span class="glyph" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M16 13H8M16 17H8M10 9H8"/></svg>
+              </span>
+              Aider &amp; other MCP agents
+            </div>
+            <div class="compat-status" role="cell"><span class="pill pill--scaffold">scaffolded</span></div>
+            <div class="compat-desc" role="cell">Anything that speaks MCP can call the <code>bridge_*</code> tools. See <code>INSTRUCTIONS.md</code> in the repo root for plain-English guidance a generic agent can follow.</div>
           </div>
         </div>
       </section>
 
       <!-- SECURITY -->
       <section class="security wrap">
-        <div class="section-kicker">Security</div>
-        <h2>SSH-authenticated. TTL-bounded. No cloud.</h2>
-        <div class="features-grid">
-          <div class="feature">
+        <div class="kicker"><span class="num">08 /</span> Security</div>
+        <h2 class="section-title">SSH-authenticated. TTL-bounded. <span class="accent">No cloud.</span></h2>
+        <ul class="sec-list">
+          <li>
             <h3>ED25519 keypairs per machine</h3>
             <p>Each machine generates its own key under <code>~/.agent-bridge/keys/</code> during <code>agent-bridge setup</code>. Authorized keys are installed only on paired peers. No passwords, no shared secrets.</p>
-          </div>
-          <div class="feature">
+          </li>
+          <li>
             <h3>Base64 transport over SSH</h3>
             <p>Message content is base64-encoded before SSH delivery to sidestep shell-quoting hazards. The remote-side path is tilde-expanded to <code>$HOME</code> so files land in the real inbox, not a literal <code>~</code> directory.</p>
-          </div>
-          <div class="feature">
+          </li>
+          <li>
             <h3>TTL-bounded delivery</h3>
             <p>Messages have a default 1-hour TTL. A background prune runs every 5 minutes; expired files are auto-deleted so the inbox never grows unbounded. Malformed files are quarantined to <code>inbox/.failed/</code>.</p>
-          </div>
-          <div class="feature">
+          </li>
+          <li>
             <h3>Never touches a third-party server</h3>
             <p>Everything is direct machine-to-machine SSH on the ports you already allow. No broker, no relay, no vendor. Tailscale is strongly recommended for off-LAN links; serveo is available when you just need a quick reverse tunnel.</p>
-          </div>
-        </div>
+          </li>
+        </ul>
       </section>
 
       <!-- CHANGELOG -->
       <section class="changelog wrap">
-        <div class="section-kicker">Changelog highlights</div>
-        <h2>What&rsquo;s new.</h2>
+        <div class="kicker"><span class="num">09 /</span> Changelog highlights</div>
+        <h2 class="section-title">What&rsquo;s <span class="accent">new.</span></h2>
         <ul class="changelog-list">
-          <li>
-            <div class="cl-version">3.0.0</div>
+          <li class="cl-item cl-item--breaking">
+            <div class="cl-version">3.0.0 <span class="breaking-tag">breaking</span></div>
             <div class="cl-body">
-              <strong>BREAKING &mdash; fresh-spawn wrappers removed.</strong> The <code>--claude</code>, <code>--codex</code>, and <code>--agent</code> flags on <code>agent-bridge run</code> are gone. They spawned a <em>new</em> non-interactive agent on the remote machine &mdash; the exact opposite of this project's purpose. Agent-to-agent is now exclusively channel mode (<code>bridge_send_message</code> &rarr; inbox drop &rarr; running remote agent's context). Plain <code>agent-bridge run &lt;machine&gt; "&lt;cmd&gt;"</code> is kept as a diagnostics utility. Versions aligned across CLI, MCP server, and plugin manifest to <code>3.0.0</code>.
+              <strong>Fresh-spawn wrappers removed.</strong> The <code>--claude</code>, <code>--codex</code>, and <code>--agent</code> flags on <code>agent-bridge run</code> are gone. They spawned a <em>new</em> non-interactive agent on the remote machine &mdash; the exact opposite of this project&rsquo;s purpose. Agent-to-agent is now exclusively channel mode (<code>bridge_send_message</code> &rarr; inbox drop &rarr; running remote agent&rsquo;s context). Plain <code>agent-bridge run &lt;machine&gt; "&lt;cmd&gt;"</code> is kept as a diagnostics utility. Versions aligned across CLI, MCP server, and plugin manifest to <code>3.0.0</code>.
             </div>
           </li>
-          <li>
+          <li class="cl-item">
             <div class="cl-version">2.3.2</div>
             <div class="cl-body">
               <strong>Tilde expansion fix.</strong> Messages were landing in a literal <code>~/.agent-bridge/inbox</code> shadow directory on the remote machine instead of the real <code>$HOME/.agent-bridge/inbox</code>. Fixed in <code>sshWriteFile</code> by substituting leading <code>~/</code> with <code>$HOME/</code> before quoting.
             </div>
           </li>
-          <li>
+          <li class="cl-item">
             <div class="cl-version">2.3.1</div>
             <div class="cl-body">
               <strong>OpenClaw companion parity pass.</strong> Confirmed the OpenClaw side matches the v2.3.0 plugin-ification: zombie-proof, no hardcoded user paths, identical signal handling.
             </div>
           </li>
-          <li>
+          <li class="cl-item">
             <div class="cl-version">2.3.0</div>
             <div class="cl-body">
               <strong>Plugin-ification.</strong> agent-bridge became a single Claude Code plugin that bundles both the <code>bridge_*</code> MCP tools and the incoming channel. One install, both halves. No more hand-editing <code>.mcp.json</code> for the Claude Code path.
@@ -444,14 +527,19 @@ bridge_send_message({ <span class="t-bold">machine:</span> <span class="t-green"
           </li>
         </ul>
         <p class="changelog-link">
-          Full history: <a href="https://github.com/EthanSK/agent-bridge/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG.md</a>
+          ▸ full history: <a href="https://github.com/EthanSK/agent-bridge/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG.md</a>
         </p>
       </section>
 
+      <!-- FOOTER -->
       <footer class="site-footer wrap">
-        <div class="footer-left">
-          <span class="footer-icon">&#x1F309;</span>
-          <span>agent-bridge v3.0.0</span>
+        <div class="footer-brand">
+          <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
+            <circle cx="7" cy="16" r="3.5" fill="#ff7a1a"/>
+            <circle cx="25" cy="16" r="3.5" fill="#4dd0e1"/>
+            <path d="M11 16 L21 16" stroke="#ff7a1a" stroke-width="1.3" stroke-dasharray="2 2"/>
+          </svg>
+          <span>agent-bridge / v3.0.0</span>
         </div>
         <div class="footer-links">
           <a href="https://github.com/EthanSK/agent-bridge" target="_blank" rel="noopener">GitHub</a>
@@ -461,7 +549,8 @@ bridge_send_message({ <span class="t-bold">machine:</span> <span class="t-green"
           <a href="https://github.com/EthanSK" target="_blank" rel="noopener">@EthanSK</a>
         </div>
         <div class="footer-copy">
-          &copy; 2026 Ethan SK &middot; Built for multi-machine Claude Code workflows.
+          © 2026 Ethan SK<br>
+          built for multi-machine Claude Code workflows
         </div>
       </footer>
     </div>

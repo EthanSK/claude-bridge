@@ -1,13 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#c084fc"/>
-      <stop offset="1" stop-color="#7cc4ff"/>
-    </linearGradient>
-  </defs>
-  <rect width="64" height="64" rx="14" fill="#0b0f14"/>
-  <path d="M8 44 Q32 12 56 44" stroke="url(#g)" stroke-width="5" fill="none" stroke-linecap="round"/>
-  <circle cx="10" cy="46" r="4.5" fill="#c084fc"/>
-  <circle cx="54" cy="46" r="4.5" fill="#7cc4ff"/>
-  <line x1="14" y1="46" x2="50" y2="46" stroke="url(#g)" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="3 4"/>
+  <rect width="64" height="64" rx="8" fill="#0a0a0b"/>
+  <rect x="8" y="8" width="48" height="48" rx="4" fill="none" stroke="#1a1d22" stroke-width="1"/>
+  <circle cx="16" cy="32" r="5" fill="#ff7a1a"/>
+  <circle cx="48" cy="32" r="5" fill="#4dd0e1"/>
+  <path d="M21 32 L43 32" stroke="#ff7a1a" stroke-width="1.5" stroke-dasharray="2 2"/>
+  <path d="M21 28 L43 28" stroke="#ff7a1a" stroke-width="1" opacity="0.3"/>
+  <path d="M21 36 L43 36" stroke="#4dd0e1" stroke-width="1" opacity="0.3"/>
+  <text x="32" y="16" font-family="ui-monospace, monospace" font-size="6" fill="#ff7a1a" text-anchor="middle" font-weight="700">CH.03</text>
 </svg>
