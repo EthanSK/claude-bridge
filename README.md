@@ -2,7 +2,7 @@
 
 **Bridge Claude Code sessions across machines. Agent-to-agent push comms over SSH.**
 
-> ⚠️ **Tested end-to-end with Claude Code only (as of v2.4.0, 2026-04-14).** Integrations for other harnesses (Codex, Gemini CLI, Aider) are scaffolded via standard MCP but haven't been exercised yet. Don't assume cross-harness parity.
+> ⚠️ **Tested end-to-end with Claude Code only (as of v2.3.3, 2026-04-14).** Integrations for other harnesses (Codex, Gemini CLI, OpenClaw, Aider) are scaffolded via standard MCP but haven't been exercised yet. Don't assume cross-harness parity.
 
 [![Claude Code](https://img.shields.io/badge/Claude_Code-channel_plugin-blueviolet)](https://github.com/EthanSK/agent-bridge)
 
@@ -75,6 +75,7 @@ agent-bridge lets Claude Code sessions on different machines talk to each other 
 | Agent Harness | Status | Integration |
 |---------------|--------|-------------|
 | **Claude Code** | ✅ **Tested end-to-end**, both machines confirmed | Channel plugin + MCP server — push-based, `<channel source="agent-bridge">` events auto-surface in the running session |
+| OpenClaw | 🟡 Scaffolded, not exercised yet | Companion plugin in [`openclaw-plugin/`](openclaw-plugin/README.md) + MCP server |
 | Codex CLI (OpenAI) | 🟡 Scaffolded, not exercised yet | MCP server + skill file at `AGENTS.md` — would poll via `bridge_receive_messages` |
 | Gemini CLI | 🟡 Scaffolded, not exercised yet | MCP server + skill file at `GEMINI.md` |
 | Aider / other MCP hosts | 🟡 Scaffolded, not exercised yet | MCP server + skill file at `INSTRUCTIONS.md` |
@@ -315,7 +316,7 @@ v2 adds an MCP server that enables running AI agent sessions to communicate dire
 
 | Delivery mode | How it works | Harness support |
 |---------------|--------------|-----------------|
-| **Push** (channel) | Incoming messages are pushed into the conversation as `<channel source="agent-bridge" ...>` tags. No polling needed. | Claude Code (channel plugin) |
+| **Push** (channel) | Incoming messages are pushed into the conversation as `<channel source="agent-bridge" ...>` tags. No polling needed. | Claude Code (channel plugin), OpenClaw ([plugin/daemon](openclaw-plugin/README.md)) |
 | **Polling** | Agent calls `bridge_receive_messages` periodically to check the inbox. | Codex, Gemini CLI, any MCP client |
 
 ### MCP tools
@@ -416,6 +417,45 @@ cp skills/bridge/skill.md ~/.claude/skills/agent-bridge/skill.md
 }
 ```
 
+### OpenClaw (MCP server + channel plugin -- push support)
+
+OpenClaw connects to agent-bridge as both an MCP server (for tools) and, optionally, an OpenClaw plugin or standalone daemon (for push delivery). Without the plugin/daemon, messages are polled; with it, messages arrive as a new user turn automatically — equivalent to the Claude Code channel plugin.
+
+**Step 1 -- MCP server (gives you bridge tools):**
+```bash
+openclaw mcp set agent-bridge '{"command":"node","args":["/absolute/path/to/agent-bridge/mcp-server/build/index.js"]}'
+```
+
+**Step 2 -- install the skill:**
+```bash
+cp -r skills/openclaw ~/.openclaw/workspace/skills/agent-bridge
+```
+
+**Step 3 -- enable push delivery (pick one):**
+
+*Option A — OpenClaw plugin (auto-starts with the gateway):*
+```bash
+openclaw plugins install --link /absolute/path/to/agent-bridge/openclaw-plugin \
+  --dangerously-force-unsafe-install
+openclaw gateway restart
+```
+The `--dangerously-force-unsafe-install` flag is required because the plugin shells out to `openclaw agent` (via `child_process`), which OpenClaw's plugin scanner flags as critical. The call is limited to the host's own CLI, so the bypass is safe here.
+
+*Option B — standalone daemon (no plugin system, no scanner bypass):*
+```bash
+node /absolute/path/to/agent-bridge/openclaw-plugin/bin/agent-bridge-openclaw-inbox.js
+```
+For persistence, wire it into launchd or systemd. A launchd plist template lives in `openclaw-plugin/README.md`.
+
+**How OpenClaw push delivery works:**
+1. Peer's bridge_send_message writes a JSON file to `~/.agent-bridge/inbox/` via SSH
+2. The plugin/daemon's file watcher sees the new file
+3. It shells `openclaw agent --to agent-bridge-<peer> --message "<channel ...>"` to inject a user turn into the per-peer session
+4. On delivery success, the message ID is appended to `~/.agent-bridge/.openclaw-delivered` to dedupe restarts
+5. The agent replies via `bridge_send_message` -- no polling required
+
+**Why shell out?** A real channel plugin per OpenClaw's SDK would require implementing DM policy, pairing flows, outbound send, threading, mention gating, etc. -- overkill for a local file-inbox. `openclaw agent --to ... --message ...` is the stable, documented primitive that drives a full agent turn through the gateway (with embedded fallback). See `openclaw-plugin/README.md` for the full rationale.
+
 ### Codex (OpenAI) (MCP server -- polling)
 
 ```bash
@@ -462,6 +502,16 @@ For **push** notifications, the harness must support the `claude/channel` experi
 3. Channel notification is pushed via notifications/claude/channel
 4. Message appears in Claude's conversation as <channel source="agent-bridge" ...>content</channel>
 5. Message ID is recorded in .delivered to prevent re-delivery on restart
+```
+
+### Receive flow (push mode -- OpenClaw plugin/daemon)
+
+```
+1. File watcher (fswatch/inotifywait/polling) detects new .json file in inbox/
+2. Watcher parses the message and checks .openclaw-delivered for dedup
+3. Plugin/daemon shells `openclaw agent --to agent-bridge-<peer> --message <envelope>`
+4. OpenClaw routes the message to a per-peer session; agent sees it as a new user turn formatted <channel source="agent-bridge" ...>content</channel>
+5. Message ID is recorded in .openclaw-delivered to prevent re-delivery on restart
 ```
 
 ### Receive flow (polling mode -- Codex, Gemini, etc.)
@@ -535,7 +585,7 @@ Machine A (Claude Code)                   Machine B (Claude Code)
 └─────────────────────────┘               └─────────────────────────┘
 ```
 
-### Polling mode (Codex/Gemini to any harness)
+### Polling mode (Codex/OpenClaw/Gemini to any harness)
 
 ```
 Machine A (Codex)                         Machine B (any harness)
@@ -709,6 +759,12 @@ Codex automatically reads `AGENTS.md` from the repo root. No extra setup needed 
 
 Gemini CLI automatically reads `GEMINI.md` from the repo root. No extra setup needed if you clone the repo.
 
+### OpenClaw
+
+```bash
+cp -r skills/openclaw ~/.openclaw/workspace/skills/agent-bridge
+```
+
 ### Any other agent
 
 Reference `INSTRUCTIONS.md` in your agent's config, or paste its contents into your agent's system prompt.
@@ -824,7 +880,8 @@ agent-bridge/
 │   ├── build/           # Compiled JS output
 │   └── package.json
 ├── skills/
-│   └── bridge/          # Claude Code skill
+│   ├── bridge/          # Claude Code skill
+│   └── openclaw/        # OpenClaw skill
 ├── AGENTS.md            # Codex CLI instructions
 ├── GEMINI.md            # Gemini CLI instructions
 ├── INSTRUCTIONS.md      # Generic agent instructions
