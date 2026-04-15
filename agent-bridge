@@ -1133,6 +1133,142 @@ cmd_unpair_help() {
   printf 'Remove a paired machine and its SSH key.\n'
 }
 
+# -- send-action --------------------------------------------------------------
+# Drop a JSON action file into a paired machine's ~/.agent-bridge/actions/
+# inbox, where its actions-daemon LaunchAgent will pick it up and execute
+# a fixed GUI keystroke action (send-enter / send-text / send-ctrl-c).
+# See actions-daemon/README.md for the daemon design and threat model.
+cmd_send_action() {
+  local machine_name="" action="" target=""
+  local -a positional=()
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --help|-h) cmd_send_action_help; exit 0 ;;
+      --target)  target="${2:-}"; shift 2 ;;
+      --target=*) target="${1#--target=}"; shift ;;
+      -*)        die "Unknown option: $1" ;;
+      *)
+        if [ -z "$machine_name" ]; then
+          machine_name="$1"
+        elif [ -z "$action" ]; then
+          action="$1"
+        else
+          positional+=("$1")
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  [ -z "$machine_name" ] && die "Machine name required. Usage: agent-bridge send-action <machine> <action> [args...]"
+  [ -z "$action" ]       && die "Action required. Usage: agent-bridge send-action <machine> <action> [args...]"
+
+  case "$action" in
+    send-enter|send-text|send-ctrl-c) ;;
+    *) die "Unsupported action: $action. Supported: send-enter, send-text, send-ctrl-c." ;;
+  esac
+
+  if ! cfg_exists "$machine_name"; then
+    die "Machine \"$machine_name\" not found. Run 'agent-bridge list' to see paired machines."
+  fi
+
+  # Generate UUID. Prefer uuidgen, fall back to /dev/urandom.
+  local id
+  if command -v uuidgen >/dev/null 2>&1; then
+    id="msg-$(uuidgen | tr '[:upper:]' '[:lower:]')"
+  else
+    id="msg-$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  fi
+
+  local ts
+  ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+  # Build JSON args array from remaining positionals.
+  local args_json="[]"
+  if [ "${#positional[@]}" -gt 0 ]; then
+    if command -v jq >/dev/null 2>&1; then
+      args_json="$(printf '%s\n' "${positional[@]}" | jq -R . | jq -s -c .)"
+    else
+      # Minimal fallback: escape backslash and double-quote only.
+      local first=1 a esc
+      args_json="["
+      for a in "${positional[@]}"; do
+        esc="${a//\\/\\\\}"; esc="${esc//\"/\\\"}"
+        if [ "$first" -eq 1 ]; then
+          args_json+="\"${esc}\""
+          first=0
+        else
+          args_json+=",\"${esc}\""
+        fi
+      done
+      args_json+="]"
+    fi
+  fi
+
+  local target_json="null"
+  if [ -n "$target" ]; then
+    local esc="${target//\\/\\\\}"; esc="${esc//\"/\\\"}"
+    target_json="\"${esc}\""
+  fi
+
+  local json
+  json="$(printf '{"id":"%s","action":"%s","target":%s,"args":%s,"timestamp":"%s"}' \
+    "$id" "$action" "$target_json" "$args_json" "$ts")"
+
+  # Ship it over SSH using the paired key. We do not scp — piping through
+  # ssh into cat avoids needing a second temp file on the sending side and
+  # matches the style used elsewhere in this CLI.
+  local host user port keypath
+  host="$(cfg_get "$machine_name" host)"
+  user="$(cfg_get "$machine_name" user)"
+  port="$(cfg_get "$machine_name" port 2>/dev/null || printf '22')"
+  keypath="$(cfg_get "$machine_name" key 2>/dev/null || true)"
+  keypath="${keypath/#\~/$HOME}"
+
+  local -a ssh_args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-p" "$port")
+  if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
+    ssh_args+=("-i" "$keypath")
+  fi
+  ssh_args+=("${user}@${host}")
+
+  local remote_path="\$HOME/.agent-bridge/actions/${id}.json"
+  local remote_cmd="mkdir -p \$HOME/.agent-bridge/actions && chmod 700 \$HOME/.agent-bridge/actions && umask 077 && cat > ${remote_path}"
+
+  printf "${DIM}  Sending action %s to %s...${RESET}\n" "$action" "$machine_name"
+
+  if ! printf '%s' "$json" | ssh "${ssh_args[@]}" "$remote_cmd"; then
+    die "Failed to deliver action file to $machine_name."
+  fi
+
+  printf '\n'
+  ok "queued $action on $machine_name"
+  printf "${DIM}  id:     %s${RESET}\n" "$id"
+  printf "${DIM}  remote: ~/.agent-bridge/actions/%s.json${RESET}\n" "$id"
+  printf '\n'
+}
+
+cmd_send_action_help() {
+  printf 'Usage: agent-bridge send-action <machine> <action> [args...] [--target "App Name"]\n\n'
+  printf 'Send a GUI keystroke action to a paired machine running the\n'
+  printf 'agent-bridge actions-daemon LaunchAgent.\n\n'
+  printf 'Supported actions:\n'
+  printf '  send-enter                    Press Return in the target app.\n'
+  printf '  send-text "<short text>"      Type the given text (printable ASCII).\n'
+  printf '  send-ctrl-c                   Send Ctrl+C (interrupt) to the target.\n\n'
+  printf 'Primary use case: unstick a remote Claude Code CLI sitting on a\n'
+  printf 'yes/no permission prompt. Default target app is "Claude"; override\n'
+  printf 'with --target.\n\n'
+  printf 'Examples:\n'
+  printf '  agent-bridge send-action MacBook-Pro send-enter\n'
+  printf '  agent-bridge send-action MacBook-Pro send-text y\n'
+  printf '  agent-bridge send-action MacBook-Pro send-text n --target "Claude"\n'
+  printf '  agent-bridge send-action MacBook-Pro send-ctrl-c\n\n'
+  printf 'See actions-daemon/README.md in the agent-bridge repo for the\n'
+  printf 'full design, threat model, and install instructions for the\n'
+  printf 'receiving machine.\n'
+}
+
 cmd_help() {
   printf '\n'
   printf "${BOLD}agent-bridge${RESET} v%s\n" "$VERSION"
@@ -1150,6 +1286,10 @@ cmd_help() {
   printf '  list               List all paired machines\n'
   printf '  status [machine]   Check reachability\n'
   printf '  unpair <machine>   Remove a pairing\n'
+  printf '  send-action <machine> <action> [args...]\n'
+  printf '                     Send a GUI keystroke action (send-enter, send-text,\n'
+  printf '                     send-ctrl-c) to a paired machine running the\n'
+  printf '                     actions-daemon LaunchAgent. See actions-daemon/README.md.\n'
   printf '  version            Show version\n'
   printf '  help               Show this help\n'
   printf '\n'
@@ -1164,6 +1304,8 @@ cmd_help() {
   printf '  agent-bridge run MacBook-Pro "ls -la ~/Projects"\n'
   printf '  agent-bridge run MacBook-Pro "cd ~/Projects/myapp && git pull"\n'
   printf '  agent-bridge connect MacBook-Pro\n'
+  printf '  agent-bridge send-action MacBook-Pro send-enter\n'
+  printf '  agent-bridge send-action MacBook-Pro send-text y\n'
   printf '\n'
   printf 'https://github.com/EthanSK/agent-bridge\n'
   printf '\n'
@@ -1186,6 +1328,7 @@ main() {
     list)     cmd_list "$@" ;;
     status)   cmd_status "$@" ;;
     unpair)   cmd_unpair "$@" ;;
+    send-action) cmd_send_action "$@" ;;
     version|--version|-v) cmd_version ;;
     help|--help|-h)       cmd_help ;;
     *)        die "Unknown command: $cmd. Run 'agent-bridge help' for usage." ;;
