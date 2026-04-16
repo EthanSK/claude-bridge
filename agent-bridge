@@ -197,6 +197,141 @@ cfg_list_names() {
   done < "$CONFIG_FILE"
 }
 
+# Set or update a single key within an existing machine section
+cfg_set() {
+  local machine="$1" key="$2" value="$3"
+  if ! cfg_exists "$machine"; then
+    die "Machine \"$machine\" not found in config."
+  fi
+  local real_name
+  real_name="$(cfg_real_name "$machine")"
+  local tmpfile
+  tmpfile="$(mktemp)"
+  local in_section=0 key_written=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    if [[ "$line" =~ ^\[(.+)\]$ ]]; then
+      local section="${BASH_REMATCH[1]}"
+      # If leaving our section and we haven't written the key yet, append it
+      if [ "$in_section" = "1" ] && [ "$key_written" = "0" ]; then
+        printf '%s=%s\n' "$key" "$value" >> "$tmpfile"
+        key_written=1
+      fi
+      if [ "$section" = "$real_name" ]; then
+        in_section=1
+      else
+        in_section=0
+      fi
+      printf '%s\n' "$line" >> "$tmpfile"
+      continue
+    fi
+    if [ "$in_section" = "1" ] && [[ "$line" =~ ^${key}= ]]; then
+      # Replace existing key
+      printf '%s=%s\n' "$key" "$value" >> "$tmpfile"
+      key_written=1
+      continue
+    fi
+    printf '%s\n' "$line" >> "$tmpfile"
+  done < "$CONFIG_FILE"
+  # If still in section at EOF and key not written, append it
+  if [ "$in_section" = "1" ] && [ "$key_written" = "0" ]; then
+    printf '%s=%s\n' "$key" "$value" >> "$tmpfile"
+  fi
+  mv "$tmpfile" "$CONFIG_FILE"
+  chmod 600 "$CONFIG_FILE"
+}
+
+# -- Tunnel config helpers ----------------------------------------------------
+TUNNEL_CONFIG_FILE="$CONFIG_DIR/tunnel-config"
+LAUNCH_AGENT_LABEL="com.ethansk.agent-bridge-tunnel"
+LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
+
+tunnel_config_get() {
+  local key="$1"
+  if [ ! -f "$TUNNEL_CONFIG_FILE" ]; then
+    return 1
+  fi
+  # Simple JSON field extraction (no jq dependency)
+  local val
+  val="$(grep -o "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$TUNNEL_CONFIG_FILE" 2>/dev/null | head -1 | sed 's/.*":\s*"//' | sed 's/"$//')"
+  if [ -n "$val" ]; then
+    printf '%s' "$val"
+    return 0
+  fi
+  # Try boolean/number fields
+  val="$(grep -o "\"${key}\"[[:space:]]*:[[:space:]]*[^,}]*" "$TUNNEL_CONFIG_FILE" 2>/dev/null | head -1 | sed 's/.*:\s*//' | tr -d ' ')"
+  if [ -n "$val" ]; then
+    printf '%s' "$val"
+    return 0
+  fi
+  return 1
+}
+
+# -- SSH helpers with dual-endpoint fallback ----------------------------------
+# Try LAN first (3s timeout), fall back to internet_host if configured.
+# Usage: ssh_with_fallback <machine> <ssh_args...>
+# Sets SSH_FALLBACK_USED=1 if internet fallback was used.
+SSH_FALLBACK_USED=0
+
+ssh_build_args_for() {
+  # Build SSH args for a specific host:port
+  local machine="$1" host="$2" port="$3" timeout="$4"
+  local keypath
+  keypath="$(cfg_get "$machine" key 2>/dev/null || true)"
+  keypath="${keypath/#\~/$HOME}"
+
+  local args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-o" "ConnectTimeout=${timeout}" "-p" "$port")
+  if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
+    args+=("-i" "$keypath")
+  fi
+  args+=("$(cfg_get "$machine" user)@${host}")
+
+  printf '%s\n' "${args[@]}"
+}
+
+ssh_exec_with_fallback() {
+  local machine="$1"
+  shift
+  local extra_args=("$@")
+
+  local host port internet_host internet_port
+  host="$(cfg_get "$machine" host)" || die "Machine \"$machine\" not found."
+  port="$(cfg_get "$machine" port 2>/dev/null || printf '22')"
+  internet_host="$(cfg_get "$machine" internet_host 2>/dev/null || true)"
+  internet_port="$(cfg_get "$machine" internet_port 2>/dev/null || printf '22')"
+
+  local has_fallback=0
+  [ -n "$internet_host" ] && has_fallback=1
+
+  local lan_timeout=10
+  [ "$has_fallback" = "1" ] && lan_timeout=3
+
+  SSH_FALLBACK_USED=0
+
+  # Try LAN
+  local lan_args
+  readarray -t lan_args < <(ssh_build_args_for "$machine" "$host" "$port" "$lan_timeout")
+  lan_args+=("${extra_args[@]}")
+
+  local lan_exit=0
+  ssh "${lan_args[@]}" || lan_exit=$?
+
+  # Only fallback on SSH connection failure (exit 255)
+  if [ "$lan_exit" -ne 255 ] || [ "$has_fallback" = "0" ]; then
+    return "$lan_exit"
+  fi
+
+  # Try internet fallback
+  SSH_FALLBACK_USED=1
+  local inet_args
+  readarray -t inet_args < <(ssh_build_args_for "$machine" "$internet_host" "$internet_port" "10")
+  inet_args+=("${extra_args[@]}")
+
+  local inet_exit=0
+  ssh "${inet_args[@]}" || inet_exit=$?
+  return "$inet_exit"
+}
+
 # -- Network helpers ----------------------------------------------------------
 get_local_ip() {
   if command -v ipconfig >/dev/null 2>&1; then
@@ -390,7 +525,7 @@ update_harness_instructions() {
 # -- Commands -----------------------------------------------------------------
 
 cmd_setup() {
-  local machine_name="" port="22" internet=false tunnel_provider="serveo"
+  local machine_name="" port="22" internet=false tunnel_provider="serveo" stop_internet=false
   TUNNEL_PID=""
 
   while [ $# -gt 0 ]; do
@@ -398,11 +533,43 @@ cmd_setup() {
       --name|-n)             machine_name="$2"; shift 2 ;;
       --port|-p)             port="$2"; shift 2 ;;
       --internet)            internet=true; shift ;;
+      --stop)                stop_internet=true; shift ;;
       --tunnel-provider)     tunnel_provider="$2"; shift 2 ;;
       --help|-h)             cmd_setup_help; exit 0 ;;
       *)                     die "Unknown option: $1. Use --help for usage." ;;
     esac
   done
+
+  # Handle --internet --stop: tear down tunnel
+  if [ "$stop_internet" = true ] && [ "$internet" = false ]; then
+    die "--stop must be used with --internet. Usage: agent-bridge setup --internet --stop"
+  fi
+  if [ "$stop_internet" = true ]; then
+    printf '\n'
+    printf "${BOLD}${CYAN}  Tearing down internet tunnel...${RESET}\n"
+    printf '\n'
+
+    if is_macos && [ -f "$LAUNCH_AGENT_PLIST" ]; then
+      launchctl unload "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
+      rm -f "$LAUNCH_AGENT_PLIST"
+      ok "LaunchAgent removed."
+    else
+      # Kill any running tunnel process
+      pkill -f "ssh.*serveo.net" 2>/dev/null || true
+      dim "Tunnel process stopped (if running)."
+    fi
+
+    if [ -f "$TUNNEL_CONFIG_FILE" ]; then
+      rm -f "$TUNNEL_CONFIG_FILE"
+      ok "Tunnel config removed."
+    else
+      dim "No tunnel config found."
+    fi
+    printf '\n'
+    ok "Internet tunnel torn down."
+    printf '\n'
+    return
+  fi
 
   [ -z "$machine_name" ] && machine_name="$(get_machine_name)"
   local user
@@ -544,71 +711,174 @@ cmd_setup() {
   fi
   printf '\n'
 
-  # Internet tunnel
+  # Internet tunnel — pinned subdomain + persistent LaunchAgent
   if [ "$internet" = true ]; then
-    printf "${BOLD}  4. Internet Tunnel${RESET}\n"
-    local tunnel_address=""
+    printf "${BOLD}  4. Internet Tunnel (Serveo)${RESET}\n"
 
     case "$tunnel_provider" in
       serveo)
-        dim "Starting reverse SSH tunnel via serveo.net..."
+        # Pick a subdomain based on machine name
+        local raw_sub
+        raw_sub="$(printf '%s' "$machine_name" | tr '[:upper:]' '[:lower:]' | tr ' _' '-' | tr -cd 'a-z0-9-')"
+        local subdomain="${raw_sub}"
+
+        # Test if subdomain is available by attempting a quick tunnel
+        dim "Trying subdomain: ${subdomain}.serveo.net ..."
         local tunnel_log
         tunnel_log="$(mktemp)"
-        ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R "0:localhost:${port}" serveo.net > "$tunnel_log" 2>&1 &
-        TUNNEL_PID=$!
+        ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=60 -o ServerAliveCountMax=3 \
+          -R "${subdomain}:22:localhost:${port}" serveo.net -N > "$tunnel_log" 2>&1 &
+        local test_pid=$!
 
-        # Wait for serveo to report the forwarding address (up to 10 seconds)
-        local waited=0
-        while [ "$waited" -lt 10 ]; do
-          if [ -f "$tunnel_log" ]; then
-            tunnel_address="$(grep -oE 'serveo\.net:[0-9]+' "$tunnel_log" 2>/dev/null | head -1 || true)"
-            if [ -n "$tunnel_address" ]; then
-              break
-            fi
+        # Wait for serveo to confirm or reject (up to 15 seconds)
+        local waited=0 tunnel_ok=0
+        while [ "$waited" -lt 15 ]; do
+          if ! kill -0 "$test_pid" 2>/dev/null; then
+            # Process exited — likely subdomain taken or error
+            break
+          fi
+          # Check for forwarding confirmation
+          if grep -q "Forwarding" "$tunnel_log" 2>/dev/null; then
+            tunnel_ok=1
+            break
+          fi
+          # Check for "already in use" or error
+          if grep -qi "already in use\|error\|refused" "$tunnel_log" 2>/dev/null; then
+            break
           fi
           sleep 1
           waited=$((waited + 1))
         done
 
-        if [ -n "$tunnel_address" ]; then
-          local tunnel_host="${tunnel_address%%:*}"
-          local tunnel_port="${tunnel_address##*:}"
-          ok "Tunnel active!"
-          printf '\n'
-          printf "${BOLD}${GREEN}  Internet access:${RESET}\n"
-          printf "${BOLD}    Host: ${CYAN}%s${RESET}\n" "$tunnel_host"
-          printf "${BOLD}    Port: ${CYAN}%s${RESET}\n" "$tunnel_port"
-          printf '\n'
-          printf "${DIM}  Remote pair command:${RESET}\n"
-          printf "${DIM}    agent-bridge pair --name \"%s\" --host %s --port %s --user %s --token \"%s\" --pubkey \"%s\"${RESET}\n" \
-            "$machine_name" "$tunnel_host" "$tunnel_port" "$user" "$pairing_token" "$pub_key"
-          printf '\n'
-        else
-          warn "Tunnel may still be connecting. Check output below."
-          warn "If serveo.net is unavailable, try port forwarding or Tailscale instead."
-          if [ -n "$TUNNEL_PID" ] && kill -0 "$TUNNEL_PID" 2>/dev/null; then
-            dim "Tunnel process running (PID $TUNNEL_PID)."
-          else
-            warn "Tunnel process exited. serveo.net may be down."
-            TUNNEL_PID=""
-          fi
-          printf '\n'
+        # If subdomain taken, try with random suffix
+        if [ "$tunnel_ok" = "0" ]; then
+          kill "$test_pid" 2>/dev/null || true
+          wait "$test_pid" 2>/dev/null || true
+          local suffix
+          suffix="$(head -c 3 /dev/urandom | xxd -p | head -c 4)"
+          subdomain="${raw_sub}-${suffix}"
+          warn "Subdomain taken or unavailable, trying: ${subdomain}.serveo.net ..."
+
+          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=60 -o ServerAliveCountMax=3 \
+            -R "${subdomain}:22:localhost:${port}" serveo.net -N > "$tunnel_log" 2>&1 &
+          test_pid=$!
+
+          waited=0
+          while [ "$waited" -lt 15 ]; do
+            if ! kill -0 "$test_pid" 2>/dev/null; then
+              break
+            fi
+            if grep -q "Forwarding" "$tunnel_log" 2>/dev/null; then
+              tunnel_ok=1
+              break
+            fi
+            sleep 1
+            waited=$((waited + 1))
+          done
         fi
 
+        # Kill the test tunnel — the LaunchAgent will run the persistent one
+        kill "$test_pid" 2>/dev/null || true
+        wait "$test_pid" 2>/dev/null || true
         rm -f "$tunnel_log" 2>/dev/null
+
+        if [ "$tunnel_ok" = "1" ]; then
+          ok "Subdomain ${subdomain}.serveo.net is available!"
+          printf '\n'
+
+          # Save tunnel config
+          ensure_config_dir
+          cat > "$TUNNEL_CONFIG_FILE" <<TJSON
+{
+  "subdomain": "${subdomain}",
+  "port": ${port},
+  "enabled": true
+}
+TJSON
+          chmod 600 "$TUNNEL_CONFIG_FILE"
+          ok "Tunnel config saved to $TUNNEL_CONFIG_FILE"
+
+          # Install LaunchAgent for persistence (macOS)
+          if is_macos; then
+            dim "Installing LaunchAgent for persistent tunnel..."
+            mkdir -p "$HOME/Library/LaunchAgents"
+            cat > "$LAUNCH_AGENT_PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${LAUNCH_AGENT_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/ssh</string>
+    <string>-o</string>
+    <string>StrictHostKeyChecking=no</string>
+    <string>-o</string>
+    <string>ServerAliveInterval=60</string>
+    <string>-o</string>
+    <string>ServerAliveCountMax=3</string>
+    <string>-o</string>
+    <string>ExitOnForwardFailure=yes</string>
+    <string>-R</string>
+    <string>${subdomain}:22:localhost:${port}</string>
+    <string>serveo.net</string>
+    <string>-N</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>${CONFIG_DIR}/logs/tunnel.log</string>
+  <key>StandardErrorPath</key>
+  <string>${CONFIG_DIR}/logs/tunnel.log</string>
+</dict>
+</plist>
+PLIST
+            # Ensure logs dir exists
+            mkdir -p "$CONFIG_DIR/logs"
+
+            # Unload any existing agent first
+            launchctl unload "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
+            if launchctl load "$LAUNCH_AGENT_PLIST"; then
+              ok "LaunchAgent installed and loaded (auto-restarts on boot)."
+            else
+              warn "LaunchAgent plist written but 'launchctl load' failed."
+              warn "Try manually: launchctl load $LAUNCH_AGENT_PLIST"
+            fi
+          else
+            warn "Not macOS — skipping LaunchAgent. Start the tunnel manually:"
+            dim "  ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=60 -o ServerAliveCountMax=3 -R ${subdomain}:22:localhost:${port} serveo.net -N &"
+          fi
+
+          printf '\n'
+          printf "${BOLD}${GREEN}  Internet access:${RESET}\n"
+          printf "${BOLD}    Host: ${CYAN}%s.serveo.net${RESET}\n" "$subdomain"
+          printf "${BOLD}    Port: ${CYAN}22${RESET}\n"
+          printf '\n'
+          dim "Your machine is now reachable at ${subdomain}.serveo.net:22"
+          dim "Tell paired machines to set this as internet_host:"
+          dim "  agent-bridge config <machine> --internet-host ${subdomain}.serveo.net"
+          printf '\n'
+          dim "To tear down: agent-bridge setup --internet --stop"
+          printf '\n'
+        else
+          warn "Could not establish Serveo tunnel. serveo.net may be down."
+          printf '\n'
+          printf "${BOLD}  Manual alternatives:${RESET}\n"
+          dim "  1. Port forward $port on your router to this machine's local IP ($primary_ip)"
+          dim "  2. Use Tailscale (https://tailscale.com) for a private tunnel"
+          dim "  3. Use ngrok: ngrok tcp $port"
+          printf '\n'
+        fi
         ;;
       *)
         die "Unknown tunnel provider: $tunnel_provider. Supported: serveo"
         ;;
     esac
-
-    if [ -z "$tunnel_address" ]; then
-      printf "${BOLD}  Manual alternatives:${RESET}\n"
-      dim "  1. Port forward $port on your router to this machine's local IP ($primary_ip)"
-      dim "  2. Use Tailscale (https://tailscale.com) for a private tunnel"
-      dim "  3. Use ngrok: ngrok tcp $port"
-      printf '\n'
-    fi
   fi
 
   # Manual pairing string (includes public key — no password needed)
@@ -655,9 +925,13 @@ cmd_setup_help() {
   printf 'Options:\n'
   printf '  -n, --name <name>              Machine name (defaults to hostname)\n'
   printf '  -p, --port <port>              SSH port (default: 22)\n'
-  printf '      --internet                 Start a reverse SSH tunnel for internet access\n'
+  printf '      --internet                 Set up persistent Serveo tunnel with pinned subdomain\n'
+  printf '      --stop                     Tear down the internet tunnel (use with --internet)\n'
   printf '      --tunnel-provider <name>   Tunnel provider (default: serveo). Supported: serveo\n'
-  printf '  -h, --help                     Show this help\n'
+  printf '  -h, --help                     Show this help\n\n'
+  printf 'Internet tunnel:\n'
+  printf '  agent-bridge setup --internet          Create tunnel + LaunchAgent\n'
+  printf '  agent-bridge setup --internet --stop   Remove tunnel + LaunchAgent\n'
 }
 
 cmd_pair() {
@@ -792,6 +1066,19 @@ cmd_pair() {
   # Step 4: Save pairing config
   cfg_save "$machine_name" "$host" "$user" "$port" "$keypath"
 
+  # Step 4b: If local machine has a tunnel configured, share it
+  if [ -f "$TUNNEL_CONFIG_FILE" ]; then
+    local local_subdomain
+    local_subdomain="$(tunnel_config_get subdomain 2>/dev/null || true)"
+    if [ -n "$local_subdomain" ]; then
+      printf "${BOLD}  4. Internet Tunnel Discovery${RESET}\n"
+      dim "This machine has a tunnel at ${local_subdomain}.serveo.net"
+      dim "The paired machine should set this as your internet_host:"
+      dim "  agent-bridge config $(get_machine_name) --internet-host ${local_subdomain}.serveo.net"
+      printf '\n'
+    fi
+  fi
+
   printf "${GREEN}${BOLD}  [ok] Paired with \"%s\"!${RESET}\n" "$machine_name"
   printf '\n'
   printf "  Connection details:\n"
@@ -851,25 +1138,48 @@ cmd_connect() {
     die "Machine \"$machine_name\" not found. Run 'agent-bridge list' to see paired machines."
   fi
 
-  local host user port keypath
+  local host user port keypath internet_host internet_port
   host="$(cfg_get "$machine_name" host)"
   user="$(cfg_get "$machine_name" user)"
   port="$(cfg_get "$machine_name" port 2>/dev/null || printf '22')"
   keypath="$(cfg_get "$machine_name" key 2>/dev/null || true)"
   keypath="${keypath/#\~/$HOME}"
+  internet_host="$(cfg_get "$machine_name" internet_host 2>/dev/null || true)"
+  internet_port="$(cfg_get "$machine_name" internet_port 2>/dev/null || printf '22')"
+
+  local has_fallback=0
+  [ -n "$internet_host" ] && has_fallback=1
 
   printf '\n'
   printf "${CYAN}  Connecting to ${BOLD}%s${RESET}${CYAN} (%s@%s)...${RESET}\n" "$machine_name" "$user" "$host"
   printf '\n'
 
-  local args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-p" "$port")
+  local lan_timeout=10
+  [ "$has_fallback" = "1" ] && lan_timeout=3
+
+  local args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-o" "ConnectTimeout=${lan_timeout}" "-p" "$port")
   if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
     args+=("-i" "$keypath")
   fi
   args+=("${user}@${host}")
 
-  ssh "${args[@]}"
-  local exit_code=$?
+  local exit_code=0
+  ssh "${args[@]}" || exit_code=$?
+
+  # Only fall back on SSH connection failure (exit 255), not normal session exit.
+  # Exit code 255 means SSH itself failed to connect.
+  if [ "$exit_code" -eq 255 ] && [ "$has_fallback" = "1" ]; then
+    printf '\n'
+    dim "LAN connection failed (SSH exit 255), trying internet fallback (${internet_host}:${internet_port})..."
+    printf '\n'
+    local inet_args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-o" "ConnectTimeout=10" "-p" "$internet_port")
+    if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
+      inet_args+=("-i" "$keypath")
+    fi
+    inet_args+=("${user}@${internet_host}")
+    exit_code=0
+    ssh "${inet_args[@]}" || exit_code=$?
+  fi
 
   printf '\n'
   if [ "$exit_code" -eq 0 ]; then
@@ -915,16 +1225,24 @@ cmd_run() {
     die "Machine \"$machine_name\" not found. Run 'agent-bridge list' to see paired machines."
   fi
 
-  local host user port keypath
+  local host user port keypath internet_host internet_port
   host="$(cfg_get "$machine_name" host)"
   user="$(cfg_get "$machine_name" user)"
   port="$(cfg_get "$machine_name" port 2>/dev/null || printf '22')"
   keypath="$(cfg_get "$machine_name" key 2>/dev/null || true)"
   keypath="${keypath/#\~/$HOME}"
+  internet_host="$(cfg_get "$machine_name" internet_host 2>/dev/null || true)"
+  internet_port="$(cfg_get "$machine_name" internet_port 2>/dev/null || printf '22')"
+
+  local has_fallback=0
+  [ -n "$internet_host" ] && has_fallback=1
+
+  local lan_timeout=10
+  [ "$has_fallback" = "1" ] && lan_timeout=3
 
   printf "${DIM}  Running command on %s...${RESET}\n" "$machine_name"
 
-  local args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-p" "$port")
+  local args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-o" "ConnectTimeout=${lan_timeout}" "-p" "$port")
   if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
     args+=("-i" "$keypath")
   fi
@@ -932,6 +1250,19 @@ cmd_run() {
 
   local exit_code=0
   ssh "${args[@]}" || exit_code=$?
+
+  # Only fall back on SSH connection failure (exit 255), not remote command failures.
+  # Exit code 255 means SSH itself failed (connection refused, timeout, auth failure).
+  if [ "$exit_code" -eq 255 ] && [ "$has_fallback" = "1" ]; then
+    dim "LAN connection failed (SSH exit 255), trying internet fallback (${internet_host}:${internet_port})..."
+    local inet_args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-o" "ConnectTimeout=10" "-p" "$internet_port")
+    if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
+      inet_args+=("-i" "$keypath")
+    fi
+    inet_args+=("${user}@${internet_host}" "$command")
+    exit_code=0
+    ssh "${inet_args[@]}" || exit_code=$?
+  fi
 
   printf '\n'
   if [ "$exit_code" -eq 0 ]; then
@@ -989,9 +1320,16 @@ cmd_list() {
     keypath="$(cfg_get "$name" key 2>/dev/null || printf '(system default)')"
     paired_at="$(cfg_get "$name" paired_at 2>/dev/null || true)"
 
+    local ihost iport
+    ihost="$(cfg_get "$name" internet_host 2>/dev/null || true)"
+    iport="$(cfg_get "$name" internet_port 2>/dev/null || true)"
+
     printf "${BOLD}  %s${RESET}\n" "$name"
     printf "${DIM}    Host:       %s${RESET}\n" "$host"
     printf "${DIM}    Port:       %s${RESET}\n" "$port"
+    if [ -n "$ihost" ]; then
+      printf "${DIM}    Internet:   %s:%s${RESET}\n" "$ihost" "${iport:-22}"
+    fi
     printf "${DIM}    User:       %s${RESET}\n" "$user"
     printf "${DIM}    Key:        %s${RESET}\n" "$keypath"
     if [ -n "$paired_at" ]; then
@@ -1021,14 +1359,22 @@ cmd_status() {
 
   check_machine() {
     local name="$1"
-    local host user port keypath
+    local host user port keypath internet_host internet_port
     host="$(cfg_get "$name" host 2>/dev/null || printf 'unknown')"
     user="$(cfg_get "$name" user 2>/dev/null || printf 'unknown')"
     port="$(cfg_get "$name" port 2>/dev/null || printf '22')"
     keypath="$(cfg_get "$name" key 2>/dev/null || true)"
     keypath="${keypath/#\~/$HOME}"
+    internet_host="$(cfg_get "$name" internet_host 2>/dev/null || true)"
+    internet_port="$(cfg_get "$name" internet_port 2>/dev/null || printf '22')"
 
-    local args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-o" "ConnectTimeout=5" "-p" "$port")
+    local has_fallback=0
+    [ -n "$internet_host" ] && has_fallback=1
+
+    local lan_timeout=5
+    [ "$has_fallback" = "1" ] && lan_timeout=3
+
+    local args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-o" "ConnectTimeout=${lan_timeout}" "-p" "$port")
     if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
       args+=("-i" "$keypath")
     fi
@@ -1041,7 +1387,10 @@ cmd_status() {
       start_time=$(($(date +%s%N) / 1000000))
     fi
 
-    if ssh "${args[@]}" >/dev/null 2>&1; then
+    local lan_exit=0
+    ssh "${args[@]}" >/dev/null 2>&1 || lan_exit=$?
+
+    if [ "$lan_exit" -eq 0 ]; then
       local end_time
       if is_macos; then
         end_time=$(perl -MTime::HiRes=time -e 'printf "%.0f\n", time*1000')
@@ -1049,12 +1398,43 @@ cmd_status() {
         end_time=$(($(date +%s%N) / 1000000))
       fi
       local latency=$((end_time - start_time))
-      printf "${GREEN}  %s${RESET}${DIM} (%s@%s:%s) -- %dms${RESET}\n" "$name" "$user" "$host" "$port" "$latency"
+      printf "${GREEN}  %s${RESET}${DIM} (%s@%s:%s via LAN) -- %dms${RESET}\n" "$name" "$user" "$host" "$port" "$latency"
       return 0
-    else
-      printf "${RED}  %s${RESET}${DIM} (%s) -- unreachable${RESET}\n" "$name" "$host"
+    fi
+
+    # Only try internet fallback on SSH connection failure (exit 255)
+    if [ "$lan_exit" -eq 255 ] && [ "$has_fallback" = "1" ]; then
+      local inet_args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-o" "ConnectTimeout=10" "-p" "$internet_port")
+      if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
+        inet_args+=("-i" "$keypath")
+      fi
+      inet_args+=("${user}@${internet_host}" "echo ok")
+
+      local inet_start
+      if is_macos; then
+        inet_start=$(perl -MTime::HiRes=time -e 'printf "%.0f\n", time*1000')
+      else
+        inet_start=$(($(date +%s%N) / 1000000))
+      fi
+
+      if ssh "${inet_args[@]}" >/dev/null 2>&1; then
+        local inet_end
+        if is_macos; then
+          inet_end=$(perl -MTime::HiRes=time -e 'printf "%.0f\n", time*1000')
+        else
+          inet_end=$(($(date +%s%N) / 1000000))
+        fi
+        local inet_latency=$((inet_end - inet_start))
+        printf "${GREEN}  %s${RESET}${DIM} (%s@%s:%s via internet) -- %dms${RESET}\n" "$name" "$user" "$internet_host" "$internet_port" "$inet_latency"
+        return 0
+      fi
+
+      printf "${RED}  %s${RESET}${DIM} -- unreachable on both LAN (%s) and internet (%s)${RESET}\n" "$name" "$host" "$internet_host"
       return 1
     fi
+
+    printf "${RED}  %s${RESET}${DIM} (%s) -- unreachable${RESET}\n" "$name" "$host"
+    return 1
   }
 
   if [ -n "$machine_name" ]; then
@@ -1219,14 +1599,22 @@ cmd_send_action() {
   # Ship it over SSH using the paired key. We do not scp — piping through
   # ssh into cat avoids needing a second temp file on the sending side and
   # matches the style used elsewhere in this CLI.
-  local host user port keypath
+  local host user port keypath internet_host internet_port
   host="$(cfg_get "$machine_name" host)"
   user="$(cfg_get "$machine_name" user)"
   port="$(cfg_get "$machine_name" port 2>/dev/null || printf '22')"
   keypath="$(cfg_get "$machine_name" key 2>/dev/null || true)"
   keypath="${keypath/#\~/$HOME}"
+  internet_host="$(cfg_get "$machine_name" internet_host 2>/dev/null || true)"
+  internet_port="$(cfg_get "$machine_name" internet_port 2>/dev/null || printf '22')"
 
-  local -a ssh_args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-p" "$port")
+  local has_fallback=0
+  [ -n "$internet_host" ] && has_fallback=1
+
+  local lan_timeout=10
+  [ "$has_fallback" = "1" ] && lan_timeout=3
+
+  local -a ssh_args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-o" "ConnectTimeout=${lan_timeout}" "-p" "$port")
   if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
     ssh_args+=("-i" "$keypath")
   fi
@@ -1237,8 +1625,28 @@ cmd_send_action() {
 
   printf "${DIM}  Sending action %s to %s...${RESET}\n" "$action" "$machine_name"
 
-  if ! printf '%s' "$json" | ssh "${ssh_args[@]}" "$remote_cmd"; then
-    die "Failed to deliver action file to $machine_name."
+  local delivered=0 send_exit=0
+  printf '%s' "$json" | ssh "${ssh_args[@]}" "$remote_cmd" || send_exit=$?
+  if [ "$send_exit" -eq 0 ]; then
+    delivered=1
+  elif [ "$send_exit" -eq 255 ] && [ "$has_fallback" = "1" ]; then
+    dim "LAN connection failed (SSH exit 255), trying internet fallback (${internet_host}:${internet_port})..."
+    local -a inet_args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-o" "ConnectTimeout=10" "-p" "$internet_port")
+    if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
+      inet_args+=("-i" "$keypath")
+    fi
+    inet_args+=("${user}@${internet_host}")
+    if printf '%s' "$json" | ssh "${inet_args[@]}" "$remote_cmd"; then
+      delivered=1
+    fi
+  fi
+
+  if [ "$delivered" = "0" ]; then
+    if [ "$has_fallback" = "1" ]; then
+      die "Failed to deliver action file to $machine_name on both LAN and internet."
+    else
+      die "Failed to deliver action file to $machine_name."
+    fi
   fi
 
   printf '\n'
@@ -1269,6 +1677,96 @@ cmd_send_action_help() {
   printf 'receiving machine.\n'
 }
 
+# -- config -------------------------------------------------------------------
+cmd_config() {
+  local machine_name=""
+  local internet_host="" internet_port=""
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --internet-host)
+        [ $# -lt 2 ] && die "--internet-host requires a value."
+        internet_host="$2"; shift 2 ;;
+      --internet-port)
+        [ $# -lt 2 ] && die "--internet-port requires a value."
+        internet_port="$2"; shift 2 ;;
+      --help|-h)        cmd_config_help; exit 0 ;;
+      -*)               die "Unknown option: $1. Use --help for usage." ;;
+      *)
+        if [ -z "$machine_name" ]; then
+          machine_name="$1"
+        else
+          die "Unexpected argument: $1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  [ -z "$machine_name" ] && die "Machine name required. Usage: agent-bridge config <machine> --internet-host <host>"
+
+  if ! cfg_exists "$machine_name"; then
+    die "Machine \"$machine_name\" not found. Run 'agent-bridge list' to see paired machines."
+  fi
+
+  if [ -z "$internet_host" ] && [ -z "$internet_port" ]; then
+    # Show current config
+    local host port user ihost iport
+    host="$(cfg_get "$machine_name" host 2>/dev/null || printf 'unknown')"
+    port="$(cfg_get "$machine_name" port 2>/dev/null || printf '22')"
+    user="$(cfg_get "$machine_name" user 2>/dev/null || printf 'unknown')"
+    ihost="$(cfg_get "$machine_name" internet_host 2>/dev/null || true)"
+    iport="$(cfg_get "$machine_name" internet_port 2>/dev/null || true)"
+
+    printf '\n'
+    printf "${BOLD}  %s${RESET}\n" "$machine_name"
+    printf "${DIM}    host=%s${RESET}\n" "$host"
+    printf "${DIM}    port=%s${RESET}\n" "$port"
+    printf "${DIM}    user=%s${RESET}\n" "$user"
+    if [ -n "$ihost" ]; then
+      printf "${DIM}    internet_host=%s${RESET}\n" "$ihost"
+    fi
+    if [ -n "$iport" ]; then
+      printf "${DIM}    internet_port=%s${RESET}\n" "$iport"
+    fi
+    printf '\n'
+    return
+  fi
+
+  if [ -n "$internet_host" ]; then
+    # Validate: no newlines, no brackets, no equals signs, no whitespace
+    if printf '%s' "$internet_host" | grep -qE '[[:space:]\[\]=]|^$' 2>/dev/null; then
+      die "Invalid internet_host: must not contain whitespace, brackets, or '=' characters."
+    fi
+    cfg_set "$machine_name" "internet_host" "$internet_host"
+    ok "Set internet_host=$internet_host for $machine_name"
+  fi
+
+  if [ -n "$internet_port" ]; then
+    # Validate: must be an integer 1-65535
+    if ! [[ "$internet_port" =~ ^[0-9]+$ ]] || [ "$internet_port" -lt 1 ] || [ "$internet_port" -gt 65535 ]; then
+      die "Invalid internet_port: must be an integer between 1 and 65535."
+    fi
+    cfg_set "$machine_name" "internet_port" "$internet_port"
+    ok "Set internet_port=$internet_port for $machine_name"
+  fi
+  printf '\n'
+}
+
+cmd_config_help() {
+  printf 'Usage: agent-bridge config <machine> [OPTIONS]\n\n'
+  printf 'View or update configuration for a paired machine.\n\n'
+  printf 'With no options, prints the current config for the machine.\n\n'
+  printf 'Options:\n'
+  printf '  --internet-host <host>   Set the internet-reachable hostname (e.g. foo.serveo.net)\n'
+  printf '  --internet-port <port>   Set the internet-reachable SSH port (default: 22)\n'
+  printf '  -h, --help               Show this help\n\n'
+  printf 'Examples:\n'
+  printf '  agent-bridge config MacBook-Pro\n'
+  printf '  agent-bridge config MacBook-Pro --internet-host ethans-mbp.serveo.net\n'
+  printf '  agent-bridge config MacBook-Pro --internet-host ethans-mbp.serveo.net --internet-port 22\n'
+}
+
 cmd_help() {
   printf '\n'
   printf "${BOLD}agent-bridge${RESET} v%s\n" "$VERSION"
@@ -1279,12 +1777,16 @@ cmd_help() {
   printf '  agent-bridge <command> [options]\n'
   printf '\n'
   printf "${BOLD}Commands:${RESET}\n"
-  printf '  setup              Enable SSH, generate keys, show pairing screen (--internet for tunnel)\n'
+  printf '  setup              Enable SSH, generate keys, show pairing screen\n'
+  printf '  setup --internet   Set up persistent Serveo tunnel for internet access\n'
+  printf '  setup --internet --stop\n'
+  printf '                     Tear down the internet tunnel and LaunchAgent\n'
   printf '  pair               Pair with another machine (interactive or flags)\n'
+  printf '  config <machine>   View or update machine config (--internet-host, --internet-port)\n'
   printf '  connect <machine>  Open an interactive SSH session\n'
   printf '  run <machine> "cmd"  Run a plain shell command on a paired machine (diagnostics only)\n'
   printf '  list               List all paired machines\n'
-  printf '  status [machine]   Check reachability\n'
+  printf '  status [machine]   Check reachability (tries LAN then internet fallback)\n'
   printf '  unpair <machine>   Remove a pairing\n'
   printf '  send-action <machine> <action> [args...]\n'
   printf '                     Send a GUI keystroke action (send-enter, send-text,\n'
@@ -1323,6 +1825,7 @@ main() {
   case "$cmd" in
     setup)    cmd_setup "$@" ;;
     pair)     cmd_pair "$@" ;;
+    config)   cmd_config "$@" ;;
     connect)  cmd_connect "$@" ;;
     run)      cmd_run "$@" ;;
     list)     cmd_list "$@" ;;

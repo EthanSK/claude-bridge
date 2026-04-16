@@ -2,16 +2,23 @@
  * SSH execution wrapper for agent-bridge.
  * Runs commands on remote machines using the SSH keys from v1.
  *
+ * Supports dual-endpoint fallback: tries LAN (host:port) first with a short
+ * timeout, then falls back to internet_host:internet_port if configured.
+ *
  * Logs all connection attempts and results.
  */
 
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { type MachineConfig } from './config.js';
-import { logDebug, logError, logInfo } from './logger.js';
+import { logDebug, logError, logInfo, logWarn } from './logger.js';
 
-/** Maximum time to wait for the SSH TCP connection to establish. */
-const SSH_CONNECT_TIMEOUT_S = 10;
+/** Timeout for the LAN attempt when an internet fallback is available. */
+const LAN_CONNECT_TIMEOUT_S = 3;
+/** Timeout for the internet fallback attempt. */
+const INTERNET_CONNECT_TIMEOUT_S = 10;
+/** Timeout when there is no fallback (single endpoint). */
+const DEFAULT_CONNECT_TIMEOUT_S = 10;
 
 export interface SSHResult {
   exitCode: number;
@@ -22,34 +29,37 @@ export interface SSHResult {
 /**
  * Build the common SSH argument list for a machine.
  */
-function buildSSHArgs(machine: MachineConfig, port?: number): string[] {
+function buildSSHArgs(
+  machine: MachineConfig,
+  host: string,
+  port: number,
+  connectTimeoutS: number,
+): string[] {
   return [
     '-i', machine.key,
     '-o', 'StrictHostKeyChecking=no',
     '-o', 'UserKnownHostsFile=/dev/null',
     '-o', 'BatchMode=yes',
-    '-o', `ConnectTimeout=${SSH_CONNECT_TIMEOUT_S}`,
+    '-o', `ConnectTimeout=${connectTimeoutS}`,
     '-o', 'LogLevel=ERROR',
-    '-p', String(port ?? machine.port),
-    `${machine.user}@${machine.host}`,
+    '-p', String(port),
+    `${machine.user}@${host}`,
   ];
 }
 
 /**
- * Run a command on a remote machine via SSH.
+ * Execute an SSH command against a specific host:port.
+ * Internal helper — does not do fallback.
  */
-export async function sshExec(
+function sshExecSingle(
   machine: MachineConfig,
+  host: string,
+  port: number,
+  connectTimeoutS: number,
   command: string,
-  timeoutMs: number = 30000,
+  timeoutMs: number,
 ): Promise<SSHResult> {
-  if (!existsSync(machine.key)) {
-    throw new Error(`SSH key not found: ${machine.key}`);
-  }
-
-  const args = [...buildSSHArgs(machine), command];
-
-  logDebug(`SSH exec to ${machine.name}: ${command.substring(0, 200)}`);
+  const args = [...buildSSHArgs(machine, host, port, connectTimeoutS), command];
 
   return new Promise<SSHResult>((resolve, reject) => {
     const proc = spawn('ssh', args, {
@@ -72,7 +82,6 @@ export async function sshExec(
       if (settled) return;
       settled = true;
       proc.kill('SIGKILL');
-      logError(`SSH command timed out after ${timeoutMs}ms to ${machine.name}`);
       reject(new Error(`SSH command timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
@@ -81,9 +90,6 @@ export async function sshExec(
       settled = true;
       clearTimeout(timer);
       const exitCode = code ?? 1;
-      logDebug(
-        `SSH to ${machine.name} completed: exit=${exitCode}, stdout=${stdout.length}B, stderr=${stderr.length}B`,
-      );
       resolve({ exitCode, stdout, stderr });
     });
 
@@ -91,10 +97,81 @@ export async function sshExec(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      logError(`SSH spawn error to ${machine.name}: ${err.message}`);
       reject(err);
     });
   });
+}
+
+/**
+ * Run a command on a remote machine via SSH.
+ *
+ * If the machine has an internet_host configured, tries the primary
+ * host first (3s connect timeout), then falls back to internet_host.
+ */
+export async function sshExec(
+  machine: MachineConfig,
+  command: string,
+  timeoutMs: number = 30000,
+): Promise<SSHResult> {
+  if (!existsSync(machine.key)) {
+    throw new Error(`SSH key not found: ${machine.key}`);
+  }
+
+  const hasInternetFallback = !!machine.internetHost;
+  const lanTimeout = hasInternetFallback ? LAN_CONNECT_TIMEOUT_S : DEFAULT_CONNECT_TIMEOUT_S;
+
+  logDebug(`SSH exec to ${machine.name} (${machine.host}:${machine.port}): ${command.substring(0, 200)}`);
+
+  // Try primary (LAN) endpoint
+  try {
+    const result = await sshExecSingle(
+      machine, machine.host, machine.port, lanTimeout, command, timeoutMs,
+    );
+    // Only fall back on SSH connection failure (exit 255), not remote command failures.
+    // Exit code 255 means SSH itself failed (connection refused, timeout, auth failure).
+    // Any other exit code means SSH connected but the remote command returned non-zero.
+    if (result.exitCode !== 255 || !hasInternetFallback) {
+      if (result.exitCode === 0) {
+        logDebug(`SSH to ${machine.name} succeeded via LAN (${machine.host}:${machine.port})`);
+      }
+      return result;
+    }
+    logWarn(`SSH to ${machine.name} via LAN failed (exit=255, connection failure), trying internet fallback...`);
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    // Distinguish connection-level errors (spawn failure) from command timeouts.
+    // A timeout means SSH connected and the command was running — retrying would
+    // duplicate side effects. Only retry on spawn errors (SSH binary not found, etc.).
+    const isTimeout = errMsg.includes('timed out');
+    if (!hasInternetFallback || isTimeout) {
+      logError(`SSH to ${machine.name} failed: ${errMsg}`);
+      throw err;
+    }
+    logWarn(`SSH to ${machine.name} via LAN failed (${errMsg}), trying internet fallback...`);
+  }
+
+  // Try internet fallback
+  const internetPort = machine.internetPort ?? 22;
+  logInfo(`SSH fallback to ${machine.name} via internet (${machine.internetHost}:${internetPort})`);
+
+  try {
+    const result = await sshExecSingle(
+      machine, machine.internetHost!, internetPort, INTERNET_CONNECT_TIMEOUT_S, command, timeoutMs,
+    );
+    if (result.exitCode === 0) {
+      logInfo(`SSH to ${machine.name} succeeded via internet (${machine.internetHost}:${internetPort})`);
+    } else {
+      logError(`SSH to ${machine.name} failed on both LAN and internet (internet exit=${result.exitCode})`);
+    }
+    return result;
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    logError(`Machine ${machine.name} unreachable on both LAN (${machine.host}:${machine.port}) and internet (${machine.internetHost}:${internetPort}): ${errMsg}`);
+    throw new Error(
+      `Machine "${machine.name}" unreachable on both LAN and internet. ` +
+      `LAN: ${machine.host}:${machine.port}, Internet: ${machine.internetHost}:${internetPort}`,
+    );
+  }
 }
 
 /**

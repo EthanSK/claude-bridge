@@ -189,16 +189,19 @@ Expose your machine to the internet without port forwarding:
 $ agent-bridge setup --internet
 
   ...
-  4. Internet Tunnel
-  Starting reverse SSH tunnel via serveo.net...
-  [ok] Tunnel active!
+  4. Internet Tunnel (Serveo)
+  Trying subdomain: macbook-pro.serveo.net ...
+  [ok] Subdomain macbook-pro.serveo.net is available!
+  [ok] Tunnel config saved to /Users/ethan/.agent-bridge/tunnel-config
+  [ok] LaunchAgent installed and loaded (auto-restarts on boot).
 
   Internet access:
-    Host: serveo.net
-    Port: 43521
+    Host: macbook-pro.serveo.net
+    Port: 22
 
-  Remote pair command:
-    agent-bridge pair --name "MacBook-Pro" --host serveo.net --port 43521 --user ethan --token "bridge-a7f3k9"
+  Your machine is now reachable at macbook-pro.serveo.net:22
+  Tell paired machines to set this as internet_host:
+    agent-bridge config <machine> --internet-host macbook-pro.serveo.net
 ```
 
 ---
@@ -287,10 +290,13 @@ agent-bridge run MacBook-Pro "uname -a"
 | Command | Description |
 |---------|-------------|
 | `agent-bridge setup` | Enables SSH, generates keys, and displays a pairing screen. Use `--internet` for tunnel. |
+| `agent-bridge setup --internet` | Set up persistent Serveo tunnel with pinned subdomain + LaunchAgent. |
+| `agent-bridge setup --internet --stop` | Tear down the tunnel and remove the LaunchAgent. |
 | `agent-bridge pair` | Interactive or flag-based pairing to connect to another machine. |
+| `agent-bridge config <machine>` | View or set machine config (e.g. `--internet-host`, `--internet-port`). |
 | `agent-bridge connect <machine>` | Open an interactive SSH session. |
-| `agent-bridge status [machine]` | Check if machine(s) are reachable. |
-| `agent-bridge list` | List all paired machines. |
+| `agent-bridge status [machine]` | Check if machine(s) are reachable (tries LAN, then internet fallback). |
+| `agent-bridge list` | List all paired machines (shows internet_host if set). |
 | `agent-bridge run <machine> "cmd"` | Run a PLAIN shell command on a paired machine (diagnostics only — no agent wrapping). |
 | `agent-bridge unpair <machine>` | Remove a pairing. |
 
@@ -301,8 +307,18 @@ agent-bridge run MacBook-Pro "uname -a"
 ```
 -n, --name <name>              Machine name (defaults to hostname)
 -p, --port <port>              SSH port (default: 22)
-    --internet                 Start a reverse SSH tunnel for internet access
+    --internet                 Set up persistent Serveo tunnel with pinned subdomain
+    --stop                     Tear down the internet tunnel (use with --internet)
     --tunnel-provider <name>   Tunnel provider (default: serveo)
+```
+
+### Config options
+
+```
+agent-bridge config <machine> [OPTIONS]
+
+--internet-host <host>   Set the internet-reachable hostname (e.g. foo.serveo.net)
+--internet-port <port>   Set the internet-reachable SSH port (default: 22)
 ```
 
 ### Pair options
@@ -620,6 +636,7 @@ Machine A (Codex)                         Machine B (any harness)
 ```
 ~/.agent-bridge/
 ├── config               # Paired machines (INI-style key-value)
+├── tunnel-config        # Serveo tunnel settings (JSON, created by setup --internet)
 ├── machine-name         # Optional: override local machine name
 ├── .pending-token       # One-time pairing token (deleted after use)
 ├── inbox/               # Incoming messages from other machines
@@ -628,8 +645,9 @@ Machine A (Codex)                         Machine B (any harness)
 │   ├── .delivered        # Channel-delivered message IDs (push dedup)
 │   └── .failed/         # Quarantined malformed messages
 ├── outbox/              # Copies of sent messages (local tracking)
-├── logs/                # MCP server logs (auto-rotated at 10 MB)
-│   └── mcp-server.log
+├── logs/                # MCP server + tunnel logs
+│   ├── mcp-server.log
+│   └── tunnel.log
 └── keys/                # SSH key pairs (ED25519)
     ├── agent-bridge_MacBook-Pro
     └── agent-bridge_MacBook-Pro.pub
@@ -642,11 +660,15 @@ Simple INI-style flat file -- no JSON, no YAML:
 ```ini
 [MacBook-Pro]
 host=192.168.1.50
+internet_host=macbook-pro.serveo.net
+internet_port=22
 user=ethan
 port=22
 key=~/.agent-bridge/keys/agent-bridge_MacBook-Pro
 paired_at=2026-04-09T12:00:00Z
 ```
+
+`internet_host` and `internet_port` are optional. When present, SSH/SCP tries `host:port` first (3s timeout), then falls back to `internet_host:internet_port`.
 
 ---
 
@@ -748,6 +770,64 @@ agent-bridge pair \
 ```
 
 This lets your agents talk to each other from anywhere.
+
+---
+
+## Internet connectivity (Serveo tunnel)
+
+When two machines are not on the same LAN (e.g. one is on mobile data, at a coffee shop, or behind a different NAT), agent-bridge can fall back to an internet endpoint using a [Serveo](https://serveo.net) reverse SSH tunnel.
+
+### How it works
+
+Each machine can have two endpoints in its config:
+
+```ini
+[MacBookPro]
+host=192.168.1.208          # LAN address (primary)
+internet_host=ethans-mbp.serveo.net  # Internet address (fallback)
+internet_port=22
+port=22
+user=ethansarif-kattan
+key=/Users/ethansk/.agent-bridge/keys/agent-bridge_Mac-Mini
+paired_at=2026-04-13T00:03:01Z
+```
+
+When SSH/SCP connects to a machine, it tries `host:port` first with a 3-second timeout. If that fails and `internet_host` is configured, it retries via `internet_host:internet_port`. If both fail, a clear error is reported. This fallback applies to the bash CLI (`run`, `connect`, `status`, `send-action`) and the MCP server (`sshExec`, `sshWriteFile`, `sshPing`).
+
+### One-time setup
+
+On each machine you want reachable over the internet:
+
+```bash
+agent-bridge setup --internet
+```
+
+This will:
+1. Pick a subdomain based on your machine name (e.g. `ethans-mac-mini.serveo.net`). If taken, appends a random suffix.
+2. Verify the tunnel works.
+3. Save the subdomain to `~/.agent-bridge/tunnel-config`.
+4. Install a LaunchAgent (`com.ethansk.agent-bridge-tunnel.plist`) that keeps the tunnel alive across reboots.
+
+Then tell the paired machines about it:
+
+```bash
+# On the OTHER machine, set the internet_host for this one:
+agent-bridge config MacBookPro --internet-host ethans-mbp.serveo.net
+```
+
+### Tear down
+
+```bash
+agent-bridge setup --internet --stop
+```
+
+This unloads the LaunchAgent, removes the plist, and clears the tunnel config.
+
+### Caveats
+
+- **Serveo has no SLA.** It is a free service. If Serveo is down, the internet fallback times out and LAN still works normally. This is fine for occasional use.
+- **The tunnel is a single SSH connection.** The LaunchAgent's `KeepAlive: true` restarts it if it crashes.
+- **Pinned subdomains** are first-come-first-served on Serveo. The setup picks one based on your machine name and falls back to a suffixed name if taken.
 
 ---
 

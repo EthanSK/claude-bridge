@@ -52,6 +52,10 @@ export interface MachineConfig {
   port: number;
   key: string;
   pairedAt: string;
+  /** Optional internet-reachable host (e.g. Serveo tunnel subdomain). */
+  internetHost?: string;
+  /** Optional internet-reachable port (default: 22). */
+  internetPort?: number;
 }
 
 /**
@@ -110,6 +114,12 @@ export function loadConfig(): MachineConfig[] {
             break;
           case 'paired_at':
             current.pairedAt = value;
+            break;
+          case 'internet_host':
+            current.internetHost = value;
+            break;
+          case 'internet_port':
+            current.internetPort = parseInt(value, 10) || 22;
             break;
         }
       }
