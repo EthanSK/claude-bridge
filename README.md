@@ -183,16 +183,19 @@ $ agent-bridge run MacBook-Pro "cd ~/Projects/agent-bridge && git status"
 
 ### Optional: Internet access via Tailscale
 
-For cross-network connectivity (mobile data, coffee-shop wifi, different NAT), use [Tailscale](https://tailscale.com) — a mesh VPN that gives each machine a stable `100.x.y.z` IP reachable from anywhere. See the [Internet connectivity](#internet-connectivity-tailscale) section below for the full walkthrough.
+For cross-network connectivity (mobile data, coffee-shop wifi, different NAT), use [Tailscale](https://tailscale.com) — a mesh VPN that gives each machine a stable `100.x.y.z` IP reachable from anywhere. The recommended deployment is a **no-sudo, per-user LaunchAgent** in userspace-networking mode; see the [Internet connectivity](#internet-connectivity-tailscale) section below for the full walkthrough (plist template, SSH SOCKS5 config, auth flow).
 
-Quick version:
+Quick sketch (full steps below):
 
 ```bash
 # On each machine:
 brew install tailscale
-sudo brew services start tailscale                     # launches tailscaled as root
-sudo tailscale up --accept-dns=false --hostname=MY-MACHINE
-tailscale ip -4                                         # note the 100.x.y.z
+# Create ~/Library/LaunchAgents/com.USERNAME.tailscaled.plist (see full section) and load it:
+launchctl load ~/Library/LaunchAgents/com.USERNAME.tailscaled.plist
+# Add Host 100.* SOCKS5 ProxyCommand to ~/.ssh/config (see full section)
+tailscale --socket="$HOME/.local/share/tailscale/tailscaled.sock" up \
+  --auth-key=tskey-auth-xxx --accept-dns=false --hostname=MY-MACHINE
+tailscale --socket="$HOME/.local/share/tailscale/tailscaled.sock" ip -4
 
 # Then on the paired machine, point internet_host at that IP:
 agent-bridge config MY-MACHINE --internet-host 100.126.23.87
@@ -765,44 +768,116 @@ When SSH/SCP connects to a machine, it tries `host:port` first with a 3-second t
 
 ### Tailscale setup
 
-On each machine you want reachable over the internet:
+The recommended deployment is a **no-sudo, per-user LaunchAgent** running `tailscaled` in userspace-networking mode. No root is required on install, start, or teardown — the daemon lives entirely in your user session. This is the recommended agent-bridge setup and what these instructions describe first; you'll build the LaunchAgent by hand using the template below (agent-bridge doesn't bundle or auto-install it).
 
-1. **Install the Tailscale CLI** (no GUI needed):
+If you'd rather have tailnet traffic "just work" for every app on the machine (curl, git, browsers all reaching tailnet peers without proxy config), see [Alternative: kernel-TUN mode](#alternative-kernel-tun-mode-sudo) at the end of this section.
 
-   ```bash
-   brew install tailscale
-   ```
+#### 1. Install the Tailscale CLI
 
-2. **Start `tailscaled`.** Homebrew's default service needs root:
+No GUI needed:
 
-   ```bash
-   sudo brew services start tailscale
-   ```
+```bash
+brew install tailscale
+```
 
-   If you don't want to run as root, you can run `tailscaled` as a per-user LaunchAgent in userspace-networking mode (`--tun=userspace-networking`) — other peers can still SSH in via the 100.x IP, but outbound tailnet traffic initiated from this machine needs the SOCKS5 proxy (`--socks5-server=localhost:1055`). Normal `sudo` setup is simpler if you have admin access.
+This installs `tailscale` and `tailscaled` binaries but does **not** start anything.
 
-3. **Generate an auth key** (reusable, 90-day):
+#### 2. Start `tailscaled` as a user LaunchAgent (no sudo)
 
-   Visit <https://login.tailscale.com/admin/settings/keys> and click **Generate auth key**. Set **Reusable: true**, **Ephemeral: false**, **Expiry: 90 days**, no tags. Copy the `tskey-auth-...` string.
+Create `~/Library/LaunchAgents/com.USERNAME.tailscaled.plist` — replace `USERNAME` with your macOS short username (`whoami`) and replace both `/Users/USERNAME/...` paths with your actual `$HOME`:
 
-4. **Bring up the node** with minimal config (no DNS hijacking, no subnet routes):
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.USERNAME.tailscaled</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/sbin/tailscaled</string>
+        <string>--tun=userspace-networking</string>
+        <string>--socket=/Users/USERNAME/.local/share/tailscale/tailscaled.sock</string>
+        <string>--socks5-server=localhost:1055</string>
+        <string>--statedir=/Users/USERNAME/.local/share/tailscale</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/USERNAME/.local/share/tailscale/tailscaled.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/USERNAME/.local/share/tailscale/tailscaled.err.log</string>
+</dict>
+</plist>
+```
 
-   ```bash
-   sudo tailscale up \
-     --auth-key=tskey-auth-xxxxxxxxxxxxxxxxxxxxxxxx \
-     --accept-dns=false \
-     --accept-routes=false \
-     --hostname=MY-MACHINE
-   ```
+On Intel Macs, swap `/opt/homebrew/sbin/tailscaled` for `/usr/local/sbin/tailscaled`. Create the state dir and load the agent:
 
-   Replace `MY-MACHINE` with whatever hostname you want to show up in the Tailscale admin panel (it just needs to be a valid DNS label — letters, digits, hyphens).
+```bash
+mkdir -p "$HOME/.local/share/tailscale"
+launchctl load ~/Library/LaunchAgents/com.USERNAME.tailscaled.plist
+```
 
-5. **Get the assigned IP:**
+What this gives you:
+- `tailscaled` runs under your user — no `sudo`, no root daemon, nothing in `/var/run`.
+- **Userspace networking** (`--tun=userspace-networking`) means there's no kernel TUN device. Other peers on your tailnet can still SSH *in* to this machine via its `100.x.y.z` IP (inbound works fine), but outbound tailnet traffic initiated from this machine goes through the built-in SOCKS5 proxy on `localhost:1055` instead of a routing table.
+- The daemon's control socket lives at `~/.local/share/tailscale/tailscaled.sock` instead of the default root-owned `/var/run/tailscaled.socket`.
 
-   ```bash
-   tailscale ip -4
-   # e.g. 100.126.23.86
-   ```
+#### 3. Configure `~/.ssh/config` for the SOCKS5 proxy (CRITICAL)
+
+Because this machine uses userspace networking, outbound SSH to any tailnet peer (`100.x.y.z`) has to traverse the SOCKS5 proxy. Without this block, `agent-bridge run` / `agent-bridge connect` / `ssh 100.x.y.z` will hang or fail. Add to `~/.ssh/config`:
+
+```
+Host 100.*
+    ProxyCommand nc -X 5 -x localhost:1055 %h %p
+    ServerAliveInterval 60
+```
+
+`nc -X 5 -x localhost:1055 %h %p` tells `ssh` to dial the target host/port through the local SOCKS5 proxy. `ServerAliveInterval 60` keeps the tunnel warm. This applies to every outbound SSH that targets a `100.*` address — including the ones agent-bridge makes.
+
+#### 4. Use the CLI via your user socket
+
+Because `tailscaled` is listening on a user socket (not the default one), every `tailscale` CLI call has to specify `--socket`. Either pass it explicitly:
+
+```bash
+tailscale --socket="$HOME/.local/share/tailscale/tailscaled.sock" status
+```
+
+…or add a shell alias so you don't have to think about it:
+
+```bash
+alias tailscale="tailscale --socket=$HOME/.local/share/tailscale/tailscaled.sock"
+```
+
+Put the alias in your `~/.zshrc` (or `~/.bashrc`) so it survives reboot.
+
+#### 5. Authenticate
+
+Visit <https://login.tailscale.com/admin/settings/keys> and click **Generate auth key**. Set **Reusable: true**, **Ephemeral: false**, **Expiry: 90 days**, no tags. Copy the `tskey-auth-...` string.
+
+Then bring the node up — no `sudo`, since the daemon is already running under your user:
+
+```bash
+tailscale --socket="$HOME/.local/share/tailscale/tailscaled.sock" up \
+  --auth-key=tskey-auth-xxxxxxxxxxxxxxxxxxxxxxxx \
+  --accept-dns=false \
+  --accept-routes=false \
+  --advertise-routes= \
+  --hostname=MY-MACHINE
+```
+
+Replace `MY-MACHINE` with whatever hostname you want to show up in the Tailscale admin panel (letters, digits, hyphens only). If you set up the alias from step 4, drop the `--socket=...` prefix.
+
+#### 6. Get the assigned IP
+
+```bash
+tailscale --socket="$HOME/.local/share/tailscale/tailscaled.sock" ip -4
+# e.g. 100.126.23.86
+```
 
 ### Tell the paired machines
 
@@ -828,16 +903,51 @@ agent-bridge status MacBookPro     # should reach via LAN or fall back to Tailsc
 ssh -i ~/.agent-bridge/keys/agent-bridge_Mac-Mini ethansarif-kattan@100.126.23.87
 ```
 
-The host key you see should be the target machine's real sshd host key — not Tailscale's — since Tailscale routes raw TCP, it doesn't proxy SSH.
+The host key you see should be the target machine's real sshd host key — not Tailscale's — since Tailscale routes raw TCP and doesn't proxy SSH. The SOCKS5 proxy from step 3 is doing the work: `ssh` dials `100.126.23.87:22`, `nc -X 5` funnels that through `localhost:1055`, and `tailscaled` routes it across the tailnet to the peer's sshd on the other end.
 
 ### Teardown
 
-To stop Tailscale on a machine:
+To stop Tailscale on a machine — no `sudo` needed:
+
+```bash
+# Unload the LaunchAgent and remove the plist
+launchctl unload ~/Library/LaunchAgents/com.USERNAME.tailscaled.plist
+rm ~/Library/LaunchAgents/com.USERNAME.tailscaled.plist
+
+# Optionally remove state
+rm -rf "$HOME/.local/share/tailscale"
+```
+
+Then remove the machine from the tailnet in the [Tailscale admin panel](https://login.tailscale.com/admin/machines) (select the machine → `…` → **Remove**). That deauthorises it and drops the `100.x.y.z` assignment.
+
+You can also drop the `~/.ssh/config` block from step 3 if this was the only tailnet peer you were reaching.
+
+### Trade-off: userspace vs kernel-TUN
+
+Userspace-networking is agent-bridge-sufficient: the single outbound SSH hop is handled by the `~/.ssh/config` SOCKS5 block, and inbound SSH from other tailnet peers works natively. The trade-off is that **other apps on this machine won't reach tailnet peers unless they're explicitly configured to use the SOCKS5 proxy** (`curl --socks5-hostname localhost:1055`, `git -c http.proxy=socks5h://localhost:1055 …`, browser proxy settings, etc.). If that's fine for your use case — and for most agent-bridge-only deployments it is — stop here.
+
+### Alternative: kernel-TUN mode (sudo)
+
+If you want tailnet to "just work" for every app on the machine without per-app SOCKS5 configuration, run Tailscale the standard way via Homebrew's root-launched service:
+
+```bash
+sudo brew services start tailscale                       # launches tailscaled as root on a kernel TUN
+sudo tailscale up \
+  --auth-key=tskey-auth-xxxxxxxxxxxxxxxxxxxxxxxx \
+  --accept-dns=false \
+  --accept-routes=false \
+  --hostname=MY-MACHINE
+tailscale ip -4                                           # note the 100.x.y.z
+```
+
+Teardown:
 
 ```bash
 sudo tailscale down
 sudo brew services stop tailscale
 ```
+
+With kernel-TUN mode, drop the `Host 100.*` block from `~/.ssh/config` (it's unnecessary — the kernel routes `100.x.y.z` natively) and skip the `--socket=...` CLI prefix (the daemon uses the default socket at `/var/run/tailscaled.socket`, which the CLI finds automatically).
 
 ---
 

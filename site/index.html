@@ -268,9 +268,12 @@
 <pre><span class="t-comment"># On each machine: enable SSH, generate keys, show pairing screen</span>
 <span class="t-prompt"></span>agent-bridge setup
 
-<span class="t-comment"># Off-LAN? Install Tailscale on each machine and use its 100.x.y.z IP as internet_host:</span>
-<span class="t-prompt"></span>brew install tailscale &amp;&amp; sudo brew services start tailscale
-<span class="t-prompt"></span>sudo tailscale up --accept-dns=false --hostname=MY-MACHINE
+<span class="t-comment"># Off-LAN? Install Tailscale on each machine and use its 100.x.y.z IP as internet_host.</span>
+<span class="t-comment"># Recommended: no-sudo userspace LaunchAgent. See README "Internet connectivity (Tailscale)"</span>
+<span class="t-comment"># for the plist template, ~/.ssh/config SOCKS5 block, and --socket CLI pattern.</span>
+<span class="t-prompt"></span>brew install tailscale
+<span class="t-prompt"></span>launchctl load ~/Library/LaunchAgents/com.USERNAME.tailscaled.plist
+<span class="t-prompt"></span>tailscale --socket=<span class="t-str">"$HOME/.local/share/tailscale/tailscaled.sock"</span> up --accept-dns=false --hostname=MY-MACHINE
 <span class="t-prompt"></span>agent-bridge config &lt;other-machine&gt; --internet-host 100.x.y.z
 
 <span class="t-comment"># Then photograph the pairing screen on one machine</span>
