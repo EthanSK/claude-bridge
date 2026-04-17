@@ -198,8 +198,6 @@ tailscale ip -4                                         # note the 100.x.y.z
 agent-bridge config MY-MACHINE --internet-host 100.126.23.87
 ```
 
-> **Deprecated:** `agent-bridge setup --internet` was a Serveo-based reverse-SSH tunnel that no longer works for TCP/SSH traffic on Serveo's free tier (Serveo only forwards HTTP on subdomains; the port 22 you see is Serveo's own sshd, not your tunnel). The CLI flag is retained with a warning banner; see commit `8bdc4a0` for the full post-mortem. Use Tailscale instead.
-
 ---
 
 ## Installation
@@ -243,7 +241,7 @@ This will:
 - Generate an SSH key pair
 - Display a pairing screen with connection details
 
-For internet access across networks, use Tailscale (see [Internet connectivity](#internet-connectivity-tailscale) below). The legacy `--internet` Serveo flag is deprecated and no longer routes SSH traffic reliably.
+For internet access across networks, use Tailscale (see [Internet connectivity](#internet-connectivity-tailscale) below).
 
 ### Pair the machines:
 
@@ -283,8 +281,6 @@ agent-bridge run MacBook-Pro "uname -a"
 | Command | Description |
 |---------|-------------|
 | `agent-bridge setup` | Enables SSH, generates keys, and displays a pairing screen. |
-| `agent-bridge setup --internet` | **Deprecated.** Serveo reverse-SSH tunnel — no longer routes SSH. Use Tailscale instead (see [Internet connectivity](#internet-connectivity-tailscale)). |
-| `agent-bridge setup --internet --stop` | Tear down a legacy Serveo tunnel (if previously set up). |
 | `agent-bridge pair` | Interactive or flag-based pairing to connect to another machine. |
 | `agent-bridge config <machine>` | View or set machine config (e.g. `--internet-host`, `--internet-port`). |
 | `agent-bridge connect <machine>` | Open an interactive SSH session. |
@@ -298,12 +294,11 @@ agent-bridge run MacBook-Pro "uname -a"
 ### Setup options
 
 ```
--n, --name <name>              Machine name (defaults to hostname)
--p, --port <port>              SSH port (default: 22)
-    --internet                 [Deprecated] Serveo tunnel — does not route SSH on free tier. Use Tailscale.
-    --stop                     Tear down a legacy Serveo tunnel (use with --internet)
-    --tunnel-provider <name>   Tunnel provider (default: serveo, deprecated)
+-n, --name <name>   Machine name (defaults to hostname)
+-p, --port <port>   SSH port (default: 22)
 ```
+
+For internet access across networks, use Tailscale instead of a tunnel in setup — see [Internet connectivity (Tailscale)](#internet-connectivity-tailscale).
 
 ### Config options
 
@@ -629,7 +624,6 @@ Machine A (Codex)                         Machine B (any harness)
 ```
 ~/.agent-bridge/
 ├── config               # Paired machines (INI-style key-value)
-├── tunnel-config        # Legacy Serveo tunnel settings (JSON, from the deprecated setup --internet flow)
 ├── machine-name         # Optional: override local machine name
 ├── .pending-token       # One-time pairing token (deleted after use)
 ├── inbox/               # Incoming messages from other machines
@@ -638,9 +632,8 @@ Machine A (Codex)                         Machine B (any harness)
 │   ├── .delivered        # Channel-delivered message IDs (push dedup)
 │   └── .failed/         # Quarantined malformed messages
 ├── outbox/              # Copies of sent messages (local tracking)
-├── logs/                # MCP server + tunnel logs
-│   ├── mcp-server.log
-│   └── tunnel.log
+├── logs/                # MCP server logs
+│   └── mcp-server.log
 └── keys/                # SSH key pairs (ED25519)
     ├── agent-bridge_MacBook-Pro
     └── agent-bridge_MacBook-Pro.pub
@@ -847,10 +840,6 @@ To stop Tailscale on a machine:
 sudo tailscale down
 sudo brew services stop tailscale
 ```
-
-### Why not Serveo?
-
-Earlier versions of this README described a `setup --internet` flag that used [Serveo](https://serveo.net) reverse-SSH tunnels. **It does not work for SSH traffic on Serveo's current free tier** — Serveo only proxies HTTP on subdomains; `<subdomain>.serveo.net:22` resolves but hits Serveo's own sshd, not your tunnel. See commit [`8bdc4a0`](https://github.com/EthanSK/agent-bridge/commit/8bdc4a0) for the post-mortem. The CLI flag is retained but now prints a deprecation warning pointing to this section.
 
 ---
 

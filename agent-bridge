@@ -241,32 +241,6 @@ cfg_set() {
   chmod 600 "$CONFIG_FILE"
 }
 
-# -- Tunnel config helpers ----------------------------------------------------
-TUNNEL_CONFIG_FILE="$CONFIG_DIR/tunnel-config"
-LAUNCH_AGENT_LABEL="com.ethansk.agent-bridge-tunnel"
-LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
-
-tunnel_config_get() {
-  local key="$1"
-  if [ ! -f "$TUNNEL_CONFIG_FILE" ]; then
-    return 1
-  fi
-  # Simple JSON field extraction (no jq dependency)
-  local val
-  val="$(grep -o "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$TUNNEL_CONFIG_FILE" 2>/dev/null | head -1 | sed 's/.*":\s*"//' | sed 's/"$//')"
-  if [ -n "$val" ]; then
-    printf '%s' "$val"
-    return 0
-  fi
-  # Try boolean/number fields
-  val="$(grep -o "\"${key}\"[[:space:]]*:[[:space:]]*[^,}]*" "$TUNNEL_CONFIG_FILE" 2>/dev/null | head -1 | sed 's/.*:\s*//' | tr -d ' ')"
-  if [ -n "$val" ]; then
-    printf '%s' "$val"
-    return 0
-  fi
-  return 1
-}
-
 # -- SSH helpers with dual-endpoint fallback ----------------------------------
 # Try LAN first (3s timeout), fall back to internet_host if configured.
 # Usage: ssh_with_fallback <machine> <ssh_args...>
@@ -525,51 +499,16 @@ update_harness_instructions() {
 # -- Commands -----------------------------------------------------------------
 
 cmd_setup() {
-  local machine_name="" port="22" internet=false tunnel_provider="serveo" stop_internet=false
-  TUNNEL_PID=""
+  local machine_name="" port="22"
 
   while [ $# -gt 0 ]; do
     case "$1" in
       --name|-n)             machine_name="$2"; shift 2 ;;
       --port|-p)             port="$2"; shift 2 ;;
-      --internet)            internet=true; shift ;;
-      --stop)                stop_internet=true; shift ;;
-      --tunnel-provider)     tunnel_provider="$2"; shift 2 ;;
       --help|-h)             cmd_setup_help; exit 0 ;;
       *)                     die "Unknown option: $1. Use --help for usage." ;;
     esac
   done
-
-  # Handle --internet --stop: tear down tunnel
-  if [ "$stop_internet" = true ] && [ "$internet" = false ]; then
-    die "--stop must be used with --internet. Usage: agent-bridge setup --internet --stop"
-  fi
-  if [ "$stop_internet" = true ]; then
-    printf '\n'
-    printf "${BOLD}${CYAN}  Tearing down internet tunnel...${RESET}\n"
-    printf '\n'
-
-    if is_macos && [ -f "$LAUNCH_AGENT_PLIST" ]; then
-      launchctl unload "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
-      rm -f "$LAUNCH_AGENT_PLIST"
-      ok "LaunchAgent removed."
-    else
-      # Kill any running tunnel process
-      pkill -f "ssh.*serveo.net" 2>/dev/null || true
-      dim "Tunnel process stopped (if running)."
-    fi
-
-    if [ -f "$TUNNEL_CONFIG_FILE" ]; then
-      rm -f "$TUNNEL_CONFIG_FILE"
-      ok "Tunnel config removed."
-    else
-      dim "No tunnel config found."
-    fi
-    printf '\n'
-    ok "Internet tunnel torn down."
-    printf '\n'
-    return
-  fi
 
   [ -z "$machine_name" ] && machine_name="$(get_machine_name)"
   local user
@@ -706,214 +645,8 @@ cmd_setup() {
   printf "${RESET}"
   printf '\n'
   dim "Photograph this screen and send to Claude on your other machine."
-  if [ "$internet" = false ]; then
-    dim "For internet access, see 'Internet connectivity (Tailscale)' in the README."
-  fi
+  dim "For internet access across networks, see 'Internet connectivity (Tailscale)' in the README."
   printf '\n'
-
-  # Internet tunnel — pinned subdomain + persistent LaunchAgent
-  # DEPRECATED 2026-04-17: Serveo's free tier does not route raw TCP/SSH on subdomains
-  # (subdomain:22 hits Serveo's own sshd, not the tunnel). Flag retained for back-compat
-  # but emits a prominent warning. See commit 8bdc4a0 and README Internet connectivity
-  # section for the Tailscale replacement.
-  if [ "$internet" = true ]; then
-    printf "\n"
-    printf "${BOLD}${YELLOW}  ============================================================${RESET}\n"
-    printf "${BOLD}${YELLOW}  WARNING: 'setup --internet' (Serveo) is DEPRECATED${RESET}\n"
-    printf "${BOLD}${YELLOW}  ============================================================${RESET}\n"
-    printf "${YELLOW}  Serveo's free tier does not route SSH traffic on its subdomains.${RESET}\n"
-    printf "${YELLOW}  Any tunnel this flag sets up WILL NOT carry real SSH — connecting${RESET}\n"
-    printf "${YELLOW}  to <subdomain>.serveo.net:22 hits Serveo's own sshd, not your machine.${RESET}\n"
-    printf "\n"
-    printf "${YELLOW}  Use Tailscale instead. See the 'Internet connectivity (Tailscale)'${RESET}\n"
-    printf "${YELLOW}  section of the README:${RESET}\n"
-    printf "${YELLOW}    https://github.com/EthanSK/agent-bridge#internet-connectivity-tailscale${RESET}\n"
-    printf "\n"
-    printf "${YELLOW}  Continuing anyway since --internet was passed. This is only useful${RESET}\n"
-    printf "${YELLOW}  for tearing down a previously-installed Serveo LaunchAgent or${RESET}\n"
-    printf "${YELLOW}  experimenting with a paid Serveo tier.${RESET}\n"
-    printf "${BOLD}${YELLOW}  ============================================================${RESET}\n"
-    printf "\n"
-    printf "${BOLD}  4. Internet Tunnel (Serveo, DEPRECATED)${RESET}\n"
-
-    case "$tunnel_provider" in
-      serveo)
-        # Pick a subdomain based on machine name
-        local raw_sub
-        raw_sub="$(printf '%s' "$machine_name" | tr '[:upper:]' '[:lower:]' | tr ' _' '-' | tr -cd 'a-z0-9-')"
-        local subdomain="${raw_sub}"
-
-        # Test if subdomain is available by attempting a quick tunnel.
-        #
-        # Detection note: for SSH port-22 reverse tunnels, serveo.net emits NO
-        # "Forwarding" banner on stdout/stderr — that banner is only printed
-        # for HTTP tunnels. We therefore probe with `ssh -v` and look for the
-        # SSH client's own debug line:
-        #   "debug1: remote forward success for: listen <sub>:22, connect ..."
-        # which is the authoritative signal that serveo accepted the forward.
-        # Failure signals on serveo: auth timeout, "remote forward failure",
-        # or process exit with no success line.
-        dim "Trying subdomain: ${subdomain}.serveo.net ..."
-        local tunnel_log
-        tunnel_log="$(mktemp)"
-        ssh -v -o StrictHostKeyChecking=no -o ServerAliveInterval=60 -o ServerAliveCountMax=3 \
-          -R "${subdomain}:22:localhost:${port}" serveo.net -N > "$tunnel_log" 2>&1 &
-        local test_pid=$!
-
-        # Wait for serveo to confirm or reject (up to 15 seconds)
-        local waited=0 tunnel_ok=0
-        while [ "$waited" -lt 15 ]; do
-          if ! kill -0 "$test_pid" 2>/dev/null; then
-            # Process exited — likely auth failure, subdomain taken, or serveo down
-            break
-          fi
-          # Authoritative success: ssh debug says the forward was accepted
-          if grep -q "remote forward success for: listen ${subdomain}:" "$tunnel_log" 2>/dev/null; then
-            tunnel_ok=1
-            break
-          fi
-          # Authoritative failure signals
-          if grep -qiE "remote forward failure|already in use|Authentication failed|Connection refused" "$tunnel_log" 2>/dev/null; then
-            break
-          fi
-          sleep 1
-          waited=$((waited + 1))
-        done
-
-        # If subdomain taken, try with random suffix
-        if [ "$tunnel_ok" = "0" ]; then
-          kill "$test_pid" 2>/dev/null || true
-          wait "$test_pid" 2>/dev/null || true
-          local suffix
-          suffix="$(head -c 3 /dev/urandom | xxd -p | head -c 4)"
-          subdomain="${raw_sub}-${suffix}"
-          warn "Subdomain taken or unavailable, trying: ${subdomain}.serveo.net ..."
-
-          : > "$tunnel_log"
-          ssh -v -o StrictHostKeyChecking=no -o ServerAliveInterval=60 -o ServerAliveCountMax=3 \
-            -R "${subdomain}:22:localhost:${port}" serveo.net -N > "$tunnel_log" 2>&1 &
-          test_pid=$!
-
-          waited=0
-          while [ "$waited" -lt 15 ]; do
-            if ! kill -0 "$test_pid" 2>/dev/null; then
-              break
-            fi
-            if grep -q "remote forward success for: listen ${subdomain}:" "$tunnel_log" 2>/dev/null; then
-              tunnel_ok=1
-              break
-            fi
-            if grep -qiE "remote forward failure|already in use|Authentication failed|Connection refused" "$tunnel_log" 2>/dev/null; then
-              break
-            fi
-            sleep 1
-            waited=$((waited + 1))
-          done
-        fi
-
-        # Kill the test tunnel — the LaunchAgent will run the persistent one
-        kill "$test_pid" 2>/dev/null || true
-        wait "$test_pid" 2>/dev/null || true
-        rm -f "$tunnel_log" 2>/dev/null
-
-        if [ "$tunnel_ok" = "1" ]; then
-          ok "Subdomain ${subdomain}.serveo.net is available!"
-          printf '\n'
-
-          # Save tunnel config
-          ensure_config_dir
-          cat > "$TUNNEL_CONFIG_FILE" <<TJSON
-{
-  "subdomain": "${subdomain}",
-  "port": ${port},
-  "enabled": true
-}
-TJSON
-          chmod 600 "$TUNNEL_CONFIG_FILE"
-          ok "Tunnel config saved to $TUNNEL_CONFIG_FILE"
-
-          # Install LaunchAgent for persistence (macOS)
-          if is_macos; then
-            dim "Installing LaunchAgent for persistent tunnel..."
-            mkdir -p "$HOME/Library/LaunchAgents"
-            cat > "$LAUNCH_AGENT_PLIST" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>${LAUNCH_AGENT_LABEL}</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/bin/ssh</string>
-    <string>-o</string>
-    <string>StrictHostKeyChecking=no</string>
-    <string>-o</string>
-    <string>ServerAliveInterval=60</string>
-    <string>-o</string>
-    <string>ServerAliveCountMax=3</string>
-    <string>-o</string>
-    <string>ExitOnForwardFailure=yes</string>
-    <string>-R</string>
-    <string>${subdomain}:22:localhost:${port}</string>
-    <string>serveo.net</string>
-    <string>-N</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>ThrottleInterval</key>
-  <integer>10</integer>
-  <key>StandardOutPath</key>
-  <string>${CONFIG_DIR}/logs/tunnel.log</string>
-  <key>StandardErrorPath</key>
-  <string>${CONFIG_DIR}/logs/tunnel.log</string>
-</dict>
-</plist>
-PLIST
-            # Ensure logs dir exists
-            mkdir -p "$CONFIG_DIR/logs"
-
-            # Unload any existing agent first
-            launchctl unload "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
-            if launchctl load "$LAUNCH_AGENT_PLIST"; then
-              ok "LaunchAgent installed and loaded (auto-restarts on boot)."
-            else
-              warn "LaunchAgent plist written but 'launchctl load' failed."
-              warn "Try manually: launchctl load $LAUNCH_AGENT_PLIST"
-            fi
-          else
-            warn "Not macOS — skipping LaunchAgent. Start the tunnel manually:"
-            dim "  ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=60 -o ServerAliveCountMax=3 -R ${subdomain}:22:localhost:${port} serveo.net -N &"
-          fi
-
-          printf '\n'
-          printf "${BOLD}${YELLOW}  Tunnel accepted by Serveo — but this subdomain does NOT route SSH.${RESET}\n"
-          printf "${YELLOW}  Connecting to ${subdomain}.serveo.net:22 will hit Serveo's own sshd,${RESET}\n"
-          printf "${YELLOW}  not your machine. Do NOT set this as internet_host — it won't work.${RESET}\n"
-          printf '\n'
-          printf "${YELLOW}  Subdomain: %s.serveo.net (tunnel up, SSH not routed)${RESET}\n" "$subdomain"
-          printf "${YELLOW}  Use Tailscale instead — see README 'Internet connectivity (Tailscale)':${RESET}\n"
-          printf "${YELLOW}    https://github.com/EthanSK/agent-bridge#internet-connectivity-tailscale${RESET}\n"
-          printf '\n'
-          dim "To tear down this tunnel: agent-bridge setup --internet --stop"
-          printf '\n'
-        else
-          warn "Could not establish Serveo tunnel. serveo.net may be down."
-          printf '\n'
-          printf "${BOLD}  Manual alternatives:${RESET}\n"
-          dim "  1. Port forward $port on your router to this machine's local IP ($primary_ip)"
-          dim "  2. Use Tailscale (https://tailscale.com) for a private tunnel"
-          dim "  3. Use ngrok: ngrok tcp $port"
-          printf '\n'
-        fi
-        ;;
-      *)
-        die "Unknown tunnel provider: $tunnel_provider. Supported: serveo"
-        ;;
-    esac
-  fi
 
   # Manual pairing string (includes public key — no password needed)
   printf "${BOLD}${CYAN}  Pairing command (run on the other machine):${RESET}\n"
@@ -943,9 +676,7 @@ PLIST
   printf '\n'
 
   # Keep process alive so user can photograph
-  # Clean up tunnel on exit
   cleanup() {
-    [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null
     printf "\n"
   }
   trap cleanup EXIT INT TERM
@@ -957,22 +688,14 @@ cmd_setup_help() {
   printf 'Enables SSH, generates keys, and displays a pairing screen.\n'
   printf 'Run on each machine you want to bridge.\n\n'
   printf 'Options:\n'
-  printf '  -n, --name <name>              Machine name (defaults to hostname)\n'
-  printf '  -p, --port <port>              SSH port (default: 22)\n'
-  printf '      --internet                 [DEPRECATED] Serveo reverse-SSH tunnel. Does NOT\n'
-  printf '                                 route SSH on Serveo'"'"'s free tier — use Tailscale.\n'
-  printf '                                 See README: Internet connectivity (Tailscale).\n'
-  printf '      --stop                     Tear down a legacy Serveo tunnel (use with --internet)\n'
-  printf '      --tunnel-provider <name>   Tunnel provider (default: serveo, deprecated)\n'
-  printf '  -h, --help                     Show this help\n\n'
-  printf 'Internet connectivity:\n'
-  printf '  Recommended: install Tailscale on each machine, then use its 100.x.y.z\n'
-  printf '  address as internet_host via:\n'
+  printf '  -n, --name <name>   Machine name (defaults to hostname)\n'
+  printf '  -p, --port <port>   SSH port (default: 22)\n'
+  printf '  -h, --help          Show this help\n\n'
+  printf 'Internet connectivity (off-LAN):\n'
+  printf '  Install Tailscale on each machine, then use its 100.x.y.z IP as\n'
+  printf '  internet_host on the paired machine:\n'
   printf '    agent-bridge config <machine> --internet-host <tailscale-ip>\n'
-  printf '  See: https://github.com/EthanSK/agent-bridge#internet-connectivity-tailscale\n\n'
-  printf 'Legacy Serveo commands (deprecated):\n'
-  printf '  agent-bridge setup --internet          [DEPRECATED] Create Serveo tunnel + LaunchAgent\n'
-  printf '  agent-bridge setup --internet --stop   Tear down existing Serveo tunnel + LaunchAgent\n'
+  printf '  See: https://github.com/EthanSK/agent-bridge#internet-connectivity-tailscale\n'
 }
 
 cmd_pair() {
@@ -1106,24 +829,6 @@ cmd_pair() {
 
   # Step 4: Save pairing config
   cfg_save "$machine_name" "$host" "$user" "$port" "$keypath"
-
-  # Step 4b: If local machine has a legacy Serveo tunnel configured, flag it.
-  # NOTE: Serveo tunnels do not route SSH on the free tier (2026-04-17). Do not
-  # suggest setting the .serveo.net subdomain as internet_host — it doesn't work.
-  # See README 'Internet connectivity (Tailscale)'.
-  if [ -f "$TUNNEL_CONFIG_FILE" ]; then
-    local local_subdomain
-    local_subdomain="$(tunnel_config_get subdomain 2>/dev/null || true)"
-    if [ -n "$local_subdomain" ]; then
-      printf "${BOLD}${YELLOW}  4. Legacy Serveo Tunnel Detected${RESET}\n"
-      warn "This machine has a ${local_subdomain}.serveo.net tunnel config."
-      warn "Serveo's free tier does not route SSH — do NOT use this as internet_host."
-      dim "To tear down: agent-bridge setup --internet --stop"
-      dim "For internet connectivity, install Tailscale on both machines and use"
-      dim "the 100.x.y.z IP: agent-bridge config $(get_machine_name) --internet-host <tailscale-ip>"
-      printf '\n'
-    fi
-  fi
 
   printf "${GREEN}${BOLD}  [ok] Paired with \"%s\"!${RESET}\n" "$machine_name"
   printf '\n'
@@ -1662,10 +1367,6 @@ cmd_help() {
   printf '\n'
   printf "${BOLD}Commands:${RESET}\n"
   printf '  setup              Enable SSH, generate keys, show pairing screen\n'
-  printf '  setup --internet   [DEPRECATED] Legacy Serveo tunnel (does not route SSH).\n'
-  printf '                     Use Tailscale instead — see README.\n'
-  printf '  setup --internet --stop\n'
-  printf '                     Tear down an existing legacy Serveo tunnel + LaunchAgent\n'
   printf '  pair               Pair with another machine (interactive or flags)\n'
   printf '  config <machine>   View or update machine config (--internet-host, --internet-port)\n'
   printf '  connect <machine>  Open an interactive SSH session\n'

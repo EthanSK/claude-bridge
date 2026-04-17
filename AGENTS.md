@@ -25,8 +25,9 @@ Options:
 ```bash
 agent-bridge setup --name "MacBook-Pro"   # Custom machine name
 agent-bridge setup --port 2222             # Custom SSH port
-agent-bridge setup --internet              # Start a reverse SSH tunnel
 ```
+
+For off-LAN access, use [Tailscale](https://tailscale.com) and point the paired machine's `internet_host` at its `100.x.y.z` IP (see README).
 
 ### What setup does
 
