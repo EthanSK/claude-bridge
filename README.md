@@ -746,8 +746,6 @@ The MCP server includes production-grade inbox management:
 
 When two machines are not on the same LAN (e.g. one is on mobile data, at a coffee shop, or behind a different NAT), use [Tailscale](https://tailscale.com) to give each machine a stable `100.x.y.z` IP that's reachable from anywhere. Agent-bridge stores that IP as the `internet_host` for the paired machine and falls back to it when the LAN address isn't reachable.
 
-Tailscale is the recommended path for cross-network connectivity. Any service that gives each machine a stable IP/hostname that accepts raw SSH on port 22 (e.g. ZeroTier, a personal VPS with reverse SSH + a public SSH port, a NAT-punching mesh) works equally well — `internet_host` is just a hostname/IP string fed to `ssh -p <port> user@host`. Tunnels that wrap SSH (e.g. Cloudflare Tunnel, which needs `cloudflared access ssh` as a `ProxyCommand`) do not plug into agent-bridge's direct-SSH fallback without custom `~/.ssh/config` work — prefer IP-overlay VPNs like Tailscale.
-
 ### How agent-bridge uses `internet_host`
 
 Each machine can have two endpoints in its config:
