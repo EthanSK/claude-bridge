@@ -792,7 +792,7 @@ key=/Users/ethansk/.agent-bridge/keys/agent-bridge_Mac-Mini
 paired_at=2026-04-13T00:03:01Z
 ```
 
-When SSH/SCP connects to a machine, it tries `host:port` first with a 3-second timeout. If that fails and `internet_host` is configured, it retries via `internet_host:internet_port`. If both fail, a clear error is reported. This fallback applies to the bash CLI (`run`, `connect`, `status`, `send-action`) and the MCP server (`sshExec`, `sshWriteFile`, `sshPing`).
+When SSH/SCP connects to a machine, it tries `host:port` first with a 3-second timeout. If that fails and `internet_host` is configured, it retries via `internet_host:internet_port`. If both fail, a clear error is reported. This fallback applies to the bash CLI (`run`, `connect`, `status`) and the MCP server (`sshExec`, `sshWriteFile`, `sshPing`).
 
 ### One-time setup
 
