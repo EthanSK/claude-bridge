@@ -181,28 +181,24 @@ $ agent-bridge run MacBook-Pro "cd ~/Projects/agent-bridge && git status"
 
 > **Note:** `agent-bridge run` is a plain-shell utility — it does NOT invoke an agent. To talk to the running agent on the other machine, use the channel plugin's `bridge_send_message` tool (see above). The old `--claude` / `--codex` / `--agent` flags that spawned a fresh non-interactive agent session on the remote machine were removed in 3.0.0.
 
-### Optional: Internet tunnel
+### Optional: Internet access via Tailscale
 
-Expose your machine to the internet without port forwarding:
+For cross-network connectivity (mobile data, coffee-shop wifi, different NAT), use [Tailscale](https://tailscale.com) — a mesh VPN that gives each machine a stable `100.x.y.z` IP reachable from anywhere. See the [Internet connectivity](#internet-connectivity-tailscale) section below for the full walkthrough.
 
+Quick version:
+
+```bash
+# On each machine:
+brew install tailscale
+sudo brew services start tailscale                     # launches tailscaled as root
+sudo tailscale up --accept-dns=false --hostname=MY-MACHINE
+tailscale ip -4                                         # note the 100.x.y.z
+
+# Then on the paired machine, point internet_host at that IP:
+agent-bridge config MY-MACHINE --internet-host 100.126.23.87
 ```
-$ agent-bridge setup --internet
 
-  ...
-  4. Internet Tunnel (Serveo)
-  Trying subdomain: macbook-pro.serveo.net ...
-  [ok] Subdomain macbook-pro.serveo.net is available!
-  [ok] Tunnel config saved to /Users/ethan/.agent-bridge/tunnel-config
-  [ok] LaunchAgent installed and loaded (auto-restarts on boot).
-
-  Internet access:
-    Host: macbook-pro.serveo.net
-    Port: 22
-
-  Your machine is now reachable at macbook-pro.serveo.net:22
-  Tell paired machines to set this as internet_host:
-    agent-bridge config <machine> --internet-host macbook-pro.serveo.net
-```
+> **Deprecated:** `agent-bridge setup --internet` was a Serveo-based reverse-SSH tunnel that no longer works for TCP/SSH traffic on Serveo's free tier (Serveo only forwards HTTP on subdomains; the port 22 you see is Serveo's own sshd, not your tunnel). The CLI flag is retained with a warning banner; see commit `8bdc4a0` for the full post-mortem. Use Tailscale instead.
 
 ---
 
@@ -247,10 +243,7 @@ This will:
 - Generate an SSH key pair
 - Display a pairing screen with connection details
 
-For internet access without port forwarding, add the `--internet` flag:
-```bash
-agent-bridge setup --internet
-```
+For internet access across networks, use Tailscale (see [Internet connectivity](#internet-connectivity-tailscale) below). The legacy `--internet` Serveo flag is deprecated and no longer routes SSH traffic reliably.
 
 ### Pair the machines:
 
@@ -289,9 +282,9 @@ agent-bridge run MacBook-Pro "uname -a"
 
 | Command | Description |
 |---------|-------------|
-| `agent-bridge setup` | Enables SSH, generates keys, and displays a pairing screen. Use `--internet` for tunnel. |
-| `agent-bridge setup --internet` | Set up persistent Serveo tunnel with pinned subdomain + LaunchAgent. |
-| `agent-bridge setup --internet --stop` | Tear down the tunnel and remove the LaunchAgent. |
+| `agent-bridge setup` | Enables SSH, generates keys, and displays a pairing screen. |
+| `agent-bridge setup --internet` | **Deprecated.** Serveo reverse-SSH tunnel — no longer routes SSH. Use Tailscale instead (see [Internet connectivity](#internet-connectivity-tailscale)). |
+| `agent-bridge setup --internet --stop` | Tear down a legacy Serveo tunnel (if previously set up). |
 | `agent-bridge pair` | Interactive or flag-based pairing to connect to another machine. |
 | `agent-bridge config <machine>` | View or set machine config (e.g. `--internet-host`, `--internet-port`). |
 | `agent-bridge connect <machine>` | Open an interactive SSH session. |
@@ -307,9 +300,9 @@ agent-bridge run MacBook-Pro "uname -a"
 ```
 -n, --name <name>              Machine name (defaults to hostname)
 -p, --port <port>              SSH port (default: 22)
-    --internet                 Set up persistent Serveo tunnel with pinned subdomain
-    --stop                     Tear down the internet tunnel (use with --internet)
-    --tunnel-provider <name>   Tunnel provider (default: serveo)
+    --internet                 [Deprecated] Serveo tunnel — does not route SSH on free tier. Use Tailscale.
+    --stop                     Tear down a legacy Serveo tunnel (use with --internet)
+    --tunnel-provider <name>   Tunnel provider (default: serveo, deprecated)
 ```
 
 ### Config options
@@ -317,7 +310,7 @@ agent-bridge run MacBook-Pro "uname -a"
 ```
 agent-bridge config <machine> [OPTIONS]
 
---internet-host <host>   Set the internet-reachable hostname (e.g. foo.serveo.net)
+--internet-host <host>   Set the internet-reachable hostname or Tailscale IP (e.g. 100.126.23.86)
 --internet-port <port>   Set the internet-reachable SSH port (default: 22)
 ```
 
@@ -636,7 +629,7 @@ Machine A (Codex)                         Machine B (any harness)
 ```
 ~/.agent-bridge/
 ├── config               # Paired machines (INI-style key-value)
-├── tunnel-config        # Serveo tunnel settings (JSON, created by setup --internet)
+├── tunnel-config        # Legacy Serveo tunnel settings (JSON, from the deprecated setup --internet flow)
 ├── machine-name         # Optional: override local machine name
 ├── .pending-token       # One-time pairing token (deleted after use)
 ├── inbox/               # Incoming messages from other machines
@@ -660,7 +653,7 @@ Simple INI-style flat file -- no JSON, no YAML:
 ```ini
 [MacBook-Pro]
 host=192.168.1.50
-internet_host=macbook-pro.serveo.net
+internet_host=100.126.23.87
 internet_port=22
 user=ethan
 port=22
@@ -668,7 +661,7 @@ key=~/.agent-bridge/keys/agent-bridge_MacBook-Pro
 paired_at=2026-04-09T12:00:00Z
 ```
 
-`internet_host` and `internet_port` are optional. When present, SSH/SCP tries `host:port` first (3s timeout), then falls back to `internet_host:internet_port`.
+`internet_host` and `internet_port` are optional. When present, SSH/SCP tries `host:port` first (3s timeout), then falls back to `internet_host:internet_port`. The recommended `internet_host` value is a [Tailscale](#internet-connectivity-tailscale) `100.x.y.z` IP.
 
 ---
 
@@ -756,35 +749,20 @@ The MCP server includes production-grade inbox management:
 
 ---
 
-## Tailscale support
+## Internet connectivity (Tailscale)
 
-If both machines are on the same Tailscale network, use the Tailscale hostname or IP:
+When two machines are not on the same LAN (e.g. one is on mobile data, at a coffee shop, or behind a different NAT), use [Tailscale](https://tailscale.com) to give each machine a stable `100.x.y.z` IP that's reachable from anywhere. Agent-bridge stores that IP as the `internet_host` for the paired machine and falls back to it when the LAN address isn't reachable.
 
-```bash
-# When pairing, use the Tailscale address
-agent-bridge pair \
-  --name "MacBook-Pro" \
-  --host macbook-pro.tail12345.ts.net \
-  --user ethan \
-  --key ~/.agent-bridge/keys/agent-bridge_MacBook-Pro
-```
+Tailscale is the recommended path for cross-network connectivity. Any service that gives each machine a stable IP/hostname that accepts raw SSH on port 22 (e.g. ZeroTier, a personal VPS with reverse SSH + a public SSH port, a NAT-punching mesh) works equally well — `internet_host` is just a hostname/IP string fed to `ssh -p <port> user@host`. Tunnels that wrap SSH (e.g. Cloudflare Tunnel, which needs `cloudflared access ssh` as a `ProxyCommand`) do not plug into agent-bridge's direct-SSH fallback without custom `~/.ssh/config` work — prefer IP-overlay VPNs like Tailscale.
 
-This lets your agents talk to each other from anywhere.
-
----
-
-## Internet connectivity (Serveo tunnel)
-
-When two machines are not on the same LAN (e.g. one is on mobile data, at a coffee shop, or behind a different NAT), agent-bridge can fall back to an internet endpoint using a [Serveo](https://serveo.net) reverse SSH tunnel.
-
-### How it works
+### How agent-bridge uses `internet_host`
 
 Each machine can have two endpoints in its config:
 
 ```ini
 [MacBookPro]
-host=192.168.1.208          # LAN address (primary)
-internet_host=ethans-mbp.serveo.net  # Internet address (fallback)
+host=192.168.1.208            # LAN address (primary)
+internet_host=100.126.23.87   # Tailscale IP (fallback)
 internet_port=22
 port=22
 user=ethansarif-kattan
@@ -794,40 +772,85 @@ paired_at=2026-04-13T00:03:01Z
 
 When SSH/SCP connects to a machine, it tries `host:port` first with a 3-second timeout. If that fails and `internet_host` is configured, it retries via `internet_host:internet_port`. If both fail, a clear error is reported. This fallback applies to the bash CLI (`run`, `connect`, `status`) and the MCP server (`sshExec`, `sshWriteFile`, `sshPing`).
 
-### One-time setup
+### Tailscale setup
 
 On each machine you want reachable over the internet:
 
+1. **Install the Tailscale CLI** (no GUI needed):
+
+   ```bash
+   brew install tailscale
+   ```
+
+2. **Start `tailscaled`.** Homebrew's default service needs root:
+
+   ```bash
+   sudo brew services start tailscale
+   ```
+
+   If you don't want to run as root, you can run `tailscaled` as a per-user LaunchAgent in userspace-networking mode (`--tun=userspace-networking`) — other peers can still SSH in via the 100.x IP, but outbound tailnet traffic initiated from this machine needs the SOCKS5 proxy (`--socks5-server=localhost:1055`). Normal `sudo` setup is simpler if you have admin access.
+
+3. **Generate an auth key** (reusable, 90-day):
+
+   Visit <https://login.tailscale.com/admin/settings/keys> and click **Generate auth key**. Set **Reusable: true**, **Ephemeral: false**, **Expiry: 90 days**, no tags. Copy the `tskey-auth-...` string.
+
+4. **Bring up the node** with minimal config (no DNS hijacking, no subnet routes):
+
+   ```bash
+   sudo tailscale up \
+     --auth-key=tskey-auth-xxxxxxxxxxxxxxxxxxxxxxxx \
+     --accept-dns=false \
+     --accept-routes=false \
+     --hostname=MY-MACHINE
+   ```
+
+   Replace `MY-MACHINE` with whatever hostname you want to show up in the Tailscale admin panel (it just needs to be a valid DNS label — letters, digits, hyphens).
+
+5. **Get the assigned IP:**
+
+   ```bash
+   tailscale ip -4
+   # e.g. 100.126.23.86
+   ```
+
+### Tell the paired machines
+
+On the *other* machine, point its agent-bridge config at the new Tailscale IP:
+
 ```bash
-agent-bridge setup --internet
+agent-bridge config MacBookPro --internet-host 100.126.23.87
 ```
 
-This will:
-1. Pick a subdomain based on your machine name (e.g. `ethans-mac-mini.serveo.net`). If taken, appends a random suffix.
-2. Verify the tunnel works.
-3. Save the subdomain to `~/.agent-bridge/tunnel-config`.
-4. Install a LaunchAgent (`com.ethansk.agent-bridge-tunnel.plist`) that keeps the tunnel alive across reboots.
+Or edit `~/.agent-bridge/config` directly:
 
-Then tell the paired machines about it:
-
-```bash
-# On the OTHER machine, set the internet_host for this one:
-agent-bridge config MacBookPro --internet-host ethans-mbp.serveo.net
+```ini
+[MacBookPro]
+...
+internet_host=100.126.23.87
+internet_port=22
 ```
 
-### Tear down
+### Verify
 
 ```bash
-agent-bridge setup --internet --stop
+agent-bridge status MacBookPro     # should reach via LAN or fall back to Tailscale
+ssh -i ~/.agent-bridge/keys/agent-bridge_Mac-Mini ethansarif-kattan@100.126.23.87
 ```
 
-This unloads the LaunchAgent, removes the plist, and clears the tunnel config.
+The host key you see should be the target machine's real sshd host key — not Tailscale's — since Tailscale routes raw TCP, it doesn't proxy SSH.
 
-### Caveats
+### Teardown
 
-- **Serveo has no SLA.** It is a free service. If Serveo is down, the internet fallback times out and LAN still works normally. This is fine for occasional use.
-- **The tunnel is a single SSH connection.** The LaunchAgent's `KeepAlive: true` restarts it if it crashes.
-- **Pinned subdomains** are first-come-first-served on Serveo. The setup picks one based on your machine name and falls back to a suffixed name if taken.
+To stop Tailscale on a machine:
+
+```bash
+sudo tailscale down
+sudo brew services stop tailscale
+```
+
+### Why not Serveo?
+
+Earlier versions of this README described a `setup --internet` flag that used [Serveo](https://serveo.net) reverse-SSH tunnels. **It does not work for SSH traffic on Serveo's current free tier** — Serveo only proxies HTTP on subdomains; `<subdomain>.serveo.net:22` resolves but hits Serveo's own sshd, not your tunnel. See commit [`8bdc4a0`](https://github.com/EthanSK/agent-bridge/commit/8bdc4a0) for the post-mortem. The CLI flag is retained but now prints a deprecation warning pointing to this section.
 
 ---
 

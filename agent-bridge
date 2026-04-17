@@ -707,13 +707,34 @@ cmd_setup() {
   printf '\n'
   dim "Photograph this screen and send to Claude on your other machine."
   if [ "$internet" = false ]; then
-    dim "For internet access, use --internet flag or Tailscale."
+    dim "For internet access, see 'Internet connectivity (Tailscale)' in the README."
   fi
   printf '\n'
 
   # Internet tunnel — pinned subdomain + persistent LaunchAgent
+  # DEPRECATED 2026-04-17: Serveo's free tier does not route raw TCP/SSH on subdomains
+  # (subdomain:22 hits Serveo's own sshd, not the tunnel). Flag retained for back-compat
+  # but emits a prominent warning. See commit 8bdc4a0 and README Internet connectivity
+  # section for the Tailscale replacement.
   if [ "$internet" = true ]; then
-    printf "${BOLD}  4. Internet Tunnel (Serveo)${RESET}\n"
+    printf "\n"
+    printf "${BOLD}${YELLOW}  ============================================================${RESET}\n"
+    printf "${BOLD}${YELLOW}  WARNING: 'setup --internet' (Serveo) is DEPRECATED${RESET}\n"
+    printf "${BOLD}${YELLOW}  ============================================================${RESET}\n"
+    printf "${YELLOW}  Serveo's free tier does not route SSH traffic on its subdomains.${RESET}\n"
+    printf "${YELLOW}  Any tunnel this flag sets up WILL NOT carry real SSH — connecting${RESET}\n"
+    printf "${YELLOW}  to <subdomain>.serveo.net:22 hits Serveo's own sshd, not your machine.${RESET}\n"
+    printf "\n"
+    printf "${YELLOW}  Use Tailscale instead. See the 'Internet connectivity (Tailscale)'${RESET}\n"
+    printf "${YELLOW}  section of the README:${RESET}\n"
+    printf "${YELLOW}    https://github.com/EthanSK/agent-bridge#internet-connectivity-tailscale${RESET}\n"
+    printf "\n"
+    printf "${YELLOW}  Continuing anyway since --internet was passed. This is only useful${RESET}\n"
+    printf "${YELLOW}  for tearing down a previously-installed Serveo LaunchAgent or${RESET}\n"
+    printf "${YELLOW}  experimenting with a paid Serveo tier.${RESET}\n"
+    printf "${BOLD}${YELLOW}  ============================================================${RESET}\n"
+    printf "\n"
+    printf "${BOLD}  4. Internet Tunnel (Serveo, DEPRECATED)${RESET}\n"
 
     case "$tunnel_provider" in
       serveo)
@@ -868,15 +889,15 @@ PLIST
           fi
 
           printf '\n'
-          printf "${BOLD}${GREEN}  Internet access:${RESET}\n"
-          printf "${BOLD}    Host: ${CYAN}%s.serveo.net${RESET}\n" "$subdomain"
-          printf "${BOLD}    Port: ${CYAN}22${RESET}\n"
+          printf "${BOLD}${YELLOW}  Tunnel accepted by Serveo — but this subdomain does NOT route SSH.${RESET}\n"
+          printf "${YELLOW}  Connecting to ${subdomain}.serveo.net:22 will hit Serveo's own sshd,${RESET}\n"
+          printf "${YELLOW}  not your machine. Do NOT set this as internet_host — it won't work.${RESET}\n"
           printf '\n'
-          dim "Your machine is now reachable at ${subdomain}.serveo.net:22"
-          dim "Tell paired machines to set this as internet_host:"
-          dim "  agent-bridge config <machine> --internet-host ${subdomain}.serveo.net"
+          printf "${YELLOW}  Subdomain: %s.serveo.net (tunnel up, SSH not routed)${RESET}\n" "$subdomain"
+          printf "${YELLOW}  Use Tailscale instead — see README 'Internet connectivity (Tailscale)':${RESET}\n"
+          printf "${YELLOW}    https://github.com/EthanSK/agent-bridge#internet-connectivity-tailscale${RESET}\n"
           printf '\n'
-          dim "To tear down: agent-bridge setup --internet --stop"
+          dim "To tear down this tunnel: agent-bridge setup --internet --stop"
           printf '\n'
         else
           warn "Could not establish Serveo tunnel. serveo.net may be down."
@@ -938,13 +959,20 @@ cmd_setup_help() {
   printf 'Options:\n'
   printf '  -n, --name <name>              Machine name (defaults to hostname)\n'
   printf '  -p, --port <port>              SSH port (default: 22)\n'
-  printf '      --internet                 Set up persistent Serveo tunnel with pinned subdomain\n'
-  printf '      --stop                     Tear down the internet tunnel (use with --internet)\n'
-  printf '      --tunnel-provider <name>   Tunnel provider (default: serveo). Supported: serveo\n'
+  printf '      --internet                 [DEPRECATED] Serveo reverse-SSH tunnel. Does NOT\n'
+  printf '                                 route SSH on Serveo'"'"'s free tier — use Tailscale.\n'
+  printf '                                 See README: Internet connectivity (Tailscale).\n'
+  printf '      --stop                     Tear down a legacy Serveo tunnel (use with --internet)\n'
+  printf '      --tunnel-provider <name>   Tunnel provider (default: serveo, deprecated)\n'
   printf '  -h, --help                     Show this help\n\n'
-  printf 'Internet tunnel:\n'
-  printf '  agent-bridge setup --internet          Create tunnel + LaunchAgent\n'
-  printf '  agent-bridge setup --internet --stop   Remove tunnel + LaunchAgent\n'
+  printf 'Internet connectivity:\n'
+  printf '  Recommended: install Tailscale on each machine, then use its 100.x.y.z\n'
+  printf '  address as internet_host via:\n'
+  printf '    agent-bridge config <machine> --internet-host <tailscale-ip>\n'
+  printf '  See: https://github.com/EthanSK/agent-bridge#internet-connectivity-tailscale\n\n'
+  printf 'Legacy Serveo commands (deprecated):\n'
+  printf '  agent-bridge setup --internet          [DEPRECATED] Create Serveo tunnel + LaunchAgent\n'
+  printf '  agent-bridge setup --internet --stop   Tear down existing Serveo tunnel + LaunchAgent\n'
 }
 
 cmd_pair() {
@@ -1079,15 +1107,20 @@ cmd_pair() {
   # Step 4: Save pairing config
   cfg_save "$machine_name" "$host" "$user" "$port" "$keypath"
 
-  # Step 4b: If local machine has a tunnel configured, share it
+  # Step 4b: If local machine has a legacy Serveo tunnel configured, flag it.
+  # NOTE: Serveo tunnels do not route SSH on the free tier (2026-04-17). Do not
+  # suggest setting the .serveo.net subdomain as internet_host — it doesn't work.
+  # See README 'Internet connectivity (Tailscale)'.
   if [ -f "$TUNNEL_CONFIG_FILE" ]; then
     local local_subdomain
     local_subdomain="$(tunnel_config_get subdomain 2>/dev/null || true)"
     if [ -n "$local_subdomain" ]; then
-      printf "${BOLD}  4. Internet Tunnel Discovery${RESET}\n"
-      dim "This machine has a tunnel at ${local_subdomain}.serveo.net"
-      dim "The paired machine should set this as your internet_host:"
-      dim "  agent-bridge config $(get_machine_name) --internet-host ${local_subdomain}.serveo.net"
+      printf "${BOLD}${YELLOW}  4. Legacy Serveo Tunnel Detected${RESET}\n"
+      warn "This machine has a ${local_subdomain}.serveo.net tunnel config."
+      warn "Serveo's free tier does not route SSH — do NOT use this as internet_host."
+      dim "To tear down: agent-bridge setup --internet --stop"
+      dim "For internet connectivity, install Tailscale on both machines and use"
+      dim "the 100.x.y.z IP: agent-bridge config $(get_machine_name) --internet-host <tailscale-ip>"
       printf '\n'
     fi
   fi
@@ -1607,13 +1640,15 @@ cmd_config_help() {
   printf 'View or update configuration for a paired machine.\n\n'
   printf 'With no options, prints the current config for the machine.\n\n'
   printf 'Options:\n'
-  printf '  --internet-host <host>   Set the internet-reachable hostname (e.g. foo.serveo.net)\n'
+  printf '  --internet-host <host>   Set the internet-reachable hostname or IP.\n'
+  printf '                           Recommended: a Tailscale 100.x.y.z address.\n'
+  printf '                           See README section "Internet connectivity (Tailscale)".\n'
   printf '  --internet-port <port>   Set the internet-reachable SSH port (default: 22)\n'
   printf '  -h, --help               Show this help\n\n'
   printf 'Examples:\n'
   printf '  agent-bridge config MacBook-Pro\n'
-  printf '  agent-bridge config MacBook-Pro --internet-host ethans-mbp.serveo.net\n'
-  printf '  agent-bridge config MacBook-Pro --internet-host ethans-mbp.serveo.net --internet-port 22\n'
+  printf '  agent-bridge config MacBook-Pro --internet-host 100.126.23.87\n'
+  printf '  agent-bridge config MacBook-Pro --internet-host 100.126.23.87 --internet-port 22\n'
 }
 
 cmd_help() {
@@ -1627,9 +1662,10 @@ cmd_help() {
   printf '\n'
   printf "${BOLD}Commands:${RESET}\n"
   printf '  setup              Enable SSH, generate keys, show pairing screen\n'
-  printf '  setup --internet   Set up persistent Serveo tunnel for internet access\n'
+  printf '  setup --internet   [DEPRECATED] Legacy Serveo tunnel (does not route SSH).\n'
+  printf '                     Use Tailscale instead — see README.\n'
   printf '  setup --internet --stop\n'
-  printf '                     Tear down the internet tunnel and LaunchAgent\n'
+  printf '                     Tear down an existing legacy Serveo tunnel + LaunchAgent\n'
   printf '  pair               Pair with another machine (interactive or flags)\n'
   printf '  config <machine>   View or update machine config (--internet-host, --internet-port)\n'
   printf '  connect <machine>  Open an interactive SSH session\n'

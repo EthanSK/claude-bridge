@@ -52,7 +52,7 @@ export interface MachineConfig {
   port: number;
   key: string;
   pairedAt: string;
-  /** Optional internet-reachable host (e.g. Serveo tunnel subdomain). */
+  /** Optional internet-reachable host (e.g. a Tailscale 100.x.y.z IP or other stable overlay address). */
   internetHost?: string;
   /** Optional internet-reachable port (default: 22). */
   internetPort?: number;

@@ -186,7 +186,7 @@
           </div>
           <div class="card" data-tag="03">
             <h3>Peer-to-peer over SSH</h3>
-            <p>Direct machine-to-machine SSH on the ports you already allow. No relay, no broker, no vendor. Tailscale works great; plain LAN works great; serveo reverse tunnels work when you need them.</p>
+            <p>Direct machine-to-machine SSH on the ports you already allow. No relay, no broker, no vendor. Tailscale is the recommended off-LAN path (stable 100.x.y.z IPs); plain LAN works great too.</p>
           </div>
           <div class="card" data-tag="04">
             <h3>Hardened against zombies</h3>
@@ -268,8 +268,10 @@
 <pre><span class="t-comment"># On each machine: enable SSH, generate keys, show pairing screen</span>
 <span class="t-prompt"></span>agent-bridge setup
 
-<span class="t-comment"># Optional: internet tunnel (reverse SSH via serveo.net, no port forwarding)</span>
-<span class="t-prompt"></span>agent-bridge setup --internet
+<span class="t-comment"># Off-LAN? Install Tailscale on each machine and use its 100.x.y.z IP as internet_host:</span>
+<span class="t-prompt"></span>brew install tailscale &amp;&amp; sudo brew services start tailscale
+<span class="t-prompt"></span>sudo tailscale up --accept-dns=false --hostname=MY-MACHINE
+<span class="t-prompt"></span>agent-bridge config &lt;other-machine&gt; --internet-host 100.x.y.z
 
 <span class="t-comment"># Then photograph the pairing screen on one machine</span>
 <span class="t-comment"># and send the photo to Claude on the other. It runs `agent-bridge pair` for you.</span>
@@ -491,7 +493,7 @@
           </li>
           <li>
             <h3>Never touches a third-party server</h3>
-            <p>Everything is direct machine-to-machine SSH on the ports you already allow. No broker, no relay, no vendor. Tailscale is strongly recommended for off-LAN links; serveo is available when you just need a quick reverse tunnel.</p>
+            <p>Everything is direct machine-to-machine SSH on the ports you already allow. No broker, no relay, no vendor. Tailscale is strongly recommended for off-LAN links (stable 100.x.y.z IPs with zero port-forwarding).</p>
           </li>
         </ul>
       </section>
