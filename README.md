@@ -287,9 +287,10 @@ agent-bridge run MacBook-Pro "uname -a"
 | `agent-bridge pair` | Interactive or flag-based pairing to connect to another machine. |
 | `agent-bridge config <machine>` | View or set machine config (e.g. `--internet-host`, `--internet-port`). |
 | `agent-bridge connect <machine>` | Open an interactive SSH session. |
-| `agent-bridge status [machine]` | Check if machine(s) are reachable (tries LAN, then internet fallback). |
+| `agent-bridge status [machine]` | Check if machine(s) are reachable. Uses the [path cache](#path-cache-lan-vs-internet); add `--probe`/`--fresh` to force a LAN-first re-probe. |
 | `agent-bridge list` | List all paired machines (shows internet_host if set). |
 | `agent-bridge run <machine> "cmd"` | Run a PLAIN shell command on a paired machine (diagnostics only — no agent wrapping). |
+| `agent-bridge reset-path <machine>` | Clear the cached LAN/internet path for a machine (or `--all`). See [Path cache](#path-cache-lan-vs-internet). |
 | `agent-bridge unpair <machine>` | Remove a pairing. |
 
 > To talk to the **running agent** on the other machine, use the channel plugin's `bridge_send_message` MCP tool. `agent-bridge run` does not spawn agents. The old `--claude` / `--codex` / `--agent` flags were removed in 3.0.0.
@@ -764,7 +765,7 @@ key=/Users/ethansk/.agent-bridge/keys/agent-bridge_Mac-Mini
 paired_at=2026-04-13T00:03:01Z
 ```
 
-When SSH/SCP connects to a machine, it tries `host:port` first with a 3-second timeout. If that fails and `internet_host` is configured, it retries via `internet_host:internet_port`. If both fail, a clear error is reported. This fallback applies to the bash CLI (`run`, `connect`, `status`) and the MCP server (`sshExec`, `sshWriteFile`, `sshPing`).
+When SSH/SCP connects to a machine, it picks the path to try first based on the [path cache](#path-cache-lan-vs-internet): if a recent successful connection is known, that path is tried first (LAN 3s timeout, internet 10s); otherwise it starts with LAN. On failure, the other path is tried. If both fail, a clear error is reported. This fallback applies to the bash CLI (`run`, `connect`, `status`) and the MCP server (`sshExec`, `sshWriteFile`, `sshPing`).
 
 ### Tailscale setup
 
@@ -948,6 +949,60 @@ sudo brew services stop tailscale
 ```
 
 With kernel-TUN mode, drop the `Host 100.*` block from `~/.ssh/config` (it's unnecessary — the kernel routes `100.x.y.z` natively) and skip the `--socket=...` CLI prefix (the daemon uses the default socket at `/var/run/tailscaled.socket`, which the CLI finds automatically).
+
+---
+
+## Path cache (LAN vs internet)
+
+When a machine has both a LAN `host` and an `internet_host` configured, every SSH/ops call is a race between the two. Historically agent-bridge always tried LAN first (3s timeout) and only fell back to the internet path on failure — fine on the same wifi, but ~3 seconds of wasted time on every off-network call.
+
+As of **v3.1.0**, agent-bridge keeps a tiny per-machine cache of which path last worked:
+
+```json
+// ~/.agent-bridge/path-cache.json  (mode 0600)
+{
+  "Mac-Mini":   { "path": "internet", "ts": 1776473474, "last_success": 1776473474 },
+  "MacBookPro": { "path": "lan",      "ts": 1776473400, "last_success": 1776473400 }
+}
+```
+
+### Behavior
+
+- **Fresh entry (< 1h since `last_success`)** → try the cached path first, fall back to the other on connection failure (SSH exit 255).
+- **Stale or missing entry (> 1h or no cache)** → LAN-first probe, like before. LAN is preferred because it's more efficient when available.
+- On every successful connection, the cache is updated. On failure of the cached path, the alternate is tried and — if it succeeds — replaces the cached path.
+
+This means if you spend the day tethered to mobile data, every `agent-bridge run …` hits the internet path directly without a 3s LAN probe. Reconnect to your home wifi and, after the 1h TTL elapses (or whenever the cached internet path fails), the next call re-probes LAN-first and switches back.
+
+The cache TTL can be tuned via environment variables:
+
+- Bash CLI: `AGENT_BRIDGE_PATH_CACHE_TTL=<seconds>`
+- MCP server: `AGENT_BRIDGE_PATH_CACHE_TTL_MS=<milliseconds>`
+
+### Manually invalidating the cache
+
+Normally the cache is self-managing, but if routing/topology changes in a way agent-bridge can't detect (e.g. a Tailscale IP changed, or a NAT quirk is causing stale cache entries), you can clear it:
+
+```bash
+agent-bridge reset-path Mac-Mini     # clear for one machine
+agent-bridge reset-path --all        # nuke the whole cache
+```
+
+You can also force a single status call to bypass the cache and re-probe LAN-first:
+
+```bash
+agent-bridge status --probe Mac-Mini
+# or equivalently:
+agent-bridge status --fresh Mac-Mini
+```
+
+The MCP server's `bridge_status` tool accepts the same `{ probe: true }` option to force a fresh probe.
+
+### File format and corruption handling
+
+The cache lives at `~/.agent-bridge/path-cache.json` with mode `0600`. Writes are atomic (`write-to-tmp` + `rename`) so concurrent callers never see a half-written file. If the file somehow gets corrupted, agent-bridge treats it as empty and rebuilds it on the next successful probe — it won't error out on broken JSON.
+
+You can safely delete `path-cache.json` at any time; agent-bridge will just recreate it.
 
 ---
 

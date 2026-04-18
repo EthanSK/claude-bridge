@@ -9,9 +9,12 @@
  */
 
 import { spawn } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { type MachineConfig } from './config.js';
 import { logDebug, logError, logInfo, logWarn } from './logger.js';
+import { pathOrder, writePathCache, type PathKind } from './pathCache.js';
 
 /** Timeout for the LAN attempt when an internet fallback is available. */
 const LAN_CONNECT_TIMEOUT_S = 3;
@@ -24,18 +27,31 @@ export interface SSHResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+  /**
+   * Wall-clock milliseconds the ssh process ran for, used to disambiguate a
+   * connection-timeout 255 from a remote command that returned 255 on its
+   * own. Not all callers care about this — single-endpoint callers can ignore.
+   */
+  elapsedMs?: number;
 }
 
 /**
  * Build the common SSH argument list for a machine.
+ *
+ * `clientLogFile` (optional) captures ssh client-side diagnostics via `-E` at
+ * INFO level so we can reliably distinguish a connection-level failure (which
+ * writes well-known messages to this log) from a remote command exit. Without
+ * this, SSH's default `LogLevel=ERROR` path writes some connection failures
+ * silently, making exit 255 ambiguous.
  */
 function buildSSHArgs(
   machine: MachineConfig,
   host: string,
   port: number,
   connectTimeoutS: number,
+  clientLogFile?: string,
 ): string[] {
-  return [
+  const args = [
     '-i', machine.key,
     '-o', 'StrictHostKeyChecking=no',
     '-o', 'UserKnownHostsFile=/dev/null',
@@ -43,8 +59,15 @@ function buildSSHArgs(
     '-o', `ConnectTimeout=${connectTimeoutS}`,
     '-o', 'LogLevel=ERROR',
     '-p', String(port),
-    `${machine.user}@${host}`,
   ];
+  if (clientLogFile) {
+    // -E writes SSH client logs to a file; -o LogLevel=INFO raises the level
+    // enough to include "Connection timed out", "Permission denied", etc.
+    // without polluting stderr for the caller.
+    args.push('-E', clientLogFile, '-o', 'LogLevel=INFO');
+  }
+  args.push(`${machine.user}@${host}`);
+  return args;
 }
 
 /**
@@ -59,8 +82,14 @@ function sshExecSingle(
   command: string,
   timeoutMs: number,
 ): Promise<SSHResult> {
-  const args = [...buildSSHArgs(machine, host, port, connectTimeoutS), command];
+  // Capture ssh client diagnostics into a tmpfile so we can reliably detect
+  // connection failures even when the default LogLevel=ERROR path would
+  // otherwise write nothing to stderr.
+  const tmpDir = mkdtempSync(join(tmpdir(), 'ab-ssh-'));
+  const clientLog = join(tmpDir, 'client.log');
+  const args = [...buildSSHArgs(machine, host, port, connectTimeoutS, clientLog), command];
 
+  const startedAt = Date.now();
   return new Promise<SSHResult>((resolve, reject) => {
     const proc = spawn('ssh', args, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -69,6 +98,10 @@ function sshExecSingle(
     let stdout = '';
     let stderr = '';
     let settled = false;
+
+    const cleanup = () => {
+      try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    };
 
     proc.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
@@ -82,6 +115,7 @@ function sshExecSingle(
       if (settled) return;
       settled = true;
       proc.kill('SIGKILL');
+      cleanup();
       reject(new Error(`SSH command timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
@@ -90,97 +124,219 @@ function sshExecSingle(
       settled = true;
       clearTimeout(timer);
       const exitCode = code ?? 1;
-      resolve({ exitCode, stdout, stderr });
+      // Fold the client log into stderr so downstream classification uses a
+      // single stream. If the read fails, we just get whatever stderr was.
+      let clientLogText = '';
+      try { clientLogText = readFileSync(clientLog, 'utf8'); } catch { /* noop */ }
+      cleanup();
+      resolve({
+        exitCode,
+        stdout,
+        stderr: stderr + clientLogText,
+        elapsedMs: Date.now() - startedAt,
+      });
     });
 
     proc.on('error', (err) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      cleanup();
       reject(err);
     });
   });
 }
 
+/** Options for tuning a single sshExec call. */
+export interface SSHExecOptions {
+  /**
+   * Force a LAN-first probe regardless of the last-reachable-path cache.
+   * Used by status/health checks that want an authoritative answer.
+   */
+  bypassPathCache?: boolean;
+}
+
+/**
+ * SSH exit 255 is ambiguous: it can mean "ssh itself failed to connect" OR
+ * "ssh connected fine and the remote command returned 255 on its own." For
+ * non-interactive exec paths we must not retry a command that actually ran
+ * to completion, so we match ONLY explicit client-emitted connection-failure
+ * phrases. We deliberately avoid elapsed-time heuristics here — a
+ * long-running remote command that eventually exits 255 would otherwise be
+ * misclassified as a slow ConnectTimeout.
+ *
+ * In practice OpenSSH always prints "ssh: connect to host X port Y: ..."
+ * or similar on real connection failures, so stderr sniffing is sufficient.
+ */
+function isConnectionFailure(stderr: string): boolean {
+  // Only match phrases the ssh *client* itself emits for its own failures.
+  // Generic strings like "Permission denied" or "Broken pipe" are avoided
+  // because remote commands can legitimately write them to stderr.
+  const patterns = [
+    'ssh: connect to host',
+    'ssh: Could not resolve hostname',
+    'ssh_exchange_identification:',
+    'kex_exchange_identification:',
+    'Host key verification failed',
+    'Permission denied (publickey',
+    'No route to host',
+    'Network is unreachable',
+    'Name or service not known',
+  ];
+  return !!stderr && patterns.some(p => stderr.includes(p));
+}
+
+/**
+ * Resolve the endpoint tuple for a given path attempt.
+ */
+function endpointFor(machine: MachineConfig, kind: PathKind): { host: string; port: number; timeoutS: number; label: string } {
+  if (kind === 'lan') {
+    return {
+      host: machine.host,
+      port: machine.port,
+      timeoutS: machine.internetHost ? LAN_CONNECT_TIMEOUT_S : DEFAULT_CONNECT_TIMEOUT_S,
+      label: 'LAN',
+    };
+  }
+  return {
+    host: machine.internetHost!,
+    port: machine.internetPort ?? 22,
+    timeoutS: INTERNET_CONNECT_TIMEOUT_S,
+    label: 'internet',
+  };
+}
+
 /**
  * Run a command on a remote machine via SSH.
  *
- * If the machine has an internet_host configured, tries the primary
- * host first (3s connect timeout), then falls back to internet_host.
+ * When the machine has an internet_host configured, uses the last-reachable-
+ * path cache to pick which endpoint to try first. A successful connection
+ * (SSH exit code != 255) updates the cache. On connection failure (exit 255),
+ * tries the alternate endpoint. Remote-command failures (non-255, non-zero)
+ * are NOT treated as path failures — they're returned as-is.
+ *
+ * Pass `bypassPathCache: true` to force a LAN-first probe (used by status
+ * checks).
  */
 export async function sshExec(
   machine: MachineConfig,
   command: string,
   timeoutMs: number = 30000,
+  opts: SSHExecOptions = {},
 ): Promise<SSHResult> {
   if (!existsSync(machine.key)) {
     throw new Error(`SSH key not found: ${machine.key}`);
   }
 
   const hasInternetFallback = !!machine.internetHost;
-  const lanTimeout = hasInternetFallback ? LAN_CONNECT_TIMEOUT_S : DEFAULT_CONNECT_TIMEOUT_S;
-
   logDebug(`SSH exec to ${machine.name} (${machine.host}:${machine.port}): ${command.substring(0, 200)}`);
 
-  // Try primary (LAN) endpoint
-  try {
+  // No fallback configured — single endpoint path, but still cache the result
+  // so future multi-path callers start from the right place.
+  if (!hasInternetFallback) {
+    const ep = endpointFor(machine, 'lan');
     const result = await sshExecSingle(
-      machine, machine.host, machine.port, lanTimeout, command, timeoutMs,
+      machine, ep.host, ep.port, ep.timeoutS, command, timeoutMs,
     );
-    // Only fall back on SSH connection failure (exit 255), not remote command failures.
-    // Exit code 255 means SSH itself failed (connection refused, timeout, auth failure).
-    // Any other exit code means SSH connected but the remote command returned non-zero.
-    if (result.exitCode !== 255 || !hasInternetFallback) {
-      if (result.exitCode === 0) {
-        logDebug(`SSH to ${machine.name} succeeded via LAN (${machine.host}:${machine.port})`);
-      }
-      return result;
-    }
-    logWarn(`SSH to ${machine.name} via LAN failed (exit=255, connection failure), trying internet fallback...`);
-  } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    // Distinguish connection-level errors (spawn failure) from command timeouts.
-    // A timeout means SSH connected and the command was running — retrying would
-    // duplicate side effects. Only retry on spawn errors (SSH binary not found, etc.).
-    const isTimeout = errMsg.includes('timed out');
-    if (!hasInternetFallback || isTimeout) {
-      logError(`SSH to ${machine.name} failed: ${errMsg}`);
-      throw err;
-    }
-    logWarn(`SSH to ${machine.name} via LAN failed (${errMsg}), trying internet fallback...`);
-  }
-
-  // Try internet fallback
-  const internetPort = machine.internetPort ?? 22;
-  logInfo(`SSH fallback to ${machine.name} via internet (${machine.internetHost}:${internetPort})`);
-
-  try {
-    const result = await sshExecSingle(
-      machine, machine.internetHost!, internetPort, INTERNET_CONNECT_TIMEOUT_S, command, timeoutMs,
-    );
-    if (result.exitCode === 0) {
-      logInfo(`SSH to ${machine.name} succeeded via internet (${machine.internetHost}:${internetPort})`);
-    } else {
-      logError(`SSH to ${machine.name} failed on both LAN and internet (internet exit=${result.exitCode})`);
+    // Exit 255 with stderr that doesn't look like an SSH-client connection
+    // failure means the remote command connected and exited 255 on its own
+    // — still a cache win. A genuine connection failure doesn't update cache.
+    const connected = result.exitCode !== 255 || !isConnectionFailure(result.stderr);
+    if (connected) {
+      logDebug(`SSH to ${machine.name} connected via ${ep.label} (${ep.host}:${ep.port})`);
+      try { writePathCache(machine.name, 'lan'); } catch { /* best effort */ }
     }
     return result;
-  } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    logError(`Machine ${machine.name} unreachable on both LAN (${machine.host}:${machine.port}) and internet (${machine.internetHost}:${internetPort}): ${errMsg}`);
-    throw new Error(
-      `Machine "${machine.name}" unreachable on both LAN and internet. ` +
-      `LAN: ${machine.host}:${machine.port}, Internet: ${machine.internetHost}:${internetPort}`,
-    );
   }
+
+  // Dual-endpoint mode. Respect the cache unless the caller asked to bypass.
+  const order = pathOrder(machine.name, { bypass: opts.bypassPathCache });
+
+  let lastErr: unknown;
+  let lastResult: SSHResult | undefined;
+  for (let i = 0; i < order.length; i++) {
+    const kind = order[i];
+    const ep = endpointFor(machine, kind);
+
+    try {
+      const result = await sshExecSingle(
+        machine, ep.host, ep.port, ep.timeoutS, command, timeoutMs,
+      );
+      lastResult = result;
+
+      if (result.exitCode === 255) {
+        // Ambiguous: could be a connection failure OR the remote command
+        // itself exiting 255. Match only on SSH-client stderr signatures
+        // before retrying — we must not replay a command that already ran
+        // to completion.
+        if (isConnectionFailure(result.stderr)) {
+          if (i === 0) {
+            logWarn(`SSH to ${machine.name} via ${ep.label} failed (exit=255, connection failure), trying alternate path...`);
+          } else {
+            logError(`SSH to ${machine.name} failed on both paths (last: ${ep.label}, exit=255)`);
+          }
+          continue;
+        }
+        // Remote command exited 255 on its own — SSH did connect. Record
+        // the cache hit and hand back the result without retrying.
+        logDebug(`SSH to ${machine.name} via ${ep.label}: remote command exited 255 (elapsed ${result.elapsedMs}ms)`);
+        try { writePathCache(machine.name, kind); } catch { /* best effort */ }
+        return result;
+      }
+
+      // SSH connected (even if the remote command returned non-zero). Cache the win.
+      if (result.exitCode === 0) {
+        logDebug(`SSH to ${machine.name} succeeded via ${ep.label} (${ep.host}:${ep.port})`);
+      }
+      try { writePathCache(machine.name, kind); } catch { /* best effort */ }
+      return result;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      lastErr = err;
+
+      // A process timeout is ambiguous: SSH may have connected and the command
+      // may be running, so retrying could duplicate side effects. Do not update
+      // the cache because this does not prove the path is healthy.
+      if (errMsg.includes('timed out')) {
+        logError(`SSH to ${machine.name} timed out on ${ep.label}: ${errMsg}`);
+        throw err;
+      }
+
+      if (i === 0) {
+        logWarn(`SSH to ${machine.name} via ${ep.label} failed (${errMsg}), trying alternate path...`);
+      }
+    }
+  }
+
+  // Both paths failed.
+  if (lastResult?.exitCode === 255) {
+    logError(`Machine ${machine.name} unreachable on both LAN (${machine.host}:${machine.port}) and internet (${machine.internetHost}:${machine.internetPort ?? 22})`);
+    return lastResult;
+  }
+  const errMsg = lastErr instanceof Error ? lastErr.message : String(lastErr ?? 'unknown');
+  logError(`Machine ${machine.name} unreachable on both LAN and internet: ${errMsg}`);
+  throw new Error(
+    `Machine "${machine.name}" unreachable on both LAN and internet. ` +
+    `LAN: ${machine.host}:${machine.port}, Internet: ${machine.internetHost}:${machine.internetPort ?? 22}`,
+  );
 }
 
 /**
  * Check if a remote machine is reachable via SSH.
+ *
+ * Honors the last-reachable-path cache by default (fast off-LAN case). Pass
+ * `bypassPathCache: true` to force a LAN-first probe — useful for "is my LAN
+ * connectivity back?" style checks.
  */
-export async function sshPing(machine: MachineConfig): Promise<boolean> {
+export async function sshPing(
+  machine: MachineConfig,
+  opts: SSHExecOptions = {},
+): Promise<boolean> {
   logDebug(`SSH ping to ${machine.name} (${machine.user}@${machine.host}:${machine.port})`);
   try {
-    const result = await sshExec(machine, 'echo pong', 10000);
+    // Keep this above the 10s internet ConnectTimeout so connection failures
+    // surface as SSH exit 255 and can fall back to the alternate path.
+    const result = await sshExec(machine, 'echo pong', 15000, opts);
     const reachable = result.exitCode === 0 && result.stdout.trim() === 'pong';
     logInfo(`SSH ping ${machine.name}: ${reachable ? 'ONLINE' : 'OFFLINE'}`);
     return reachable;

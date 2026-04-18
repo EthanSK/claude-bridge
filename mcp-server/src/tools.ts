@@ -76,15 +76,21 @@ export function registerTools(server: McpServer): void {
     {
       title: 'Machine Status',
       description:
-        'Check if a paired machine is reachable via SSH. If no machine name is provided, checks all paired machines.',
+        'Check if a paired machine is reachable via SSH. Uses the last-reachable-path cache so off-network checks stay fast. Pass `probe: true` to force a fresh LAN-first probe. If no machine name is provided, checks all paired machines.',
       inputSchema: {
         machine: z
           .string()
           .optional()
           .describe('Name of the machine to check. Omit to check all.'),
+        probe: z
+          .boolean()
+          .optional()
+          .describe(
+            'Bypass the last-reachable-path cache and force a fresh LAN-first probe. Useful when network topology just changed.',
+          ),
       },
     },
-    async ({ machine }) => {
+    async ({ machine, probe }) => {
       const machines = loadConfig();
 
       if (machines.length === 0) {
@@ -118,7 +124,7 @@ export function registerTools(server: McpServer): void {
 
       const results: string[] = [];
       for (const m of toCheck) {
-        const reachable = await sshPing(m);
+        const reachable = await sshPing(m, { bypassPathCache: probe === true });
         results.push(
           `${m.name}: ${reachable ? 'ONLINE' : 'OFFLINE'} (${m.user}@${m.host}:${m.port})`,
         );
