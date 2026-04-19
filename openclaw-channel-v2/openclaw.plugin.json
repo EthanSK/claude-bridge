@@ -1,0 +1,45 @@
+{
+  "id": "agent-bridge",
+  "channels": ["agent-bridge"],
+  "channelEnvVars": {
+    "agent-bridge": [
+      "AGENT_BRIDGE_INBOX_DIR",
+      "AGENT_BRIDGE_KEYS_DIR"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "inboxDir": {
+        "type": "string",
+        "description": "Directory to watch for incoming bridge messages. Defaults to ~/.agent-bridge/inbox."
+      },
+      "keysDir": {
+        "type": "string",
+        "description": "Directory holding SSH keys for SCP outbound replies. Defaults to ~/.agent-bridge/keys."
+      },
+      "pollIntervalMs": {
+        "type": "integer",
+        "minimum": 500,
+        "description": "Polling interval for inbox watcher. Default: 2000."
+      },
+      "machineName": {
+        "type": "string",
+        "description": "Local machine name used as the 'from' field on outbound BridgeMessages. Defaults to hostname."
+      },
+      "fanOutChannel": {
+        "type": "string",
+        "description": "When the agent replies, also deliver to this channel id (e.g. 'telegram'). Optional."
+      },
+      "fanOutAccount": {
+        "type": "string",
+        "description": "Channel account id for fan-out delivery. Optional."
+      },
+      "fanOutTarget": {
+        "type": "string",
+        "description": "Default chat target for fan-out delivery. Optional."
+      }
+    }
+  }
+}

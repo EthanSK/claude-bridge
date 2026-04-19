@@ -454,15 +454,34 @@ cp -r skills/openclaw ~/.openclaw/workspace/skills/agent-bridge
 
 **Step 3 -- enable push delivery (pick one):**
 
-*Option A — OpenClaw plugin (auto-starts with the gateway):*
+*Option A — v2 native channel plugin (recommended, `openclaw-channel-v2/`):*
+```json
+// ~/.openclaw/openclaw.json
+{
+  "channels": {
+    "agent-bridge": { "enabled": true }
+  },
+  "plugins": {
+    "load": {
+      "paths": [ "/absolute/path/to/agent-bridge/openclaw-channel-v2" ]
+    },
+    "entries": {
+      "agent-bridge": { "enabled": false }
+    }
+  }
+}
+```
+Registers `agent-bridge` as a first-class OpenClaw channel (same tier as Telegram) via `api.registerChannel()`. Inbound messages dispatch through `enqueueSystemEvent` from the plugin-sdk — no CLI shell-out, no scanner bypass. Outbound replies SCP a `BridgeMessage` back to the sender. See [`openclaw-channel-v2/README.md`](openclaw-channel-v2/README.md) and [`openclaw-channel-v2/ARCHITECTURE.md`](openclaw-channel-v2/ARCHITECTURE.md).
+
+*Option B — v1.3.0 extension plugin (deprecated, `openclaw-plugin/`):*
 ```bash
 openclaw plugins install --link /absolute/path/to/agent-bridge/openclaw-plugin \
   --dangerously-force-unsafe-install
 openclaw gateway restart
 ```
-The `--dangerously-force-unsafe-install` flag is required because the plugin shells out to `openclaw agent` (via `child_process`), which OpenClaw's plugin scanner flags as critical. The call is limited to the host's own CLI, so the bypass is safe here.
+The `--dangerously-force-unsafe-install` flag is required because v1 shells out to `openclaw agent` via `child_process`, which the plugin scanner flags as critical. v1 is kept for backward compatibility with existing installs; prefer v2 for new setups.
 
-*Option B — standalone daemon (no plugin system, no scanner bypass):*
+*Option C — standalone daemon (no plugin system, no scanner bypass):*
 ```bash
 node /absolute/path/to/agent-bridge/openclaw-plugin/bin/agent-bridge-openclaw-inbox.js
 ```

@@ -1,4 +1,12 @@
-# agent-bridge OpenClaw channel plugin
+# agent-bridge OpenClaw channel plugin (v1.3.0 — deprecated)
+
+> **⚠️ Deprecated.** This is the v1.3.0 extension plugin that shells out to
+> `openclaw agent` / `openclaw message send` per inbound message. It's kept
+> on disk for backward compatibility but new setups should use
+> [`../openclaw-channel-v2/`](../openclaw-channel-v2/README.md) — a
+> first-class OpenClaw channel registered via the plugin-sdk's
+> `api.registerChannel()` API. v2 needs no scanner bypass, surfaces in
+> `openclaw channels list`, and flows through the normal reply pipeline.
 
 The OpenClaw counterpart to the Claude Code agent-bridge channel plugin.
 
