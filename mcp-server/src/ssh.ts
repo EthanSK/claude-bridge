@@ -187,6 +187,39 @@ function isConnectionFailure(stderr: string): boolean {
 }
 
 /**
+ * Transient client-side failures that may succeed if retried after a brief
+ * backoff. "Address already in use" shows up when the kernel transiently
+ * can't bind an ephemeral source port (port-range exhaustion, lingering
+ * TIME_WAIT sockets, or macOS's firewall/VPN stack churning). It's NOT a
+ * path-health signal — the remote endpoint is fine, the client just couldn't
+ * open a socket this instant.
+ */
+function isTransientClientFailure(stderr: string): boolean {
+  if (!stderr) return false;
+  return (
+    stderr.includes('Address already in use') ||
+    // Match BOTH the Linux ("Cannot assign requested address") and macOS
+    // ("Can't assign requested address") wordings of EADDRNOTAVAIL by
+    // checking the shared suffix.
+    stderr.includes('assign requested address') ||
+    stderr.includes('Resource temporarily unavailable')
+  );
+}
+
+/** Sleep helper for exp-backoff retries. */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Exponential backoff delays between retry attempts within a single endpoint.
+ * First attempt is at delay[0] = 0 (immediate). Subsequent attempts back off
+ * at 500ms, 1500ms. Kept modest so a two-path failure finishes in under ~6s
+ * including connection timeouts.
+ */
+const RETRY_BACKOFFS_MS = [0, 500, 1500] as const;
+
+/**
  * Resolve the endpoint tuple for a given path attempt.
  */
 function endpointFor(machine: MachineConfig, kind: PathKind): { host: string; port: number; timeoutS: number; label: string } {
@@ -232,21 +265,45 @@ export async function sshExec(
   logDebug(`SSH exec to ${machine.name} (${machine.host}:${machine.port}): ${command.substring(0, 200)}`);
 
   // No fallback configured — single endpoint path, but still cache the result
-  // so future multi-path callers start from the right place.
+  // so future multi-path callers start from the right place. Retry on
+  // transient client-side failures ("Address already in use") so a flaky
+  // ephemeral-port allocation doesn't surface as an outright SSH failure.
   if (!hasInternetFallback) {
     const ep = endpointFor(machine, 'lan');
-    const result = await sshExecSingle(
-      machine, ep.host, ep.port, ep.timeoutS, command, timeoutMs,
-    );
+    let result: SSHResult | undefined;
+    for (let attempt = 0; attempt < RETRY_BACKOFFS_MS.length; attempt++) {
+      const backoff = RETRY_BACKOFFS_MS[attempt];
+      if (backoff > 0) {
+        logDebug(`SSH to ${machine.name} (single-endpoint): transient failure, backing off ${backoff}ms before retry ${attempt}/${RETRY_BACKOFFS_MS.length - 1}`);
+        await sleep(backoff);
+      }
+      result = await sshExecSingle(
+        machine, ep.host, ep.port, ep.timeoutS, command, timeoutMs,
+      );
+      // If this looks like a transient client-side bind failure AND there
+      // are retry slots left, loop. Otherwise hand back whatever we got.
+      if (
+        result.exitCode === 255 &&
+        isConnectionFailure(result.stderr) &&
+        isTransientClientFailure(result.stderr) &&
+        attempt < RETRY_BACKOFFS_MS.length - 1
+      ) {
+        logWarn(`SSH to ${machine.name} (single-endpoint) hit transient client failure (${result.stderr.trim().split('\n').pop()}), retrying`);
+        continue;
+      }
+      break;
+    }
+    // result is guaranteed defined because the loop always runs at least once.
+    const finalResult = result!;
     // Exit 255 with stderr that doesn't look like an SSH-client connection
     // failure means the remote command connected and exited 255 on its own
     // — still a cache win. A genuine connection failure doesn't update cache.
-    const connected = result.exitCode !== 255 || !isConnectionFailure(result.stderr);
+    const connected = finalResult.exitCode !== 255 || !isConnectionFailure(finalResult.stderr);
     if (connected) {
       logDebug(`SSH to ${machine.name} connected via ${ep.label} (${ep.host}:${ep.port})`);
       try { writePathCache(machine.name, 'lan'); } catch { /* best effort */ }
     }
-    return result;
+    return finalResult;
   }
 
   // Dual-endpoint mode. Respect the cache unless the caller asked to bypass.
@@ -258,52 +315,75 @@ export async function sshExec(
     const kind = order[i];
     const ep = endpointFor(machine, kind);
 
-    try {
-      const result = await sshExecSingle(
-        machine, ep.host, ep.port, ep.timeoutS, command, timeoutMs,
-      );
-      lastResult = result;
+    // Per-endpoint retry loop. Most attempts resolve on the first try; the
+    // retry slots exist for transient client-side failures like "Address
+    // already in use" where the kernel briefly can't allocate an ephemeral
+    // source port. Real path-level failures (connection refused, no route,
+    // DNS) break out immediately and fall through to the alternate path.
+    let transientRetryUsed = false;
+    for (let attempt = 0; attempt < RETRY_BACKOFFS_MS.length; attempt++) {
+      const backoff = RETRY_BACKOFFS_MS[attempt];
+      if (backoff > 0) {
+        logDebug(`SSH to ${machine.name} via ${ep.label}: transient failure, backing off ${backoff}ms before retry ${attempt}/${RETRY_BACKOFFS_MS.length - 1}`);
+        await sleep(backoff);
+      }
 
-      if (result.exitCode === 255) {
-        // Ambiguous: could be a connection failure OR the remote command
-        // itself exiting 255. Match only on SSH-client stderr signatures
-        // before retrying — we must not replay a command that already ran
-        // to completion.
-        if (isConnectionFailure(result.stderr)) {
-          if (i === 0) {
-            logWarn(`SSH to ${machine.name} via ${ep.label} failed (exit=255, connection failure), trying alternate path...`);
-          } else {
-            logError(`SSH to ${machine.name} failed on both paths (last: ${ep.label}, exit=255)`);
+      try {
+        const result = await sshExecSingle(
+          machine, ep.host, ep.port, ep.timeoutS, command, timeoutMs,
+        );
+        lastResult = result;
+
+        if (result.exitCode === 255) {
+          // Ambiguous: could be a connection failure OR the remote command
+          // itself exiting 255. Match only on SSH-client stderr signatures
+          // before retrying — we must not replay a command that already ran
+          // to completion.
+          if (isConnectionFailure(result.stderr)) {
+            // Distinguish transient client-side failures ("Address already
+            // in use") from real path failures: the former retry on the
+            // same endpoint, the latter fall through to the alternate path.
+            if (isTransientClientFailure(result.stderr) && attempt < RETRY_BACKOFFS_MS.length - 1) {
+              transientRetryUsed = true;
+              logWarn(`SSH to ${machine.name} via ${ep.label} hit transient client failure (${result.stderr.trim().split('\n').pop()}), retrying on same path`);
+              continue;
+            }
+            if (i === 0) {
+              logWarn(`SSH to ${machine.name} via ${ep.label} failed (exit=255, connection failure${transientRetryUsed ? ' after retries' : ''}), trying alternate path...`);
+            } else {
+              logError(`SSH to ${machine.name} failed on both paths (last: ${ep.label}, exit=255)`);
+            }
+            break; // out of attempt loop -> next endpoint
           }
-          continue;
+          // Remote command exited 255 on its own — SSH did connect. Record
+          // the cache hit and hand back the result without retrying.
+          logDebug(`SSH to ${machine.name} via ${ep.label}: remote command exited 255 (elapsed ${result.elapsedMs}ms)`);
+          try { writePathCache(machine.name, kind); } catch { /* best effort */ }
+          return result;
         }
-        // Remote command exited 255 on its own — SSH did connect. Record
-        // the cache hit and hand back the result without retrying.
-        logDebug(`SSH to ${machine.name} via ${ep.label}: remote command exited 255 (elapsed ${result.elapsedMs}ms)`);
+
+        // SSH connected (even if the remote command returned non-zero). Cache the win.
+        if (result.exitCode === 0) {
+          logDebug(`SSH to ${machine.name} succeeded via ${ep.label} (${ep.host}:${ep.port})${transientRetryUsed ? ` after ${attempt} retry(s)` : ''}`);
+        }
         try { writePathCache(machine.name, kind); } catch { /* best effort */ }
         return result;
-      }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        lastErr = err;
 
-      // SSH connected (even if the remote command returned non-zero). Cache the win.
-      if (result.exitCode === 0) {
-        logDebug(`SSH to ${machine.name} succeeded via ${ep.label} (${ep.host}:${ep.port})`);
-      }
-      try { writePathCache(machine.name, kind); } catch { /* best effort */ }
-      return result;
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      lastErr = err;
+        // A process timeout is ambiguous: SSH may have connected and the command
+        // may be running, so retrying could duplicate side effects. Do not update
+        // the cache because this does not prove the path is healthy.
+        if (errMsg.includes('timed out')) {
+          logError(`SSH to ${machine.name} timed out on ${ep.label}: ${errMsg}`);
+          throw err;
+        }
 
-      // A process timeout is ambiguous: SSH may have connected and the command
-      // may be running, so retrying could duplicate side effects. Do not update
-      // the cache because this does not prove the path is healthy.
-      if (errMsg.includes('timed out')) {
-        logError(`SSH to ${machine.name} timed out on ${ep.label}: ${errMsg}`);
-        throw err;
-      }
-
-      if (i === 0) {
-        logWarn(`SSH to ${machine.name} via ${ep.label} failed (${errMsg}), trying alternate path...`);
+        if (i === 0) {
+          logWarn(`SSH to ${machine.name} via ${ep.label} failed (${errMsg}), trying alternate path...`);
+        }
+        break; // out of attempt loop -> next endpoint
       }
     }
   }
