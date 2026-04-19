@@ -11,7 +11,7 @@
  *   AGENT_BRIDGE_INBOX_DIR      — override inbox path
  *   AGENT_BRIDGE_SESSION_PREFIX — change the session-key prefix (default: agent-bridge)
  *   AGENT_BRIDGE_AGENT_ID       — route to a specific OpenClaw agent
- *   AGENT_BRIDGE_POLL_MS        — polling interval when fswatch/inotifywait unavailable
+ *   AGENT_BRIDGE_POLL_MS        — inbox poll interval in ms (default: 2000)
  *   AGENT_BRIDGE_TIMEOUT_SEC    — per-message agent-turn timeout
  *   AGENT_BRIDGE_DELIVERY_MODE  — log-only | message-send | agent-turn | agent (default: log-only)
  *   AGENT_BRIDGE_DELIVERY_CHANNEL — channel for message-send / agent-turn reply (default: telegram)
