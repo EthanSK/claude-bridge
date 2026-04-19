@@ -78,6 +78,9 @@ export default {
       agentId: pluginCfg.agentId,
       pollIntervalMs: pluginCfg.pollIntervalMs,
       deliveryTimeoutSec: pluginCfg.deliveryTimeoutSec,
+      deliveryMode: pluginCfg.deliveryMode,
+      deliveryChannel: pluginCfg.deliveryChannel,
+      deliveryTarget: pluginCfg.deliveryTarget,
       logger,
     })
       .then((dispose) => {

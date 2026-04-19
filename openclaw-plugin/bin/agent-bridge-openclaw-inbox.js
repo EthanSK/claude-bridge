@@ -13,6 +13,9 @@
  *   AGENT_BRIDGE_AGENT_ID       — route to a specific OpenClaw agent
  *   AGENT_BRIDGE_POLL_MS        — polling interval when fswatch/inotifywait unavailable
  *   AGENT_BRIDGE_TIMEOUT_SEC    — per-message agent-turn timeout
+ *   AGENT_BRIDGE_DELIVERY_MODE  — log-only | message-send | agent (default: log-only)
+ *   AGENT_BRIDGE_DELIVERY_CHANNEL — channel for message-send mode (e.g. telegram)
+ *   AGENT_BRIDGE_DELIVERY_TARGET  — channel target id for message-send mode
  *   OPENCLAW_BIN                — path to openclaw CLI (default: /opt/homebrew/bin/openclaw)
  *
  * Run:
@@ -43,6 +46,9 @@ async function main() {
     deliveryTimeoutSec: process.env.AGENT_BRIDGE_TIMEOUT_SEC
       ? Number(process.env.AGENT_BRIDGE_TIMEOUT_SEC)
       : undefined,
+    deliveryMode: process.env.AGENT_BRIDGE_DELIVERY_MODE,
+    deliveryChannel: process.env.AGENT_BRIDGE_DELIVERY_CHANNEL,
+    deliveryTarget: process.env.AGENT_BRIDGE_DELIVERY_TARGET,
     logger,
   });
 

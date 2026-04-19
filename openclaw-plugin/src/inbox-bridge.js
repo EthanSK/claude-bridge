@@ -41,6 +41,17 @@ export const DEFAULT_DELIVERY_TIMEOUT_SEC = 600;
 export const DEFAULT_SESSION_PREFIX = "agent-bridge";
 const DELIVERED_MAX_LINES = 10_000;
 const FAILED_DIR = join(DEFAULT_STATE_DIR, "inbox", ".failed");
+// NB: avoid `.delivered/` — that name is already used as a FILE by the
+// Claude Code MCP server's watcher (mcp-server/src/watcher.ts) to track
+// delivered IDs. A dir with the same name would collide on shared inboxes.
+const ARCHIVE_DIR = join(DEFAULT_STATE_DIR, "inbox", ".openclaw-delivered");
+
+// Delivery modes, see PLAN.md.
+//   log-only      – parse, ack, archive (default; safest, no bridge-spam).
+//   message-send  – shell out to `openclaw message send --channel X --target Y`.
+//   agent         – legacy `openclaw agent --to <slug>` path (flaky, disabled by default).
+export const DELIVERY_MODES = new Set(["log-only", "message-send", "agent"]);
+export const DEFAULT_DELIVERY_MODE = "log-only";
 
 // ── delivered-id tracking ───────────────────────────────────────────────────
 
@@ -129,9 +140,48 @@ function findOpenclawBin() {
 
 // ── agent invocation ────────────────────────────────────────────────────────
 
-async function injectMessageViaCli({ target, agentId, text, timeoutSec, logger }) {
+async function runOpenclawCli({ args, timeoutMs, logger }) {
   const { spawn } = await loadChildProcess();
   const bin = findOpenclawBin();
+
+  // Mark subprocesses so the plugin's own register() skips activation —
+  // otherwise each CLI invocation would re-spawn this bridge and cascade.
+  const childEnv = {
+    ...process.env,
+    AGENT_BRIDGE_PLUGIN_SKIP: "1",
+  };
+
+  return new Promise((resolveRun) => {
+    const child = spawn(bin, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: childEnv,
+    });
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    const killTimer = timeoutMs
+      ? setTimeout(() => {
+          timedOut = true;
+          try { child.kill("SIGTERM"); } catch { /* ignore */ }
+        }, timeoutMs)
+      : null;
+    if (killTimer && killTimer.unref) killTimer.unref();
+
+    child.stdout.on("data", (d) => { stdout += d.toString(); });
+    child.stderr.on("data", (d) => { stderr += d.toString(); });
+    child.once("error", (err) => {
+      if (killTimer) clearTimeout(killTimer);
+      logger?.error?.(`[agent-bridge] cli spawn error: ${err?.message ?? err}`);
+      resolveRun({ ok: false, stdout, stderr: String(err), timedOut: false });
+    });
+    child.once("close", (code) => {
+      if (killTimer) clearTimeout(killTimer);
+      resolveRun({ ok: code === 0 && !timedOut, stdout, stderr, timedOut, code });
+    });
+  });
+}
+
+async function injectMessageViaAgentCli({ target, agentId, text, timeoutSec, logger }) {
   const args = [
     "agent",
     "--to",
@@ -143,39 +193,59 @@ async function injectMessageViaCli({ target, agentId, text, timeoutSec, logger }
     "--json",
   ];
   if (agentId) args.push("--agent", agentId);
+  // Gate the watchdog kill just past openclaw's own --timeout so we don't
+  // strand child processes if the gateway hangs on a session-file lock.
+  const killAfterMs = (Number(timeoutSec) || DEFAULT_DELIVERY_TIMEOUT_SEC) * 1000 + 5000;
+  const r = await runOpenclawCli({ args, timeoutMs: killAfterMs, logger });
+  if (r.ok) {
+    logger?.info?.(`[agent-bridge] agent-cli delivery ok target=${target}`);
+  } else {
+    logger?.warn?.(
+      `[agent-bridge] agent-cli delivery failed target=${target} exit=${r.code} timedOut=${r.timedOut} stderr=${(r.stderr || "").slice(0, 400)}`,
+    );
+  }
+  return r;
+}
 
-  // Mark subprocesses so the plugin's own register() skips activation —
-  // otherwise each CLI invocation would re-spawn this bridge and cascade.
-  const childEnv = {
-    ...process.env,
-    AGENT_BRIDGE_PLUGIN_SKIP: "1",
-  };
+async function injectMessageViaChannelSend({ channel, targetId, text, logger }) {
+  if (!channel || !targetId) {
+    logger?.error?.(
+      `[agent-bridge] message-send mode requires deliveryChannel + deliveryTarget config`,
+    );
+    return { ok: false, stderr: "missing deliveryChannel/deliveryTarget" };
+  }
+  const args = [
+    "message",
+    "send",
+    "--channel",
+    String(channel),
+    "--target",
+    String(targetId),
+    "--message",
+    text,
+  ];
+  // message send is synchronous but fast; 30s is plenty.
+  const r = await runOpenclawCli({ args, timeoutMs: 30_000, logger });
+  if (r.ok) {
+    logger?.info?.(`[agent-bridge] message-send delivery ok channel=${channel} target=${targetId}`);
+  } else {
+    logger?.warn?.(
+      `[agent-bridge] message-send delivery failed channel=${channel} target=${targetId} exit=${r.code} timedOut=${r.timedOut} stderr=${(r.stderr || "").slice(0, 400)}`,
+    );
+  }
+  return r;
+}
 
-  return new Promise((resolveInject) => {
-    const child = spawn(bin, args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: childEnv,
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (d) => { stdout += d.toString(); });
-    child.stderr.on("data", (d) => { stderr += d.toString(); });
-    child.once("error", (err) => {
-      logger?.error?.(`[agent-bridge] cli spawn error: ${err?.message ?? err}`);
-      resolveInject({ ok: false, stdout, stderr: String(err) });
-    });
-    child.once("close", (code) => {
-      if (code === 0) {
-        logger?.info?.(`[agent-bridge] delivery ok target=${target}`);
-        resolveInject({ ok: true, stdout, stderr });
-      } else {
-        logger?.warn?.(
-          `[agent-bridge] delivery exit=${code} target=${target} stderr=${stderr.slice(0, 400)}`,
-        );
-        resolveInject({ ok: false, stdout, stderr });
-      }
-    });
-  });
+function archiveDeliveredFile(filePath, logger) {
+  try {
+    mkdirSync(ARCHIVE_DIR, { recursive: true, mode: 0o700 });
+    const fileName = filePath.split("/").pop();
+    renameSync(filePath, join(ARCHIVE_DIR, fileName));
+  } catch (err) {
+    logger?.warn?.(`[agent-bridge] failed to archive ${filePath}: ${err?.message ?? err}`);
+    // Best-effort: if archive fails, unlink so we don't loop forever.
+    try { unlinkSync(filePath); } catch { /* ignore */ }
+  }
 }
 
 // ── watcher ─────────────────────────────────────────────────────────────────
@@ -276,6 +346,9 @@ async function startInboxWatcher({ inboxDir, pollIntervalMs, onNew, logger }) {
  * @param {number} [options.pollIntervalMs]
  * @param {number} [options.deliveryTimeoutSec]
  * @param {string} [options.deliveredFile]
+ * @param {"log-only"|"message-send"|"agent"} [options.deliveryMode]
+ * @param {string} [options.deliveryChannel]   (message-send only)
+ * @param {string} [options.deliveryTarget]    (message-send only)
  * @param {object} [options.logger]
  * @returns {Promise<() => void>} cleanup function
  */
@@ -286,13 +359,29 @@ export async function startInboxBridge(options = {}) {
   const pollIntervalMs = Number(options.pollIntervalMs) || DEFAULT_POLL_INTERVAL_MS;
   const deliveryTimeoutSec = Number(options.deliveryTimeoutSec) || DEFAULT_DELIVERY_TIMEOUT_SEC;
   const deliveredFile = options.deliveredFile || DEFAULT_DELIVERED_FILE;
+  const rawMode = options.deliveryMode || DEFAULT_DELIVERY_MODE;
+  const deliveryMode = DELIVERY_MODES.has(rawMode) ? rawMode : DEFAULT_DELIVERY_MODE;
+  const deliveryChannel = options.deliveryChannel || undefined;
+  const deliveryTarget = options.deliveryTarget || undefined;
   const logger = options.logger || console;
 
   mkdirSync(DEFAULT_STATE_DIR, { recursive: true, mode: 0o700 });
   mkdirSync(inboxDir, { recursive: true, mode: 0o700 });
   const deliveredIds = loadDeliveredIds(deliveredFile);
 
-  logger.info?.(`[agent-bridge] starting inbox=${inboxDir} prefix=${sessionKeyPrefix}`);
+  if (rawMode !== deliveryMode) {
+    logger.warn?.(
+      `[agent-bridge] unknown deliveryMode=${rawMode}; falling back to ${deliveryMode}`,
+    );
+  }
+  logger.info?.(
+    `[agent-bridge] starting inbox=${inboxDir} prefix=${sessionKeyPrefix} mode=${deliveryMode}`,
+  );
+  if (deliveryMode === "message-send" && (!deliveryChannel || !deliveryTarget)) {
+    logger.warn?.(
+      `[agent-bridge] deliveryMode=message-send but deliveryChannel/deliveryTarget missing — inbound messages will be archived without injection`,
+    );
+  }
 
   // Serialize deliveries so we don't stampede the agent with parallel turns.
   let inFlight = Promise.resolve();
@@ -304,6 +393,8 @@ export async function startInboxBridge(options = {}) {
 
     if (deliveredIds.has(msg.id)) {
       logger.debug?.(`[agent-bridge] skipping already-delivered ${msg.id}`);
+      // Still archive the lingering file so it doesn't clutter the inbox.
+      if (existsSync(filePath)) archiveDeliveredFile(filePath, logger);
       return;
     }
 
@@ -311,20 +402,52 @@ export async function startInboxBridge(options = {}) {
     const target = `${sessionKeyPrefix}-${senderSlug}`;
     const text = formatChannelEnvelope(msg);
 
-    logger.info?.(`[agent-bridge] delivering ${msg.id} from=${msg.from} target=${target}`);
+    logger.info?.(
+      `[agent-bridge] delivering ${msg.id} from=${msg.from} mode=${deliveryMode} target=${target}`,
+    );
 
-    const result = await injectMessageViaCli({
-      target,
-      agentId,
-      text,
-      timeoutSec: deliveryTimeoutSec,
-      logger,
-    });
+    let result = { ok: true };
+    if (deliveryMode === "agent") {
+      result = await injectMessageViaAgentCli({
+        target,
+        agentId,
+        text,
+        timeoutSec: deliveryTimeoutSec,
+        logger,
+      });
+    } else if (deliveryMode === "message-send") {
+      if (deliveryChannel && deliveryTarget) {
+        result = await injectMessageViaChannelSend({
+          channel: deliveryChannel,
+          targetId: deliveryTarget,
+          text,
+          logger,
+        });
+      } else {
+        // No route configured → ack as delivered (log-only semantics) so the
+        // inbox drains. The MCP tools path is still the primary way the
+        // running agent talks back.
+        logger.info?.(
+          `[agent-bridge] message-send mode but no route configured; acking ${msg.id} as log-only`,
+        );
+        result = { ok: true };
+      }
+    } else {
+      // log-only — MCP tools path handles bidirectional agent-to-agent.
+      // This mode exists so the inbox drains cleanly and the plugin never
+      // stampedes OpenClaw with user-turn injections it can't service.
+      result = { ok: true };
+    }
 
     if (result.ok) {
       recordDeliveredId(deliveredFile, msg.id, deliveredIds);
+      // Archive the file so we don't loop on it after restart. This is
+      // a new invariant in v3.2.0: delivered ⇒ file leaves the inbox.
+      if (existsSync(filePath)) archiveDeliveredFile(filePath, logger);
     } else {
-      logger.error?.(`[agent-bridge] failed to deliver ${msg.id}; will retry on next event`);
+      logger.error?.(
+        `[agent-bridge] failed to deliver ${msg.id}; leaving in inbox for retry on next event`,
+      );
     }
   }
 

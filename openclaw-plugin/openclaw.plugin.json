@@ -31,6 +31,19 @@
       "enabled": {
         "type": "boolean",
         "description": "Master enable/disable switch for the channel. Default: true."
+      },
+      "deliveryMode": {
+        "type": "string",
+        "enum": ["log-only", "message-send", "agent"],
+        "description": "How to surface inbound bridge messages into the running OpenClaw agent. 'log-only' (default, safe) parses + archives without injection — MCP tools path handles bidirectional comms. 'message-send' posts the envelope to a configured channel via `openclaw message send`. 'agent' is the legacy (flaky) `openclaw agent --to` path."
+      },
+      "deliveryChannel": {
+        "type": "string",
+        "description": "When deliveryMode=message-send, which OpenClaw channel to post to (e.g. 'telegram', 'discord', 'imessage')."
+      },
+      "deliveryTarget": {
+        "type": "string",
+        "description": "When deliveryMode=message-send, which channel target id to send to (chat id / @username / E.164 / channel id)."
       }
     }
   }
