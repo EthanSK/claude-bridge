@@ -281,12 +281,32 @@ async function startInboxWatcher({ inboxDir, pollIntervalMs, onNew, logger }) {
   };
 
   const tryNative = async (cmd, args) => {
+    // We need to know synchronously-ish whether spawn actually attached to a
+    // running process. Node emits 'spawn' when the child is executing; 'error'
+    // when ENOENT (binary missing) or similar. Race them with a short timeout.
     try {
       const { spawn } = await loadChildProcess();
       const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
-      child.on("error", (err) => {
-        logger?.debug?.(`[agent-bridge] ${cmd} unavailable (${err?.message ?? err}); fallback to polling`);
+      const ready = await new Promise((res) => {
+        const done = (ok, reason) => {
+          child.removeListener("spawn", onSpawn);
+          child.removeListener("error", onError);
+          res({ ok, reason });
+        };
+        const onSpawn = () => done(true);
+        const onError = (err) => done(false, err?.message ?? String(err));
+        child.once("spawn", onSpawn);
+        child.once("error", onError);
+        // Safety timeout — if neither event fires in 500ms, assume not ready
+        // and fall through to polling. This won't leak because we'll also
+        // register stdout/exit handlers below only if ok.
+        setTimeout(() => done(false, "spawn-timeout"), 500).unref?.();
       });
+      if (!ready.ok) {
+        logger?.debug?.(`[agent-bridge] ${cmd} unavailable (${ready.reason}); fallback to polling`);
+        try { child.kill("SIGTERM"); } catch { /* ignore */ }
+        return null;
+      }
       child.stdout.on("data", () => scan());
       child.stderr.on("data", () => { /* ignore */ });
       child.once("exit", (code) => {
@@ -295,9 +315,13 @@ async function startInboxWatcher({ inboxDir, pollIntervalMs, onNew, logger }) {
           startPoller();
         }
       });
+      // Silence further 'error' events (e.g. EPIPE on kill) so they don't crash us.
+      child.on("error", (err) => {
+        logger?.debug?.(`[agent-bridge] ${cmd} late error: ${err?.message ?? err}`);
+      });
       return child;
     } catch (err) {
-      logger?.debug?.(`[agent-bridge] ${cmd} spawn failed (${err?.message ?? err}); fallback to polling`);
+      logger?.debug?.(`[agent-bridge] ${cmd} spawn threw (${err?.message ?? err}); fallback to polling`);
       return null;
     }
   };
