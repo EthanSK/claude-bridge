@@ -468,14 +468,19 @@ node /absolute/path/to/agent-bridge/openclaw-plugin/bin/agent-bridge-openclaw-in
 ```
 For persistence, wire it into launchd or systemd. A launchd plist template lives in `openclaw-plugin/README.md`.
 
-**How OpenClaw push delivery works:**
-1. Peer's bridge_send_message writes a JSON file to `~/.agent-bridge/inbox/` via SSH
+**How OpenClaw push delivery works (v1.2.0+):**
+1. Peer's `bridge_send_message` writes a JSON file to `~/.agent-bridge/inbox/` via SSH
 2. The plugin/daemon's file watcher sees the new file
-3. It shells `openclaw agent --to agent-bridge-<peer> --message "<channel ...>"` to inject a user turn into the per-peer session
-4. On delivery success, the message ID is appended to `~/.agent-bridge/.openclaw-delivered` to dedupe restarts
-5. The agent replies via `bridge_send_message` -- no polling required
+3. The plugin resolves per-message routing (top-level `route` field, inline `@@route` header, or plugin defaults — see [`openclaw-plugin/ROUTING.md`](openclaw-plugin/ROUTING.md))
+4. It dispatches based on `deliveryMode`:
+   - `log-only` (default): parse + archive only; bidirectional comms still work via the MCP tools
+   - `message-send`: shells `openclaw message send --channel <ch> --account <acc> --target <chat>` to relay the envelope into a chat (no agent turn)
+   - `agent-turn`: shells `openclaw agent --agent <id> --message <envelope> --deliver --reply-channel <ch> --reply-account <acc> --reply-to <chat>` so the agent actually responds and posts its reply back into the chat
+5. On success, the message ID is appended to `~/.agent-bridge/.openclaw-delivered` and the file is moved to `~/.agent-bridge/inbox/.openclaw-delivered/` to dedupe restarts
 
-**Why shell out?** A real channel plugin per OpenClaw's SDK would require implementing DM policy, pairing flows, outbound send, threading, mention gating, etc. -- overkill for a local file-inbox. `openclaw agent --to ... --message ...` is the stable, documented primitive that drives a full agent turn through the gateway (with embedded fallback). See `openclaw-plugin/README.md` for the full rationale.
+`agent-turn` mode supports per-message routing so a single watcher can serve multiple Telegram bots / chats / agents — set `target_chat_id` / `target_account` / `target_agent` either in the message JSON or via an `@@route` header on the first line of the body. Full rationale + config schema in [`openclaw-plugin/README.md`](openclaw-plugin/README.md) and [`openclaw-plugin/ROUTING.md`](openclaw-plugin/ROUTING.md).
+
+**Why shell out?** A real channel plugin per OpenClaw's SDK would require implementing DM policy, pairing flows, outbound send, threading, mention gating, etc. -- overkill for a local file-inbox. The `openclaw agent --deliver` and `openclaw message send` CLIs are the stable, documented primitives. See `openclaw-plugin/README.md` for the full rationale.
 
 ### Codex (OpenAI) (MCP server -- polling)
 
@@ -525,14 +530,17 @@ For **push** notifications, the harness must support the `claude/channel` experi
 5. Message ID is recorded in .delivered to prevent re-delivery on restart
 ```
 
-### Receive flow (push mode -- OpenClaw plugin/daemon)
+### Receive flow (push mode -- OpenClaw plugin/daemon, v1.2.0+)
 
 ```
 1. File watcher (fswatch/inotifywait/polling) detects new .json file in inbox/
 2. Watcher parses the message and checks .openclaw-delivered for dedup
-3. Plugin/daemon shells `openclaw agent --to agent-bridge-<peer> --message <envelope>`
-4. OpenClaw routes the message to a per-peer session; agent sees it as a new user turn formatted <channel source="agent-bridge" ...>content</channel>
-5. Message ID is recorded in .openclaw-delivered to prevent re-delivery on restart
+3. Plugin resolves per-message routing (msg.route / @@route header / plugin defaults)
+4. Plugin dispatches per `deliveryMode`:
+   - log-only: parse + archive only
+   - message-send: `openclaw message send --channel <ch> --account <acc> --target <chat>`
+   - agent-turn: `openclaw agent --agent <id> --message <env> --deliver --reply-channel <ch> --reply-account <acc> --reply-to <chat>`
+5. On success, message ID is recorded in .openclaw-delivered and the file is moved to inbox/.openclaw-delivered/ to prevent re-delivery on restart
 ```
 
 ### Receive flow (polling mode -- Codex, Gemini, etc.)

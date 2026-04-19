@@ -13,9 +13,11 @@
  *   AGENT_BRIDGE_AGENT_ID       — route to a specific OpenClaw agent
  *   AGENT_BRIDGE_POLL_MS        — polling interval when fswatch/inotifywait unavailable
  *   AGENT_BRIDGE_TIMEOUT_SEC    — per-message agent-turn timeout
- *   AGENT_BRIDGE_DELIVERY_MODE  — log-only | message-send | agent (default: log-only)
- *   AGENT_BRIDGE_DELIVERY_CHANNEL — channel for message-send mode (e.g. telegram)
- *   AGENT_BRIDGE_DELIVERY_TARGET  — channel target id for message-send mode
+ *   AGENT_BRIDGE_DELIVERY_MODE  — log-only | message-send | agent-turn | agent (default: log-only)
+ *   AGENT_BRIDGE_DELIVERY_CHANNEL — channel for message-send / agent-turn reply (default: telegram)
+ *   AGENT_BRIDGE_DELIVERY_ACCOUNT — channel account id for message-send / agent-turn reply
+ *   AGENT_BRIDGE_DELIVERY_TARGET  — default chat id for message-send / agent-turn reply
+ *   AGENT_BRIDGE_CHAT_ID_TO_ACCOUNT — JSON map of chat_id → account id (e.g. {"123":"clawdiboi2"})
  *   OPENCLAW_BIN                — path to openclaw CLI (default: /opt/homebrew/bin/openclaw)
  *
  * Run:
@@ -35,6 +37,16 @@ const logger = {
   error: (...args) => console.error("[error]", ...args),
 };
 
+function parseChatIdMap(raw) {
+  if (!raw) return undefined;
+  try {
+    const v = JSON.parse(raw);
+    return (v && typeof v === "object") ? v : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function main() {
   const cleanup = await startInboxBridge({
     inboxDir: process.env.AGENT_BRIDGE_INBOX_DIR,
@@ -48,7 +60,9 @@ async function main() {
       : undefined,
     deliveryMode: process.env.AGENT_BRIDGE_DELIVERY_MODE,
     deliveryChannel: process.env.AGENT_BRIDGE_DELIVERY_CHANNEL,
+    deliveryAccount: process.env.AGENT_BRIDGE_DELIVERY_ACCOUNT,
     deliveryTarget: process.env.AGENT_BRIDGE_DELIVERY_TARGET,
+    chatIdToAccount: parseChatIdMap(process.env.AGENT_BRIDGE_CHAT_ID_TO_ACCOUNT),
     logger,
   });
 

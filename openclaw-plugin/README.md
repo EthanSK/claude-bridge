@@ -148,13 +148,67 @@ Plugin config lives under `plugins.entries.agent-bridge` in
 | `enabled` | `true` | Master on/off switch |
 | `inboxDir` | `~/.agent-bridge/inbox` | Directory watched for new messages |
 | `sessionKeyPrefix` | `agent-bridge` | Prefix used to derive the session key per peer |
-| `agentId` | default agent | Which OpenClaw agent should receive the message |
+| `targetAgent` | `main` | Default OpenClaw agent id for `agent-turn` mode (legacy: `agentId`) |
 | `pollIntervalMs` | `2000` | Polling interval when fswatch/inotifywait aren't available |
 | `deliveryTimeoutSec` | `600` | Per-message agent-turn timeout (seconds) |
+| `deliveryMode` | `log-only` | `log-only` / `message-send` / `agent-turn` / `agent` — see "Delivery modes" below |
+| `deliveryChannel` | `telegram` | Channel for `message-send` / `agent-turn` reply |
+| `deliveryAccount` | _none_ | Channel account id (e.g. `default`, `clawdiboi2`) |
+| `deliveryTarget` | _none_ | Default chat target id |
+| `chatIdToAccount` | `{}` | Map of `chat_id → account` for auto-resolving the bot |
 
 When running the standalone daemon, all of these are settable via env vars
 (`AGENT_BRIDGE_INBOX_DIR`, `AGENT_BRIDGE_SESSION_PREFIX`, `AGENT_BRIDGE_AGENT_ID`,
-`AGENT_BRIDGE_POLL_MS`, `AGENT_BRIDGE_TIMEOUT_SEC`).
+`AGENT_BRIDGE_POLL_MS`, `AGENT_BRIDGE_TIMEOUT_SEC`,
+`AGENT_BRIDGE_DELIVERY_MODE`, `AGENT_BRIDGE_DELIVERY_CHANNEL`,
+`AGENT_BRIDGE_DELIVERY_ACCOUNT`, `AGENT_BRIDGE_DELIVERY_TARGET`,
+`AGENT_BRIDGE_CHAT_ID_TO_ACCOUNT` as JSON map).
+
+## Delivery modes
+
+| Mode | Behaviour |
+|------|-----------|
+| `log-only` *(default)* | Parse + verify + archive. No agent invocation. The MCP tools path (`bridge_send_message` etc.) handles bidirectional comms; the inbox watcher just drains. |
+| `message-send` | Shell out to `openclaw message send --channel <ch> --account <acc> --target <chat>`. Posts the bridge envelope as a message FROM the bot into a chat. Cheap, no agent turn. |
+| `agent-turn` | Shell out to `openclaw agent --agent <id> --message <envelope> --deliver --reply-channel <ch> --reply-account <acc> --reply-to <chat>`. Runs a real agent turn; agent processes the message and posts its reply to the chat. Costs an agent turn per inbound message. **This is "OpenClaw actually responds."** |
+| `agent` *(legacy)* | The old `openclaw agent --to <slug>` path. Flaky — kept for backward compat only. |
+
+## Per-message routing
+
+A single plugin instance can serve multiple Telegram bots (or other
+channels) without separate config blocks. A `BridgeMessage` may specify
+its target in two ways:
+
+1. **Top-level `route` field on the message JSON:**
+   ```json
+   {
+     "id": "msg-...",
+     "from": "MacBookPro",
+     "content": "actual body",
+     "route": {
+       "target_chat_id": "6164541473",
+       "target_account": "clawdiboi2",
+       "target_agent": "main",
+       "target_channel": "telegram"
+     }
+   }
+   ```
+2. **Inline `@@route` header on the first line of `content`** (handy when
+   sending via stock `bridge_send_message`):
+   ```
+   @@route target_chat_id=6164541473 target_account=clordlethird
+
+   actual message body here
+   ```
+   Recognised keys: `target_chat_id` / `chat_id` / `to`,
+   `target_account` / `account` / `bot`, `target_agent` / `agent`,
+   `target_channel` / `channel`. The header is stripped before injection.
+
+Plugin-config defaults (`deliveryAccount`, `deliveryTarget`,
+`targetAgent`, `deliveryChannel`) fill in any missing field. A
+`chatIdToAccount` map can resolve account from chat id automatically.
+
+Full design notes in [ROUTING.md](./ROUTING.md).
 
 ## How delivery works
 
@@ -162,13 +216,20 @@ When running the standalone daemon, all of these are settable via env vars
    `~/.agent-bridge/inbox/msg-<uuid>.json` on this machine (via SSH).
 2. This plugin/daemon's file watcher (`fswatch` / `inotifywait` / polling)
    sees the new file.
-3. The plugin parses it, formats the `<channel>` envelope, and invokes
-   `openclaw agent --to agent-bridge-<peer> --message <envelope>`.
-4. OpenClaw routes the message to a session keyed on the peer machine, so
-   each remote peer gets its own conversation thread.
+3. The plugin parses it, resolves routing (per-message `route` /
+   `@@route` header / plugin defaults), strips any routing header from
+   the body, and formats the `<channel>` envelope.
+4. The plugin dispatches based on `deliveryMode`:
+   - `log-only`: just acks + archives (default).
+   - `message-send`: posts the envelope into the configured chat as a
+     message FROM the bot.
+   - `agent-turn`: runs a real `openclaw agent` turn with `--deliver`,
+     so the agent processes the envelope and posts its reply into the
+     configured chat.
 5. On success, the message ID is appended to
-   `~/.agent-bridge/.openclaw-delivered` so it isn't re-delivered if the
-   plugin restarts.
+   `~/.agent-bridge/.openclaw-delivered` and the inbox file is moved to
+   `~/.agent-bridge/inbox/.openclaw-delivered/` so it isn't re-delivered
+   on restart.
 
 Failed deliveries stay in the inbox for the next event loop (same retry
 behaviour as the Claude Code channel plugin).

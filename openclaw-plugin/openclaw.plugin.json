@@ -34,16 +34,29 @@
       },
       "deliveryMode": {
         "type": "string",
-        "enum": ["log-only", "message-send", "agent"],
-        "description": "How to surface inbound bridge messages into the running OpenClaw agent. 'log-only' (default, safe) parses + archives without injection — MCP tools path handles bidirectional comms. 'message-send' posts the envelope to a configured channel via `openclaw message send`. 'agent' is the legacy (flaky) `openclaw agent --to` path."
+        "enum": ["log-only", "message-send", "agent-turn", "agent"],
+        "description": "How to surface inbound bridge messages into OpenClaw. 'log-only' (default, safe) parses + archives without injection — MCP tools path handles bidirectional comms. 'message-send' posts the envelope to a configured channel via `openclaw message send` (relays bridge traffic to e.g. Telegram, no agent turn). 'agent-turn' runs `openclaw agent --deliver` so the agent processes the message and posts its reply to the configured channel. 'agent' is the legacy (flaky) `openclaw agent --to` path."
       },
       "deliveryChannel": {
         "type": "string",
-        "description": "When deliveryMode=message-send, which OpenClaw channel to post to (e.g. 'telegram', 'discord', 'imessage')."
+        "description": "Channel for message-send / agent-turn reply (e.g. 'telegram', 'discord', 'imessage'). Default: 'telegram'."
+      },
+      "deliveryAccount": {
+        "type": "string",
+        "description": "Channel account id for message-send / agent-turn reply (e.g. one of the configured Telegram bot accounts: 'default', 'clawdiboi2', 'clordlethird')."
       },
       "deliveryTarget": {
         "type": "string",
-        "description": "When deliveryMode=message-send, which channel target id to send to (chat id / @username / E.164 / channel id)."
+        "description": "Default chat target for message-send / agent-turn reply (chat id / @username / E.164 / channel id). Per-message routing via @@route header or msg.route overrides this."
+      },
+      "targetAgent": {
+        "type": "string",
+        "description": "Default OpenClaw agent id for agent-turn mode. Default: 'main'."
+      },
+      "chatIdToAccount": {
+        "type": "object",
+        "additionalProperties": { "type": "string" },
+        "description": "Map of chat_id -> channel account id. Lets a BridgeMessage with target_chat_id auto-resolve to the right bot account without spelling it out."
       }
     }
   }

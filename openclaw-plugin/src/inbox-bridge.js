@@ -46,12 +46,24 @@ const FAILED_DIR = join(DEFAULT_STATE_DIR, "inbox", ".failed");
 // delivered IDs. A dir with the same name would collide on shared inboxes.
 const ARCHIVE_DIR = join(DEFAULT_STATE_DIR, "inbox", ".openclaw-delivered");
 
-// Delivery modes, see PLAN.md.
+// Delivery modes, see PLAN.md and ROUTING.md.
 //   log-only      – parse, ack, archive (default; safest, no bridge-spam).
-//   message-send  – shell out to `openclaw message send --channel X --target Y`.
-//   agent         – legacy `openclaw agent --to <slug>` path (flaky, disabled by default).
-export const DELIVERY_MODES = new Set(["log-only", "message-send", "agent"]);
+//   message-send  – shell out to `openclaw message send --channel X --account A --target T`.
+//                   Posts the bridge envelope as a message FROM the bot into a chat.
+//                   Useful for surfacing bridge traffic in Telegram without
+//                   triggering an agent turn.
+//   agent-turn    – shell out to `openclaw agent --agent <id> --message <envelope>
+//                                   --deliver --reply-channel telegram
+//                                   --reply-account <acc> --reply-to <chat>`.
+//                   Runs a real agent turn. The agent processes the message and
+//                   delivers its reply to the configured channel.
+//   agent         – legacy `openclaw agent --to <slug>` path (flaky, kept for
+//                   backward compat only).
+export const DELIVERY_MODES = new Set(["log-only", "message-send", "agent-turn", "agent"]);
 export const DEFAULT_DELIVERY_MODE = "log-only";
+export const DEFAULT_TARGET_AGENT = "main";
+export const DEFAULT_DELIVERY_CHANNEL = "telegram";
+export const DEFAULT_DELIVERY_ACCOUNT = "default";
 
 // ── delivered-id tracking ───────────────────────────────────────────────────
 
@@ -207,7 +219,7 @@ async function injectMessageViaAgentCli({ target, agentId, text, timeoutSec, log
   return r;
 }
 
-async function injectMessageViaChannelSend({ channel, targetId, text, logger }) {
+async function injectMessageViaChannelSend({ channel, account, targetId, text, logger }) {
   if (!channel || !targetId) {
     logger?.error?.(
       `[agent-bridge] message-send mode requires deliveryChannel + deliveryTarget config`,
@@ -224,16 +236,136 @@ async function injectMessageViaChannelSend({ channel, targetId, text, logger }) 
     "--message",
     text,
   ];
+  if (account) {
+    args.push("--account", String(account));
+  }
   // message send is synchronous but fast; 30s is plenty.
   const r = await runOpenclawCli({ args, timeoutMs: 30_000, logger });
   if (r.ok) {
-    logger?.info?.(`[agent-bridge] message-send delivery ok channel=${channel} target=${targetId}`);
+    logger?.info?.(
+      `[agent-bridge] message-send delivery ok channel=${channel} account=${account ?? "<default>"} target=${targetId}`,
+    );
   } else {
     logger?.warn?.(
-      `[agent-bridge] message-send delivery failed channel=${channel} target=${targetId} exit=${r.code} timedOut=${r.timedOut} stderr=${(r.stderr || "").slice(0, 400)}`,
+      `[agent-bridge] message-send delivery failed channel=${channel} account=${account ?? "<default>"} target=${targetId} exit=${r.code} timedOut=${r.timedOut} stderr=${(r.stderr || "").slice(0, 400)}`,
     );
   }
   return r;
+}
+
+/**
+ * Run a real agent turn: feed the bridge envelope into the agent and have it
+ * deliver its reply back to a chat channel (e.g. one of the user's Telegram
+ * bots). This is what makes OpenClaw "actually respond" to bridge messages.
+ */
+async function injectMessageViaAgentTurn({
+  agentId,
+  text,
+  replyChannel,
+  replyAccount,
+  replyTo,
+  timeoutSec,
+  logger,
+}) {
+  if (!replyChannel || !replyTo) {
+    logger?.error?.(
+      `[agent-bridge] agent-turn mode requires replyChannel + replyTo (target chat id)`,
+    );
+    return { ok: false, stderr: "missing replyChannel/replyTo" };
+  }
+  const args = [
+    "agent",
+    "--agent",
+    String(agentId || DEFAULT_TARGET_AGENT),
+    "--message",
+    text,
+    "--deliver",
+    "--reply-channel",
+    String(replyChannel),
+    "--reply-to",
+    String(replyTo),
+    "--timeout",
+    String(timeoutSec),
+    "--json",
+  ];
+  if (replyAccount) {
+    args.push("--reply-account", String(replyAccount));
+  }
+  // Gate the watchdog kill just past openclaw's own --timeout so we don't
+  // strand child processes if the gateway hangs.
+  const killAfterMs = (Number(timeoutSec) || DEFAULT_DELIVERY_TIMEOUT_SEC) * 1000 + 5000;
+  const r = await runOpenclawCli({ args, timeoutMs: killAfterMs, logger });
+  if (r.ok) {
+    logger?.info?.(
+      `[agent-bridge] agent-turn delivery ok agent=${agentId ?? DEFAULT_TARGET_AGENT} reply=${replyChannel}:${replyAccount ?? "<default>"}:${replyTo}`,
+    );
+  } else {
+    logger?.warn?.(
+      `[agent-bridge] agent-turn delivery failed agent=${agentId ?? DEFAULT_TARGET_AGENT} reply=${replyChannel}:${replyAccount ?? "<default>"}:${replyTo} exit=${r.code} timedOut=${r.timedOut} stderr=${(r.stderr || "").slice(0, 400)}`,
+    );
+  }
+  return r;
+}
+
+/**
+ * Resolve per-message routing from a BridgeMessage.
+ *
+ * BridgeMessage.content is normally a free-text string. Callers who want to
+ * target a specific bot/agent/chat can include a leading "@@route" header on
+ * the first line(s) of the content, then a blank line, then the actual body.
+ * Examples:
+ *   @@route target_chat_id=6164541473 target_account=clordlethird
+ *
+ *   actual message body here
+ *
+ * Or include a top-level `route` field in the message JSON itself:
+ *   { ..., content: "...", route: { target_chat_id: "...", target_agent: "..." } }
+ *
+ * Returns { route: { targetChatId, targetAccount, targetAgent }, content }
+ * where content has the @@route header stripped.
+ */
+function resolveMessageRoute(msg, defaults) {
+  const route = {
+    targetChatId: defaults?.targetChatId,
+    targetAccount: defaults?.targetAccount,
+    targetAgent: defaults?.targetAgent || DEFAULT_TARGET_AGENT,
+    targetChannel: defaults?.targetChannel || DEFAULT_DELIVERY_CHANNEL,
+  };
+
+  // 1. Top-level `route` object on the message (preferred).
+  if (msg && typeof msg.route === "object" && msg.route !== null) {
+    if (msg.route.target_chat_id) route.targetChatId = String(msg.route.target_chat_id);
+    if (msg.route.target_account) route.targetAccount = String(msg.route.target_account);
+    if (msg.route.target_agent) route.targetAgent = String(msg.route.target_agent);
+    if (msg.route.target_channel) route.targetChannel = String(msg.route.target_channel);
+  }
+
+  // 2. Inline @@route header on the first line of content.
+  let content = String(msg?.content ?? "");
+  const m = content.match(/^@@route\s+([^\n]+)(?:\n+|$)/);
+  if (m) {
+    const kvs = m[1];
+    for (const tok of kvs.split(/\s+/)) {
+      const eq = tok.indexOf("=");
+      if (eq <= 0) continue;
+      const k = tok.slice(0, eq).trim().toLowerCase();
+      const v = tok.slice(eq + 1).trim();
+      if (!v) continue;
+      if (k === "target_chat_id" || k === "chat_id" || k === "to") route.targetChatId = v;
+      else if (k === "target_account" || k === "account" || k === "bot") route.targetAccount = v;
+      else if (k === "target_agent" || k === "agent") route.targetAgent = v;
+      else if (k === "target_channel" || k === "channel") route.targetChannel = v;
+    }
+    content = content.slice(m[0].length);
+  }
+
+  // 3. Default chat → account map (configured via plugin config).
+  if (route.targetChatId && !route.targetAccount && defaults?.chatIdToAccount) {
+    const acc = defaults.chatIdToAccount[String(route.targetChatId)];
+    if (acc) route.targetAccount = String(acc);
+  }
+
+  return { route, content };
 }
 
 function archiveDeliveredFile(filePath, logger) {
@@ -366,27 +498,33 @@ async function startInboxWatcher({ inboxDir, pollIntervalMs, onNew, logger }) {
  * @param {object} options
  * @param {string} [options.inboxDir]
  * @param {string} [options.sessionKeyPrefix]
- * @param {string} [options.agentId]
+ * @param {string} [options.agentId]                Default agent for agent-turn mode.
  * @param {number} [options.pollIntervalMs]
  * @param {number} [options.deliveryTimeoutSec]
  * @param {string} [options.deliveredFile]
- * @param {"log-only"|"message-send"|"agent"} [options.deliveryMode]
- * @param {string} [options.deliveryChannel]   (message-send only)
- * @param {string} [options.deliveryTarget]    (message-send only)
+ * @param {"log-only"|"message-send"|"agent-turn"|"agent"} [options.deliveryMode]
+ * @param {string} [options.deliveryChannel]        Channel for message-send + agent-turn reply (default: telegram).
+ * @param {string} [options.deliveryAccount]        Channel account id for message-send + agent-turn reply.
+ * @param {string} [options.deliveryTarget]         Default target chat id (used when route doesn't specify).
+ * @param {Object<string,string>} [options.chatIdToAccount]  Map of chat_id → channel account id.
  * @param {object} [options.logger]
  * @returns {Promise<() => void>} cleanup function
  */
 export async function startInboxBridge(options = {}) {
   const inboxDir = resolve(options.inboxDir || DEFAULT_INBOX_DIR);
   const sessionKeyPrefix = options.sessionKeyPrefix || DEFAULT_SESSION_PREFIX;
-  const agentId = options.agentId || undefined;
+  const agentId = options.agentId || DEFAULT_TARGET_AGENT;
   const pollIntervalMs = Number(options.pollIntervalMs) || DEFAULT_POLL_INTERVAL_MS;
   const deliveryTimeoutSec = Number(options.deliveryTimeoutSec) || DEFAULT_DELIVERY_TIMEOUT_SEC;
   const deliveredFile = options.deliveredFile || DEFAULT_DELIVERED_FILE;
   const rawMode = options.deliveryMode || DEFAULT_DELIVERY_MODE;
   const deliveryMode = DELIVERY_MODES.has(rawMode) ? rawMode : DEFAULT_DELIVERY_MODE;
-  const deliveryChannel = options.deliveryChannel || undefined;
+  const deliveryChannel = options.deliveryChannel || DEFAULT_DELIVERY_CHANNEL;
+  const deliveryAccount = options.deliveryAccount || undefined;
   const deliveryTarget = options.deliveryTarget || undefined;
+  const chatIdToAccount = (options.chatIdToAccount && typeof options.chatIdToAccount === "object")
+    ? options.chatIdToAccount
+    : {};
   const logger = options.logger || console;
 
   mkdirSync(DEFAULT_STATE_DIR, { recursive: true, mode: 0o700 });
@@ -399,11 +537,11 @@ export async function startInboxBridge(options = {}) {
     );
   }
   logger.info?.(
-    `[agent-bridge] starting inbox=${inboxDir} prefix=${sessionKeyPrefix} mode=${deliveryMode}`,
+    `[agent-bridge] starting inbox=${inboxDir} prefix=${sessionKeyPrefix} mode=${deliveryMode} agent=${agentId} channel=${deliveryChannel} account=${deliveryAccount ?? "<none>"} target=${deliveryTarget ?? "<none>"} routes=${Object.keys(chatIdToAccount).length}`,
   );
-  if (deliveryMode === "message-send" && (!deliveryChannel || !deliveryTarget)) {
+  if ((deliveryMode === "message-send" || deliveryMode === "agent-turn") && !deliveryTarget) {
     logger.warn?.(
-      `[agent-bridge] deliveryMode=message-send but deliveryChannel/deliveryTarget missing — inbound messages will be archived without injection`,
+      `[agent-bridge] deliveryMode=${deliveryMode} has no default deliveryTarget — only messages with explicit @@route or msg.route.target_chat_id will be delivered; others will be acked as log-only`,
     );
   }
 
@@ -423,36 +561,66 @@ export async function startInboxBridge(options = {}) {
     }
 
     const senderSlug = String(msg.from ?? "unknown").replace(/[^a-zA-Z0-9._-]+/g, "-");
-    const target = `${sessionKeyPrefix}-${senderSlug}`;
-    const text = formatChannelEnvelope(msg);
+    const sessionTarget = `${sessionKeyPrefix}-${senderSlug}`;
+
+    // Resolve per-message routing (top-level msg.route, inline @@route header,
+    // or fall back to plugin defaults).
+    const { route, content: stripped } = resolveMessageRoute(msg, {
+      targetChatId: deliveryTarget,
+      targetAccount: deliveryAccount,
+      targetAgent: agentId,
+      targetChannel: deliveryChannel,
+      chatIdToAccount,
+    });
+    // Build the envelope using the stripped content (so the agent doesn't see
+    // the routing header).
+    const text = formatChannelEnvelope({ ...msg, content: stripped });
 
     logger.info?.(
-      `[agent-bridge] delivering ${msg.id} from=${msg.from} mode=${deliveryMode} target=${target}`,
+      `[agent-bridge] delivering ${msg.id} from=${msg.from} mode=${deliveryMode} agent=${route.targetAgent} reply=${route.targetChannel}:${route.targetAccount ?? "<default>"}:${route.targetChatId ?? "<none>"}`,
     );
 
     let result = { ok: true };
     if (deliveryMode === "agent") {
       result = await injectMessageViaAgentCli({
-        target,
-        agentId,
+        target: sessionTarget,
+        agentId: route.targetAgent,
         text,
         timeoutSec: deliveryTimeoutSec,
         logger,
       });
+    } else if (deliveryMode === "agent-turn") {
+      if (route.targetChatId) {
+        result = await injectMessageViaAgentTurn({
+          agentId: route.targetAgent,
+          text,
+          replyChannel: route.targetChannel,
+          replyAccount: route.targetAccount,
+          replyTo: route.targetChatId,
+          timeoutSec: deliveryTimeoutSec,
+          logger,
+        });
+      } else {
+        logger.info?.(
+          `[agent-bridge] agent-turn mode but no chat_id resolved; acking ${msg.id} as log-only`,
+        );
+        result = { ok: true };
+      }
     } else if (deliveryMode === "message-send") {
-      if (deliveryChannel && deliveryTarget) {
+      if (route.targetChannel && route.targetChatId) {
         result = await injectMessageViaChannelSend({
-          channel: deliveryChannel,
-          targetId: deliveryTarget,
+          channel: route.targetChannel,
+          account: route.targetAccount,
+          targetId: route.targetChatId,
           text,
           logger,
         });
       } else {
-        // No route configured → ack as delivered (log-only semantics) so the
+        // No route resolvable → ack as delivered (log-only semantics) so the
         // inbox drains. The MCP tools path is still the primary way the
         // running agent talks back.
         logger.info?.(
-          `[agent-bridge] message-send mode but no route configured; acking ${msg.id} as log-only`,
+          `[agent-bridge] message-send mode but no route resolved; acking ${msg.id} as log-only`,
         );
         result = { ok: true };
       }

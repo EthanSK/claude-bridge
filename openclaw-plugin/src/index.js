@@ -71,16 +71,19 @@ export default {
     }
 
     // Fire-and-forget; the watcher keeps the gateway event loop happy.
+    // Accept both `targetAgent` (new, clearer name) and legacy `agentId`.
     let cleanup = () => {};
     startInboxBridge({
       inboxDir: pluginCfg.inboxDir,
       sessionKeyPrefix: pluginCfg.sessionKeyPrefix,
-      agentId: pluginCfg.agentId,
+      agentId: pluginCfg.targetAgent || pluginCfg.agentId,
       pollIntervalMs: pluginCfg.pollIntervalMs,
       deliveryTimeoutSec: pluginCfg.deliveryTimeoutSec,
       deliveryMode: pluginCfg.deliveryMode,
       deliveryChannel: pluginCfg.deliveryChannel,
+      deliveryAccount: pluginCfg.deliveryAccount,
       deliveryTarget: pluginCfg.deliveryTarget,
+      chatIdToAccount: pluginCfg.chatIdToAccount,
       logger,
     })
       .then((dispose) => {
