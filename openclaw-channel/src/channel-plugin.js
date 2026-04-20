@@ -140,13 +140,20 @@ export function createAgentBridgeChannelPlugin(opts) {
           );
         }
         const pluginCfg = getPluginConfig() ?? {};
+        const accountId =
+          typeof ctx.accountId === "string" ? ctx.accountId.trim() : "";
+        const ownTarget =
+          hit?.ownTarget ??
+          pluginCfg.defaultFromTarget ??
+          pluginCfg.defaultOwnTarget ??
+          (accountId ? `openclaw/${accountId}` : undefined);
         const msg = buildReply({
           fromMachine: localMachineName(),
           toMachine: target,
           replyToId: ctx.replyToId ?? null,
           content: ctx.text ?? "",
           incoming: hit?.incoming,
-          ownTarget: hit?.ownTarget ?? pluginCfg.defaultOwnTarget,
+          ownTarget,
         });
         await deliverReply({
           message: msg,
@@ -170,6 +177,8 @@ function resolveOutboundTarget(ctx, getReplyTargets) {
   // captured incoming BridgeMessage and the OpenClaw target's own ID for
   // round-trip routing (refinement 3 — 2026-04-20).
   const targets = getReplyTargets?.();
+  const accountId =
+    typeof ctx.accountId === "string" ? ctx.accountId.trim() : "";
   if (targets) {
     const sessionHints = [ctx.threadId, ctx.accountId, ctx.to]
       .filter((v) => v != null)
@@ -178,11 +187,19 @@ function resolveOutboundTarget(ctx, getReplyTargets) {
       const hit = targets.get(hint);
       if (hit?.fromMachine) return hit;
     }
+    if (accountId) {
+      const hit = targets.get(accountId);
+      if (hit?.fromMachine) return hit;
+      const ownTarget = `openclaw/${accountId}`;
+      for (const candidate of targets.values()) {
+        if (candidate?.fromMachine && candidate.ownTarget === ownTarget) return candidate;
+      }
+    }
   }
   // Fallback: treat ctx.to as the machine name directly (bridge messages
   // often encode that explicitly). No incoming context in this case.
   if (typeof ctx.to === "string" && ctx.to.trim()) {
-    return { fromMachine: ctx.to.trim() };
+    return { fromMachine: ctx.to.trim(), ownTarget: `openclaw/${accountId || "default"}` };
   }
   return null;
 }
