@@ -155,24 +155,94 @@ export default {
 async function loadSystemEvents() {
   // enqueueSystemEvent is re-exported from several plugin-sdk subpaths
   // depending on host version. Try them in order of most-likely to work.
-  const candidates = [
-    "openclaw/plugin-sdk/infra-runtime",
-    "openclaw/plugin-sdk/channel-runtime",
-    "openclaw/plugin-sdk/channel-core",
-    "openclaw/plugin-sdk/channel-inbound",
+  const subpaths = [
+    "plugin-sdk/infra-runtime",
+    "plugin-sdk/channel-runtime",
+    "plugin-sdk/channel-core",
+    "plugin-sdk/channel-inbound",
   ];
   const errors = [];
-  for (const spec of candidates) {
+
+  // Strategy 1: direct `openclaw/...` ESM import. Works when the plugin is
+  // loaded via a mechanism that gives it access to the host's node_modules
+  // (npm link, npm install, or a host that injects node_modules into the
+  // plugin's resolution root).
+  for (const sub of subpaths) {
+    const spec = `openclaw/${sub}`;
     try {
       const mod = await import(spec);
-      if (typeof mod.enqueueSystemEvent === "function") {
-        return mod;
-      }
+      if (typeof mod.enqueueSystemEvent === "function") return mod;
       errors.push(`${spec}: loaded but missing enqueueSystemEvent`);
     } catch (err) {
       errors.push(`${spec}: ${err?.message || err}`);
     }
   }
+
+  // Strategy 2: resolve via the host's own node_modules. On a typical install
+  // `openclaw` is a globally linked package whose absolute path we can walk
+  // up from `process.argv[1]` (the openclaw CLI entry) or discover via the
+  // parent `openclaw` binary/module on disk.
+  try {
+    const { createRequire } = await import("node:module");
+    const { dirname, resolve: resolvePath } = await import("node:path");
+    const { existsSync, realpathSync } = await import("node:fs");
+
+    const hostCandidates = [];
+    // process.argv[1] is typically the openclaw entry script (e.g.
+    // /opt/homebrew/lib/node_modules/openclaw/dist/entry.js).
+    if (process.argv[1]) {
+      try {
+        hostCandidates.push(realpathSync(process.argv[1]));
+      } catch {
+        hostCandidates.push(process.argv[1]);
+      }
+    }
+    // Also consider the openclaw bin on PATH via a well-known homebrew path.
+    hostCandidates.push("/opt/homebrew/bin/openclaw");
+    hostCandidates.push("/usr/local/bin/openclaw");
+
+    for (const entry of hostCandidates) {
+      if (!entry || !existsSync(entry)) continue;
+      let resolved;
+      try {
+        resolved = realpathSync(entry);
+      } catch {
+        resolved = entry;
+      }
+
+      // Walk up looking for an `openclaw/package.json` marker.
+      let cursor = dirname(resolved);
+      for (let i = 0; i < 8; i += 1) {
+        const pkgPath = resolvePath(cursor, "package.json");
+        if (existsSync(pkgPath)) {
+          try {
+            const req = createRequire(pkgPath);
+            for (const sub of subpaths) {
+              try {
+                const modPath = req.resolve(`openclaw/${sub}`);
+                const mod = await import(modPath);
+                if (typeof mod.enqueueSystemEvent === "function") return mod;
+                errors.push(`resolved ${modPath}: missing enqueueSystemEvent`);
+              } catch (err) {
+                errors.push(
+                  `createRequire(${pkgPath}) → openclaw/${sub}: ${err?.message || err}`,
+                );
+              }
+            }
+          } catch (err) {
+            errors.push(`createRequire failed at ${pkgPath}: ${err?.message || err}`);
+          }
+          break;
+        }
+        const parent = dirname(cursor);
+        if (parent === cursor) break;
+        cursor = parent;
+      }
+    }
+  } catch (err) {
+    errors.push(`dynamic host-resolve path failed: ${err?.message || err}`);
+  }
+
   throw new Error(
     `unable to load plugin-sdk dispatch API (enqueueSystemEvent): ${errors.join("; ")}`,
   );
