@@ -153,20 +153,29 @@ export default {
  * resolver path (e.g. in CI or during local type-check).
  */
 async function loadSystemEvents() {
-  // Preferred: the published subpath (present in host installs).
-  try {
-    return await import("openclaw/plugin-sdk/channel-core");
-  } catch {
-    /* fall through */
+  // enqueueSystemEvent is re-exported from several plugin-sdk subpaths
+  // depending on host version. Try them in order of most-likely to work.
+  const candidates = [
+    "openclaw/plugin-sdk/infra-runtime",
+    "openclaw/plugin-sdk/channel-runtime",
+    "openclaw/plugin-sdk/channel-core",
+    "openclaw/plugin-sdk/channel-inbound",
+  ];
+  const errors = [];
+  for (const spec of candidates) {
+    try {
+      const mod = await import(spec);
+      if (typeof mod.enqueueSystemEvent === "function") {
+        return mod;
+      }
+      errors.push(`${spec}: loaded but missing enqueueSystemEvent`);
+    } catch (err) {
+      errors.push(`${spec}: ${err?.message || err}`);
+    }
   }
-  // Secondary subpath seen on older hosts.
-  try {
-    return await import("openclaw/plugin-sdk/channel-inbound");
-  } catch (err) {
-    throw new Error(
-      `unable to load plugin-sdk dispatch API (tried openclaw/plugin-sdk/channel-core and /channel-inbound): ${err?.message || err}`,
-    );
-  }
+  throw new Error(
+    `unable to load plugin-sdk dispatch API (enqueueSystemEvent): ${errors.join("; ")}`,
+  );
 }
 
 /**
