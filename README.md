@@ -231,6 +231,58 @@ chmod +x /usr/local/bin/agent-bridge
 
 ---
 
+## Updating
+
+agent-bridge has three moving parts on each machine:
+
+| Part                       | Where                                                                 | How it updates              |
+|----------------------------|-----------------------------------------------------------------------|-----------------------------|
+| `agent-bridge` CLI script  | Either `/usr/local/bin/agent-bridge` (one-line install, re-run it)    | Re-run `install.sh`         |
+|                            | OR a symlink into the checked-out repo (Option B)                     | `git pull` in the repo      |
+| MCP server                 | `<repo>/mcp-server/build/`                                            | `git pull` + rebuild        |
+| OpenClaw channel plugin    | `<repo>/openclaw-channel/` (loaded from the repo path by the gateway) | `git pull` + gateway restart |
+
+The MCP server is auto-spawned by the Claude Code channel plugin on `/reload-plugins`, so you **don't need to restart your terminal** to pick up MCP changes — just reload plugins.
+
+The OpenClaw channel plugin is loaded once when the gateway starts, so you DO need to restart the gateway to pick up plugin changes.
+
+### One-shot helper: `scripts/update.sh`
+
+From a cloned repo checkout:
+
+```bash
+cd ~/Projects/agent-bridge       # or wherever you cloned it
+./scripts/update.sh              # safe mode — prompts before anything risky
+./scripts/update.sh --yes        # unattended (still warns, but no prompts)
+./scripts/update.sh --skip-openclaw   # skip the gateway-restart step
+```
+
+What it does:
+1. `git fetch origin && git pull --ff-only origin main`
+2. `(cd mcp-server && npm install && npm run build)` to rebuild the MCP server
+3. (Optional) Restart the OpenClaw gateway via `openclaw gateway restart` if the `openclaw` CLI is on `$PATH`. Gated behind a Y/n prompt so you can say no during a live session. Skipped entirely with `--skip-openclaw`
+4. On macOS, attempts to trigger `/reload-plugins` in the running Claude Code terminal via the `self-reload-plugins` skill (only if that skill is installed in `~/.claude/skills/self-reload-plugins/`)
+
+The script is idempotent — if `mcp-server/build/` is already up-to-date the npm build is a fast no-op, and if no new commits were pulled it exits early without touching the gateway.
+
+### Manual update path
+
+If you'd rather do it by hand:
+
+```bash
+cd ~/Projects/agent-bridge
+git pull --ff-only origin main
+(cd mcp-server && npm install && npm run build)
+# then, on the machine running OpenClaw:
+openclaw gateway restart
+# and if you're in Claude Code right now, reload plugins so MCP tools reconnect to the new build:
+# /reload-plugins
+```
+
+Do this on **both** paired machines so they stay in sync — the SCP envelope format occasionally changes between minor versions.
+
+---
+
 ## Setup guide
 
 ### On each machine you want to bridge:
