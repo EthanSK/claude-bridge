@@ -1,5 +1,56 @@
 # Changelog
 
+## openclaw-channel 2.2.0 — 2026-04-20
+
+### Architectural correction — replace `enqueueSystemEvent` with `dispatchInboundReplyWithBase`
+
+**Root cause of "injection works but agent never responds":** v2.1.x used
+`enqueueSystemEvent` to push bridge messages into the target telegram
+session. That function is pure queueing — it prepends a `System:` line
+to the NEXT naturally-scheduled turn's prompt but does NOT trigger a turn.
+So every bridge message sat in the queue until Ethan happened to send a
+real Telegram message, at which point our queued text surfaced as a
+`System: ...` line on an unrelated turn. End-to-end delivery appeared
+broken.
+
+Full analysis: `openclaw-channel/docs/ACTUAL-SESSION-INJECTION-RESEARCH-2026-04-20.md`
+— read-the-source study of OpenClaw's channel dispatch path with citations.
+
+**Fix:** switch `src/index.js` to call `dispatchInboundReplyWithBase` from
+`openclaw/plugin-sdk/compat`. This is the SAME primitive the native IRC
+and Nextcloud Talk channels use, and it drives the same
+`dispatchReplyFromConfig` path the built-in Telegram bot drives for every
+real incoming message. It synchronously runs an agent turn for our
+synthetic `ctxPayload` and routes the reply back through the live Telegram
+outbound because we set `Provider: "telegram"` + `OriginatingChannel:
+"telegram"` + `OriginatingTo: "telegram:<peerId>"` on the ctxPayload.
+
+**Session-key resolution** now goes through
+`runtime.channel.routing.resolveAgentRoute({ cfg, channel, accountId, peer })`
+instead of being hand-constructed. This respects Ethan's `cfg.session.dmScope`
+(currently `per-account-channel-peer`, producing
+`agent:main:telegram:<account>:direct:<peerId>`) and keeps working if he
+ever changes it.
+
+**Reply routing** is now driven by `ctx.OriginatingChannel` +
+`ctx.OriginatingTo` (see `route-reply-CQe8rYFT.js:17-23`), not the session's
+persisted `lastChannel`. This is what the native channels do and it
+protects us from `lastChannel` drifting (heartbeat runs set it to
+`webchat/heartbeat`).
+
+**Removed:** `enqueueSystemEvent` import, `probeSession` helper (SDK
+doesn't expose session lookup), the hand-built sessionKey
+(`buildSessionKey`), and the `trusted: false` option (not a real flag on
+`SystemEventOptions`).
+
+**Added:** `loadDispatchRuntime` helper that imports the compat module
+using the same host-resolver walk as v2.1.x used for infra-runtime. A
+`resolveProviderDeliver({runtime, targetChannel})` adapter delegates
+outbound text to `runtime.channel.telegram.sendMessageTelegram(...)`;
+adding discord/slack/etc. is a one-line extension there.
+
+**Version bump:** 2.1.1 → 2.2.0.
+
 ## openclaw-channel 2.1.1 — 2026-04-20
 
 ### Logger fix — restore visibility of plugin log bodies

@@ -468,15 +468,15 @@ Install the native OpenClaw channel plugin (`openclaw-channel/`):
   }
 }
 ```
-Registers `agent-bridge` as a first-class OpenClaw channel (same tier as Telegram) via `api.registerChannel()`. Inbound messages dispatch through `enqueueSystemEvent` from the plugin-sdk — no CLI shell-out, no scanner bypass. Outbound replies SCP a `BridgeMessage` back to the sender. See [`openclaw-channel/README.md`](openclaw-channel/README.md) and [`openclaw-channel/ARCHITECTURE.md`](openclaw-channel/ARCHITECTURE.md).
+Registers `agent-bridge` as a first-class OpenClaw channel (same tier as Telegram) via `api.registerChannel()`. Inbound messages dispatch through `dispatchInboundReplyWithBase` from `openclaw/plugin-sdk/compat` — the same dispatch primitive used by the native IRC / Nextcloud Talk channels — so a bridge message arriving for a Telegram-bound target runs a real agent turn and the reply lands in the Telegram chat. No CLI shell-out, no scanner bypass. Cross-harness outbound replies SCP a `BridgeMessage` back to the sender. See [`openclaw-channel/README.md`](openclaw-channel/README.md) and [`openclaw-channel/ARCHITECTURE.md`](openclaw-channel/ARCHITECTURE.md).
 
 > **Migrating from v1.3.0 (`openclaw-plugin/`)?** That extension plugin has been removed as of v2.0.0. Delete any `plugins.entries["agent-bridge"]` block from your config and point `plugins.load.paths` at the new `openclaw-channel/` directory. The gateway hot-reloads on config change.
 
 **How OpenClaw push delivery works:**
-1. Peer's `bridge_send_message` writes a JSON file to `~/.agent-bridge/inbox/` via SSH
+1. Peer's `bridge_send_message` writes a JSON file to `~/.agent-bridge/inbox/openclaw/<target>/` via SSH
 2. The channel plugin's file watcher sees the new file
-3. The plugin calls `enqueueSystemEvent` to push a `<channel source="agent-bridge" ...>` block into the running agent session
-4. When the agent replies via the channel's outbound adapter, the plugin SCPs a reply `BridgeMessage` back to the sender's inbox
+3. The plugin resolves the canonical session route via `runtime.channel.routing.resolveAgentRoute(...)`, builds a synthetic inbound ctxPayload with `Provider: "telegram"` + `OriginatingChannel: "telegram"` + `OriginatingTo: "telegram:<peerId>"`, and calls `dispatchInboundReplyWithBase` — a synchronous agent turn runs in the target session and the agent's reply is sent out through `runtime.channel.telegram.sendMessageTelegram(...)`, landing in the matching Telegram chat
+4. For cross-harness replies (peer is ALSO agent-bridge-aware), the plugin SCPs a reply `BridgeMessage` back to the sender's inbox via the native `agent-bridge` channel's outbound adapter
 
 ### Codex (OpenAI) (MCP server -- polling)
 
@@ -780,7 +780,7 @@ Explicit `targets` blocks (advanced override, still fully supported):
 }
 ```
 
-Each entry resolves to an OpenClaw session key of the form `agent:<agentId>:<openclaw_channel>:<account>:direct:<peer_id>`. The openclaw-channel plugin uses that key with `enqueueSystemEvent(body, { sessionKey, trusted: false })` to inject the message into the already-running agent session. Replies travel over whatever channel the session was last talking on (usually the originating Telegram chat) instead of spawning a new `agent-bridge` channel.
+Each entry resolves to an OpenClaw session route via `runtime.channel.routing.resolveAgentRoute({cfg, channel, accountId, peer})` — for Ethan's `dmScope=per-account-channel-peer` that produces keys of the form `agent:main:telegram:<account>:direct:<peer_id>`. The openclaw-channel plugin calls `dispatchInboundReplyWithBase` (from `openclaw/plugin-sdk/compat`) with a synthetic `ctxPayload` pinned to `Provider: "telegram"` + `OriginatingChannel: "telegram"` + `OriginatingTo: "telegram:<peer_id>"`, which runs a real agent turn and sends the agent's reply back via the live Telegram outbound — same dispatch path a native Telegram DM would take.
 
 **Round-trip bridge replies.** `BridgeMessage` carries an optional `fromTarget` field — the sender's OWN target-id. When an agent replies back over the bridge (cross-harness agent ↔ agent flows), `fromTarget` is copied into the reply's `target` field so the reply lands back in the session that started the conversation instead of always defaulting to `claude-code`. This makes OpenClaw ↔ Claude Code work both directions, not just inbound.
 

@@ -49,7 +49,7 @@ bridge_send_message({ machine: "MacBook", message: "what's up?",            targ
 Each target maps to a subdir under `~/.agent-bridge/inbox/` on the remote (`inbox/claude-code/`, `inbox/openclaw/clawdiboi2/`, …) and a specific listener picks it up:
 
 - `target: "claude-code"` → Claude Code channel plugin pushes the message into the running Claude session as a `<channel source="agent-bridge" ...>` event.
-- `target: "openclaw/<account>"` → openclaw-channel plugin injects the message into the OpenClaw Telegram session for `<account>` via `enqueueSystemEvent`. Replies land in the matching Telegram chat (e.g. @Clawdiboi2bot) because the session's `lastChannel` is Telegram, not the bridge.
+- `target: "openclaw/<account>"` → openclaw-channel plugin dispatches the message into the OpenClaw Telegram session for `<account>` via `dispatchInboundReplyWithBase` from `openclaw/plugin-sdk/compat` — a synchronous agent turn runs and the reply is sent through the live Telegram outbound (landing in e.g. @Clawdiboi2bot) because the synthetic ctxPayload pins `OriginatingChannel: "telegram"`.
 
 Calls without `target` are rejected. Legacy flat-file messages that land at the root of `inbox/` are moved to `inbox/.failed/_unrouted/` on next startup.
 

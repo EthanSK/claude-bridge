@@ -447,7 +447,7 @@
               OpenClaw
             </div>
             <div class="compat-status" role="cell"><span class="pill pill--ready">ready</span></div>
-            <div class="compat-desc" role="cell">MCP tools out of the box. The <code>openclaw-channel/</code> native channel plugin registers <code>agent-bridge</code> as a first-class OpenClaw channel (same tier as Telegram) via <code>api.registerChannel()</code>, pushing inbound messages into the running agent session via <code>enqueueSystemEvent</code>.</div>
+            <div class="compat-desc" role="cell">MCP tools out of the box. The <code>openclaw-channel/</code> native channel plugin registers <code>agent-bridge</code> as a first-class OpenClaw channel (same tier as Telegram) via <code>api.registerChannel()</code>, dispatching inbound messages into the running agent session via <code>dispatchInboundReplyWithBase</code> from <code>openclaw/plugin-sdk/compat</code> so replies land in the matching Telegram chat.</div>
           </div>
 
           <div class="compat-row" role="row">

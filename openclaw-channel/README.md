@@ -7,25 +7,28 @@ built-in Telegram / Slack / iMessage channels — so cross-machine messages
 flow through OpenClaw's normal inbound/outbound pipelines instead of the
 v1.3.0 hack that shelled out to `openclaw agent --to ...` per message.
 
+## What's new in v2.2.0
+
+- **Correct dispatch via `dispatchInboundReplyWithBase`.** v2.1.x tried to inject bridge messages with `enqueueSystemEvent`, but that function only prepends a `System:` line to the NEXT naturally-scheduled turn — it does NOT trigger a turn. Every bridge message was silently swallowed unless Ethan happened to DM the real Telegram bot afterwards. v2.2.0 calls `dispatchInboundReplyWithBase` from `openclaw/plugin-sdk/compat` — the SAME dispatch primitive the native IRC and Nextcloud Talk channels use — which drives `dispatchReplyFromConfig` exactly like a real Telegram inbound message. Full analysis in [`docs/ACTUAL-SESSION-INJECTION-RESEARCH-2026-04-20.md`](docs/ACTUAL-SESSION-INJECTION-RESEARCH-2026-04-20.md).
+- **Session key is SDK-resolved, not hand-built.** Uses `runtime.channel.routing.resolveAgentRoute({cfg, channel, accountId, peer})` so the plugin respects Ethan's `cfg.session.dmScope` (currently `per-account-channel-peer`) without hard-coding the key format.
+- **Replies routed via `OriginatingChannel`/`OriginatingTo`, not `lastChannel`.** The synthetic ctxPayload pins `Provider: "telegram"`, `OriginatingChannel: "telegram"`, `OriginatingTo: "telegram:<peerId>"`. Dispatch routes every in-turn reply through the live telegram outbound, regardless of what the session's persisted `lastChannel` is.
+
 ## What's new in v2.1.0
 
 - **Per-target inbox subdirs.** Watches `~/.agent-bridge/inbox/openclaw/<target>/*.json` instead of the single flat `inbox/`. Each subdir name maps to one configured target in `openclaw.json`.
 - **Auto-discovery of targets from `channels.telegram.accounts`.** In the common case you don't have to write a `targets` block at all — the plugin inspects the OpenClaw global config's `channels.telegram.accounts` map and creates one bridge target per account, routing to `telegram:<account>`. An explicit `targets` block is still accepted as an advanced override. Peer-id resolution walks `targets.<name>.peer_id` → `config.peer_id` → `meta.user_id` → first numeric `chat_id` in `channels.telegram.accounts[<name>].allowFrom`.
 - **Round-trip bridge replies (`fromTarget`).** Inbound BridgeMessages carry an optional `fromTarget` telling the receiver where to put replies. When the agent answers back over the bridge (cross-harness flows), `buildReply(...)` populates the outgoing `target` from `incoming.fromTarget` so the conversation lands in the session that originated it — e.g. OpenClaw ↔ Claude Code works both directions.
-- **Running-session injection.** Builds an OpenClaw session key of the form `agent:<agentId>:<channel>:<account>:direct:<peer_id>` and injects with `enqueueSystemEvent(body, { sessionKey, trusted: false })` so a bridge message arriving for a specific Telegram bot lands in the SAME chat session the user was already talking in. Replies go back to Telegram via the session's own `lastChannel`, not over the bridge.
-- **`trusted: false` on injection.** SSH pairing is not a first-party trust boundary — inbound bridge content is third-party input.
-- **Optional heartbeat wake.** When the plugin-sdk exports `requestHeartbeatNow`, the watcher wakes an idle session after injection.
 
 ## How it works
 
-| | This module (v2.1.0) |
+| | This module (v2.2.0) |
 | --- | --- |
 | Registration | `ChannelPlugin` via `api.registerChannel()` |
-| Inbound delivery | `enqueueSystemEvent(body, { sessionKey, trusted: false })` from the plugin-sdk |
-| Session key | `agent:<agentId>:<openclaw_channel>:<account>:direct:<peer_id>` |
+| Inbound dispatch | `dispatchInboundReplyWithBase` from `openclaw/plugin-sdk/compat` (same primitive used by native IRC / Nextcloud Talk channels) |
+| Session key | Resolved via `runtime.channel.routing.resolveAgentRoute({cfg, channel: "telegram", accountId, peer: {kind: "direct", id: peer_id}})` — respects `cfg.session.dmScope` |
 | Routing | Per-target subdir `~/.agent-bridge/inbox/openclaw/<target>/` — each target maps to one Telegram bot / account session |
-| Reply path | The target session's `lastChannel` (Telegram) drives reply routing — messages don't bounce back over agent-bridge automatically |
-| Cross-harness reply | Outbound `ChannelOutboundAdapter.sendText` is still available for the rare case where the peer is an agent-bridge-aware harness |
+| Reply path | `ctx.OriginatingChannel="telegram"` + `ctx.OriginatingTo="telegram:<peerId>"` → reply goes out via `runtime.channel.telegram.sendMessageTelegram(...)` — messages don't bounce back over agent-bridge automatically |
+| Cross-harness reply | Outbound `ChannelOutboundAdapter.sendText` on the native `agent-bridge` channel is still available for the rare case where the peer is an agent-bridge-aware harness |
 
 ## Install
 
@@ -94,9 +97,10 @@ Senders on the other machine address a specific target with the new `target` fie
 - On each new `BridgeMessage`:
   1. Parse + dedup against `~/.agent-bridge/.openclaw-v2-delivered`.
   2. Format as `<channel source="agent-bridge" from=... to=... target=... ts=...>content</channel>` (parity with the Claude Code channel plugin).
-  3. Resolve the target's OpenClaw session key.
-  4. Call `enqueueSystemEvent(body, { sessionKey, contextKey, trusted: false })`.
-  5. Call `requestHeartbeatNow({ sessionKey, reason: 'agent-bridge:inbound' })` if the plugin-sdk exports it (silent noop otherwise).
+  3. Resolve the canonical session route via `runtime.channel.routing.resolveAgentRoute(...)`.
+  4. Build a synthetic inbound `ctxPayload` via `runtime.channel.reply.finalizeInboundContext({...})` with `Provider: "telegram"`, `OriginatingChannel: "telegram"`, `OriginatingTo: "telegram:<peerId>"`.
+  5. `await dispatchInboundReplyWithBase({cfg, channel, accountId, route, storePath, ctxPayload, core: runtime, deliver, onRecordError, onDispatchError})`. This runs a synchronous agent turn in the target session.
+  6. The `deliver` callback forwards each reply payload to `runtime.channel.telegram.sendMessageTelegram(...)` so the agent's answer lands in the matching Telegram chat.
 - Legacy messages at `~/.agent-bridge/inbox/*.json` (no subdir, no `target` field) are quarantined to `~/.agent-bridge/inbox/.failed/_unrouted/` with a deprecation log line.
 - The outbound `ChannelOutboundAdapter.sendText` adapter is preserved for cross-harness bridge replies — if the paired peer is another agent-bridge-aware agent (not a Telegram session), the reply can still SCP back via the bridge instead of landing in Telegram.
 

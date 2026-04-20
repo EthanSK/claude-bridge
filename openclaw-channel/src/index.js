@@ -1,27 +1,41 @@
 /**
  * OpenClaw plugin entry point for @agent-bridge/openclaw-channel.
  *
- * v2.1.0 changes
- * --------------
- * - Watches per-target subdirs under `~/.agent-bridge/inbox/openclaw/` rather
- *   than the flat `~/.agent-bridge/inbox/` root. Each subdir corresponds to a
- *   configured `targets.<name>` block in openclaw.json.
- * - Injects inbound messages into the already-running Telegram-bound agent
- *   session (via `enqueueSystemEvent`) so the reply lands in the SAME
- *   Telegram chat the user was already talking in, rather than spawning a
- *   separate "agent-bridge" channel.
- * - `sessionKey` is built as `agent:<agentId>:telegram:<account>:direct:<peer_id>`
- *   so the target's own `lastChannel` state drives reply routing.
- * - `trusted: false` on injected events — SSH-pairing is not a first-party
- *   trust boundary, so we treat inbound bridge content as third-party input.
- * - Uses `enqueueSystemEvent` alone (no heartbeat call) — matches the built-in
- *   telegram channel's pattern. The event loop picks up queued events
- *   automatically, so no explicit session wake-up is needed.
+ * v2.2.0 — Architectural correction (2026-04-20)
+ * ------------------------------------------------
+ * STOP using `enqueueSystemEvent`. It's pure queueing: it prepends a
+ * `System:` line to the NEXT naturally-scheduled turn's prompt but does NOT
+ * trigger an agent turn. See full analysis in
+ * `docs/ACTUAL-SESSION-INJECTION-RESEARCH-2026-04-20.md` §4. This means
+ * every bridge message injected via the v2.1.x path was silently swallowed
+ * unless Ethan happened to then DM the real Telegram bot (at which point
+ * our queued text appeared as a `System: ...` line on THAT unrelated turn
+ * — wrong semantic).
  *
- * The previous v2.0.x `registerChannel` flow is retained for the rare case
- * where a paired peer is also an agent-bridge-aware harness (e.g. a cross-
- * machine Claude Code ↔ OpenClaw reply loop) — the outbound SCP path is still
- * available, it just isn't the primary path for the Telegram-injection flow.
+ * v2.2.0 instead uses `dispatchInboundReplyWithBase` from
+ * `openclaw/plugin-sdk/compat`, which is the SAME dispatch primitive the
+ * native IRC and Nextcloud Talk channel plugins use, and which drives the
+ * same `dispatchReplyFromConfig` path the native telegram bot drives.
+ * This actually runs a synchronous agent turn for our synthetic
+ * ctxPayload, and replies are routed back through the live telegram
+ * outbound because we set `Provider: "telegram"` + `OriginatingChannel:
+ * "telegram"` + `OriginatingTo: "telegram:<peerId>"` on the ctxPayload
+ * (see `route-reply-CQe8rYFT.js:17-23` docstring re: originating-channel
+ * priority).
+ *
+ * References:
+ * - Dispatch primitive source: `plugin-sdk/inbound-reply-dispatch-0KQ4b86b.js:29-65`
+ * - IRC reference impl: `extensions/irc/src/inbound.ts:278-362`
+ * - sessionKey shape (for dmScope=per-account-channel-peer):
+ *   `agent:main:telegram:<account>:direct:<peerId>`
+ *   (built automatically by `runtime.channel.routing.resolveAgentRoute`
+ *   via `plugin-sdk/session-key-CbP51u9x.js:175` — do NOT hand-build it;
+ *   Ethan's live dmScope setting might change)
+ *
+ * Cross-machine agent-bridge outbound (when a paired peer is ALSO
+ * agent-bridge-aware rather than going via telegram) still uses the
+ * separately-registered `agent-bridge` channel + SCP outbound — see
+ * `channel-plugin.js`. That path is retained for completeness.
  */
 
 import { homedir } from "node:os";
@@ -43,7 +57,7 @@ export default {
   id: PLUGIN_ID,
   name: PLUGIN_NAME,
   description:
-    "First-class OpenClaw channel for cross-machine agent-to-agent messaging over SSH. Per-target subdir routing + running-session injection so bridge replies land in the same Telegram chat.",
+    "First-class OpenClaw channel for cross-machine agent-to-agent messaging over SSH. Per-target subdir routing + dispatchInboundReplyWithBase session injection so bridge replies land in the same Telegram chat.",
 
   register(api) {
     const log = makeLogger(api?.logger);
@@ -69,12 +83,15 @@ export default {
     const isSetupOnly = regMode === "cli-metadata" || regMode === "setup-only";
 
     // Map of session-key-ish hint -> { fromMachine } so the outbound adapter
-    // knows which machine to SCP a reply to when the agent replies in-turn.
+    // knows which machine to SCP a reply to when the agent replies in-turn
+    // via our NATIVE agent-bridge channel (cross-harness flows). This is
+    // irrelevant for the Telegram-injection path — replies there travel
+    // back through telegram automatically via OriginatingChannel routing.
     const replyTargets = new Map();
 
-    // Register the native channel FIRST — this is the primary v2 contract,
-    // and must happen regardless of gateway vs CLI so the channel shows up
-    // in `openclaw channels list` etc.
+    // Register the native channel FIRST — this is the primary v2 contract
+    // for the cross-harness bridge case, and must happen regardless of
+    // gateway vs CLI so the channel shows up in `openclaw channels list`.
     try {
       const channelPlugin = createAgentBridgeChannelPlugin({
         logger: log,
@@ -103,42 +120,52 @@ export default {
       return;
     }
 
-    // Resolve targets. Precedence (refinement 2 — 2026-04-20):
+    // OpenClaw plugin api fields (from plugin-sdk/plugins/types.d.ts:312):
+    //   api.config  -- OpenClawConfig (full global cfg)
+    //   api.runtime -- PluginRuntime (has channel.{routing,reply,session,...})
+    const runtime = api?.runtime;
+    const hostCfg = api?.config;
+    if (!runtime || !runtime.channel) {
+      log.error(
+        "api.runtime.channel is unavailable — plugin-sdk version is too old. "
+        + "Need a host build that exposes runtime.channel.{routing,reply,session}. "
+        + "Refusing to start the watcher.",
+      );
+      return;
+    }
+    if (!hostCfg || typeof hostCfg !== "object") {
+      log.error(
+        "api.config is unavailable — cannot resolve session routing. "
+        + "Refusing to start the watcher.",
+      );
+      return;
+    }
+
+    // Resolve targets. Precedence:
     //   1. Explicit `pluginCfg.targets` (advanced override).
     //   2. Auto-discovery from the global OpenClaw config's
     //      `channels.telegram.accounts` map — each account becomes a target
     //      named after the account, routing to `telegram:<account>`.
-    //   3. Legacy fallback: a single `default` target with warn log so
-    //      pre-2.1.0 installs don't hard-break on upgrade.
-    //
-    // Peer ID resolution (in order):
-    //   a. Explicit `targets.<name>.peer_id` on the override block.
-    //   b. `pluginCfg.peer_id` (plugin-level default).
-    //   c. Derive from OpenClaw meta / the first allowlisted chat id on the
-    //      corresponding `channels.telegram.accounts[<name>].allowFrom` list.
-    //   d. Fail loudly: we log `peer_id missing for target "<name>"` and
-    //      skip that target rather than silently injecting to the wrong chat.
-    const openclawGlobalCfg = resolveOpenClawConfig(api);
+    //   3. Legacy fallback: a single `default` target with warn log.
     const targets = resolveTargets({
       pluginCfg,
-      openclawGlobalCfg,
+      openclawGlobalCfg: hostCfg,
       log,
     });
     const agentId = pluginCfg.agentId ?? DEFAULT_AGENT_ID;
 
-    // Start the inbox watcher — one poll loop over all configured targets.
+    // Load the compat dispatch primitive. We MUST have this — enqueueSystemEvent
+    // doesn't trigger a turn (see module-level comment).
     let stopWatcher = () => {};
-    loadSystemEvents(log)
-      .then((runtime) => {
-        const enqueueSystemEvent = runtime.enqueueSystemEvent;
-
+    loadDispatchRuntime(log)
+      .then(({ dispatchInboundReplyWithBase }) => {
         const inboxRoot = pluginCfg.inboxRoot
           ?? pluginCfg.inboxDir // legacy field name, v2.0.x
           ?? join(homedir(), ".agent-bridge", "inbox");
         const pollIntervalMs = pluginCfg.pollIntervalMs;
 
         log.info(
-          `session-injection mode: agentId="${agentId}", inboxRoot=${inboxRoot}, targets=[${Object.keys(targets).join(", ")}]`,
+          `dispatch mode: agentId="${agentId}", inboxRoot=${inboxRoot}, targets=[${Object.keys(targets).join(", ")}]`,
         );
 
         stopWatcher = startInboxWatcher({
@@ -150,92 +177,166 @@ export default {
             const target = ctx.target;
             const fromMachine = msg.from ?? "unknown";
             const body = formatInboundBody(msg);
+            const rawContent = String(msg.content ?? "");
 
-            // Session key format: agent:<agentId>:<channel>:<account>:direct:<peerId>.
-            // Matches the format OpenClaw uses internally for direct-peer
-            // sessions; we build it here so bridge inbound messages join the
-            // existing conversation rather than spawning a new one.
-            const sessionKey = target.config.legacy_session
-              ? `${AGENT_BRIDGE_CHANNEL_ID}:${fromMachine}`
-              : buildSessionKey({
-                  agentId: target.config.agent_id ?? agentId,
-                  channel: target.config.openclaw_channel ?? "telegram",
-                  account: target.config.account ?? target.name,
-                  peerId: target.config.peer_id,
-                });
+            const targetChannel = target.config.openclaw_channel ?? "telegram";
+            const account = target.config.account ?? target.name;
+            const peerId = target.config.peer_id;
 
-            // Remember the origin machine for in-session outbound replies,
-            // in case the agent DOES reply over the bridge (the Telegram
-            // session's lastChannel is normally Telegram, but cross-harness
-            // bridge replies still need to route).
-            //
-            // Also stash the incoming BridgeMessage and the OpenClaw target's
-            // own ID so channel-plugin.js :: sendText can populate
-            // `reply.target` from `incoming.fromTarget` for proper round-trip
-            // routing back to the ORIGINAL sender's session
-            // (refinement 3 — 2026-04-20).
-            const ownTarget = `openclaw/${target.name}`;
-            const hit = { fromMachine, incoming: msg, ownTarget };
-            replyTargets.set(sessionKey, hit);
-            replyTargets.set(String(fromMachine), hit);
-            // Keyed by target subdir name too, so `ctx.accountId` hints in
-            // the outbound adapter still resolve.
-            replyTargets.set(`${AGENT_BRIDGE_CHANNEL_ID}:${fromMachine}`, hit);
-            replyTargets.set(target.name, hit);
+            if (!peerId) {
+              throw new Error(
+                `target "${target.name}" has no peer_id — cannot resolve session`,
+              );
+            }
 
-            // Security: trusted=false — SSH pairing is not a first-party
-            // trust boundary, so inbound content is treated as third-party.
-            const enqueueOpts = {
-              sessionKey,
-              contextKey: fromMachine,
-              trusted: false,
-            };
+            // Legacy: targets flagged as legacy_session bypass session
+            // injection and rely purely on the native agent-bridge channel.
+            // Register reply target and return early.
+            if (target.config.legacy_session) {
+              const sessionKey = `${AGENT_BRIDGE_CHANNEL_ID}:${fromMachine}`;
+              registerReplyTarget(replyTargets, {
+                sessionKey,
+                fromMachine,
+                incoming: msg,
+                target,
+              });
+              log.warn(
+                `inbound ${msg.id} from ${fromMachine} target=${target.name} `
+                + `is legacy_session — no session injection performed. `
+                + `Configure a real openclaw_channel + peer_id to enable dispatch.`,
+              );
+              return;
+            }
 
-            // Pre-inject diagnostics: log sessionKey + any session-lookup
-            // hint before the enqueueSystemEvent call so, if the call hangs
-            // or the session doesn't exist, we at least see what we tried.
-            // OpenClaw's plugin-sdk currently exposes no `hasSession` /
-            // `getSession` helper to us, so we log the resolved key plus a
-            // note that existence is confirmed by the boolean return.
-            const sessionProbe = probeSession(api, sessionKey);
-            log.info(
-              `about to inject ${msg.id} from ${fromMachine} target=${target.name} `
-              + `sessionKey=${sessionKey} probe=${sessionProbe}`,
+            // Resolve the canonical agent route. This uses the SDK's
+            // dmScope-aware session-key builder (session-key-CbP51u9x.js:175),
+            // so we don't need to hand-build the key.
+            const route = runtime.channel.routing.resolveAgentRoute({
+              cfg: hostCfg,
+              channel: targetChannel,
+              accountId: account,
+              peer: {
+                kind: "direct",
+                id: String(peerId),
+              },
+            });
+
+            const storePath = runtime.channel.session.resolveStorePath(
+              hostCfg?.session?.store,
+              { agentId: route.agentId },
             );
 
-            let ok = false;
+            // Build the synthetic inbound ctxPayload. Provider/Surface and
+            // OriginatingChannel/OriginatingTo steer the reply back through
+            // the live telegram outbound — exactly how a real inbound
+            // telegram message looks to dispatchReplyFromConfig.
+            const ctxPayload = runtime.channel.reply.finalizeInboundContext({
+              Body: body,
+              RawBody: rawContent,
+              CommandBody: rawContent,
+              From: `${targetChannel}:${peerId}`,
+              To: `${targetChannel}:${peerId}`,
+              SessionKey: route.sessionKey,
+              AccountId: route.accountId,
+              ChatType: "direct",
+              ConversationLabel: String(fromMachine ?? "agent-bridge"),
+              SenderId: String(peerId),
+              SenderName: String(fromMachine ?? "agent-bridge"),
+              Provider: targetChannel,
+              Surface: targetChannel,
+              MessageSid: msg.id,
+              Timestamp: msg.timestamp
+                ? (Number.isFinite(Number(msg.timestamp))
+                  ? Number(msg.timestamp)
+                  : Date.parse(msg.timestamp) || Date.now())
+                : Date.now(),
+              OriginatingChannel: targetChannel,
+              OriginatingTo: `${targetChannel}:${peerId}`,
+              // CommandAuthorized defaults via finalizeInboundContext; bridge
+              // content is untrusted, so we don't flip it on.
+            });
+
+            // Track reply target in case the agent DOES reply through the
+            // native agent-bridge channel (cross-harness flows).
+            const ownTarget = `${AGENT_BRIDGE_CHANNEL_ID.includes("openclaw") ? "" : "openclaw/"}${target.name}`;
+            registerReplyTarget(replyTargets, {
+              sessionKey: route.sessionKey,
+              fromMachine,
+              incoming: msg,
+              target,
+              ownTarget: `openclaw/${target.name}`,
+            });
+
+            log.info(
+              `about to dispatch ${msg.id} from ${fromMachine} target=${target.name} `
+              + `route.sessionKey=${route.sessionKey} channel=${targetChannel} accountId=${route.accountId}`,
+            );
+
             try {
-              ok = enqueueSystemEvent(body, enqueueOpts);
+              await dispatchInboundReplyWithBase({
+                cfg: hostCfg,
+                channel: targetChannel,
+                accountId: route.accountId,
+                route,
+                storePath,
+                ctxPayload,
+                core: runtime,
+                deliver: async (payload) => {
+                  // For targetChannel="telegram" we delegate to the live
+                  // telegram outbound registered on the host. `payload.text`
+                  // is the streamed reply text. Media goes through
+                  // telegram's attachment url list but we intentionally
+                  // keep this to text-only for bridge replies.
+                  const deliverFn = resolveProviderDeliver({
+                    runtime,
+                    targetChannel,
+                  });
+                  if (!deliverFn) {
+                    throw new Error(
+                      `no outbound delivery function for channel="${targetChannel}" on this host`,
+                    );
+                  }
+                  const text = payload?.text ?? "";
+                  if (!text.trim()) return;
+                  await deliverFn({
+                    to: String(peerId),
+                    text,
+                    cfg: hostCfg,
+                    accountId: route.accountId,
+                    replyToId: payload?.replyToId,
+                  });
+                },
+                onRecordError: (err) => {
+                  log.error(
+                    `dispatch ${msg.id}: recordInboundSession failed sessionKey=${route.sessionKey}: `
+                    + `${err?.message ?? err} — stack: ${err?.stack ?? "(no stack)"}`,
+                  );
+                },
+                onDispatchError: (err, info) => {
+                  log.error(
+                    `dispatch ${msg.id}: ${info?.kind ?? "reply"} failed sessionKey=${route.sessionKey}: `
+                    + `${err?.message ?? err} — stack: ${err?.stack ?? "(no stack)"}`,
+                  );
+                },
+              });
             } catch (err) {
-              // Bug 3: surface the exception with full context, then rethrow
-              // so the watcher moves the file to .failed/ rather than
-              // re-processing it on every poll.
               log.error(
-                `enqueueSystemEvent threw for ${msg.id} sessionKey=${sessionKey} `
+                `dispatchInboundReplyWithBase threw for ${msg.id} sessionKey=${route.sessionKey} `
                 + `target=${target.name}: ${err?.message ?? err} — `
                 + `stack: ${err?.stack ?? "(no stack)"}`,
               );
               throw err;
             }
-            if (!ok) {
-              log.warn(
-                `inbound ${msg.id} from ${fromMachine} target=${target.name} was NOT enqueued `
-                + `(host rejected, possibly no active session for sessionKey=${sessionKey}) — `
-                + `file will be moved to .failed/`,
-              );
-              throw new Error(
-                `enqueueSystemEvent rejected ${msg.id} for session ${sessionKey}`,
-              );
-            }
+
             log.info(
-              `inbound ${msg.id} from ${fromMachine} target=${target.name} injected into session ${sessionKey}`,
+              `dispatched ${msg.id} from ${fromMachine} target=${target.name} sessionKey=${route.sessionKey}`,
             );
           },
         });
       })
       .catch((err) => {
         log.error(
-          `failed to load plugin-sdk system-events dispatcher: ${err?.stack || err}`,
+          `failed to load plugin-sdk dispatch primitives: ${err?.stack || err}`,
         );
       });
 
@@ -253,32 +354,43 @@ export default {
 };
 
 /**
- * Resolve the global OpenClaw config off the plugin `api` object. Different
- * OpenClaw host builds expose this under different keys; we try the common
- * shapes and fall back to `{}` (auto-discovery simply yields no targets).
+ * Register reply-target hints for the outbound SCP path. Keyed by a few
+ * plausible lookup shapes so the outbound adapter can find the origin
+ * machine regardless of which ctx field the host passes through.
  */
-function resolveOpenClawConfig(api) {
-  if (!api || typeof api !== "object") return {};
-  const candidates = [
-    api.openclawConfig,
-    api.hostConfig,
-    api.globalConfig,
-    api.config,
-    typeof api.getConfig === "function" ? safeCall(api.getConfig) : null,
-    typeof api.getHostConfig === "function" ? safeCall(api.getHostConfig) : null,
-  ];
-  for (const cfg of candidates) {
-    if (cfg && typeof cfg === "object") return cfg;
+function registerReplyTarget(replyTargets, { sessionKey, fromMachine, incoming, target, ownTarget }) {
+  const hit = { fromMachine, incoming, ownTarget };
+  if (sessionKey) replyTargets.set(sessionKey, hit);
+  if (fromMachine) replyTargets.set(String(fromMachine), hit);
+  if (fromMachine) {
+    replyTargets.set(`${AGENT_BRIDGE_CHANNEL_ID}:${fromMachine}`, hit);
   }
-  return {};
+  if (target?.name) replyTargets.set(target.name, hit);
 }
 
-function safeCall(fn) {
-  try {
-    return fn();
-  } catch {
-    return null;
+/**
+ * Resolve the provider-specific outbound delivery function for the given
+ * channel. Returns a uniform `(args) => Promise<void>` or null if the host
+ * doesn't expose that channel's runtime. We deliberately only plumb
+ * telegram because that's the tested path; adding discord / slack etc. is
+ * a one-line addition here.
+ *
+ * Args: `{ to, text, cfg, accountId, replyToId }`.
+ */
+function resolveProviderDeliver({ runtime, targetChannel }) {
+  if (targetChannel === "telegram") {
+    const sendMessageTelegram = runtime?.channel?.telegram?.sendMessageTelegram;
+    if (typeof sendMessageTelegram !== "function") return null;
+    return async ({ to, text, cfg, accountId, replyToId }) => {
+      await sendMessageTelegram(to, text, {
+        cfg,
+        accountId,
+        replyToMessageId: replyToId ? Number(replyToId) || undefined : undefined,
+      });
+    };
   }
+  // Future: discord/slack/signal/whatsapp — wire up analogously.
+  return null;
 }
 
 /**
@@ -400,9 +512,7 @@ function autoDiscoverFromTelegram({ pluginCfg, openclawGlobalCfg, log }) {
     }
     const account = accounts[accountName] ?? {};
     const allowFrom = Array.isArray(account.allowFrom) ? account.allowFrom : [];
-    const firstAllowChatId = allowFrom.find(
-      (v) => typeof v === "string" || typeof v === "number",
-    );
+    const firstAllowChatId = firstNumericAllowEntry(allowFrom);
     const peerId =
       pluginPeer ??
       account.peer_id ??
@@ -429,6 +539,22 @@ function autoDiscoverFromTelegram({ pluginCfg, openclawGlobalCfg, log }) {
   return out;
 }
 
+/**
+ * allowFrom entries can be strings like "telegram:6164541473" or bare
+ * numerics. Pull the first one that's usable as a numeric Telegram id.
+ */
+function firstNumericAllowEntry(allowFrom) {
+  for (const raw of allowFrom) {
+    if (raw == null) continue;
+    const s = String(raw).trim();
+    if (!s) continue;
+    // Strip a "telegram:" / "tg:" prefix if present.
+    const stripped = s.replace(/^telegram:/i, "").replace(/^tg:/i, "");
+    if (/^-?\d+$/.test(stripped)) return stripped;
+  }
+  return null;
+}
+
 function isValidTargetName(name) {
   return (
     typeof name === "string" &&
@@ -436,87 +562,44 @@ function isValidTargetName(name) {
   );
 }
 
-function buildSessionKey({ agentId, channel, account, peerId }) {
-  // agent:main:telegram:<account>:direct:<peerId>
-  return `agent:${agentId}:${channel}:${account}:direct:${peerId}`;
-}
-
 /**
- * Best-effort peek at host-side session existence for the given sessionKey.
- * OpenClaw's plugin-sdk doesn't currently expose a stable lookup API, so we
- * probe a few plausible names and fall back to "unknown" without throwing.
- * Used purely for diagnostic logging.
- */
-function probeSession(api, sessionKey) {
-  if (!api || typeof sessionKey !== "string") return "unknown(no-api)";
-  const candidates = [
-    api.hasSession,
-    api.getSession,
-    api.lookupSession,
-    api.sessions && api.sessions.has ? api.sessions.has.bind(api.sessions) : null,
-    api.sessions && api.sessions.get ? api.sessions.get.bind(api.sessions) : null,
-  ];
-  for (const fn of candidates) {
-    if (typeof fn !== "function") continue;
-    try {
-      const r = fn(sessionKey);
-      if (r === true) return "exists";
-      if (r === false) return "missing(will-create)";
-      if (r && typeof r === "object") return "exists";
-      if (r == null) return "missing(will-create)";
-      return `unknown(${typeof r})`;
-    } catch (err) {
-      return `probe-error(${err?.message ?? err})`;
-    }
-  }
-  return "unknown(no-lookup-api)";
-}
-
-/**
- * Dynamically import the plugin-sdk dispatch API. We import lazily so that
- * `node --check src/index.js` succeeds even when the plugin-sdk isn't on the
- * resolver path (e.g. in CI or during local type-check).
+ * Dynamically import the plugin-sdk dispatch primitives. Same resolver
+ * strategy as v2.1.x loadSystemEvents — try bare `openclaw/plugin-sdk/...`
+ * ESM first, then walk upwards from the openclaw CLI entry to find a
+ * node_modules root we can `createRequire` from.
  *
- * Returns `{ enqueueSystemEvent }`. Matches the built-in telegram channel's
- * pattern — enqueueSystemEvent alone is sufficient; the event loop picks up
- * queued events automatically.
+ * Returns `{ dispatchInboundReplyWithBase, recordInboundSessionAndDispatchReply }`.
  */
-async function loadSystemEvents(log) {
-  // enqueueSystemEvent is re-exported from several plugin-sdk subpaths
-  // depending on host version. Try them in order of most-likely to work.
-  const subpaths = [
-    "plugin-sdk/infra-runtime",
-    "plugin-sdk/channel-runtime",
-    "plugin-sdk/channel-core",
-    "plugin-sdk/channel-inbound",
-  ];
+async function loadDispatchRuntime(log) {
+  // The compat subpath re-exports the inbound-reply-dispatch functions as
+  // of openclaw 2026.3.13 (see plugin-sdk/compat.js). That's our canonical
+  // import. We try both compat and the direct inbound-reply-dispatch file
+  // for resilience across host versions.
+  const subpaths = ["plugin-sdk/compat"];
   const errors = [];
 
   const mergeExports = (mod) => ({
-    enqueueSystemEvent: mod.enqueueSystemEvent,
+    dispatchInboundReplyWithBase: mod.dispatchInboundReplyWithBase,
+    recordInboundSessionAndDispatchReply: mod.recordInboundSessionAndDispatchReply,
   });
 
-  // Strategy 1: direct `openclaw/...` ESM import. Works when the plugin is
-  // loaded via a mechanism that gives it access to the host's node_modules
-  // (npm link, npm install, or a host that injects node_modules into the
-  // plugin's resolution root).
+  const isValid = (mod) =>
+    typeof mod?.dispatchInboundReplyWithBase === "function";
+
+  // Strategy 1: direct `openclaw/...` ESM import.
   for (const sub of subpaths) {
     const spec = `openclaw/${sub}`;
     try {
       const mod = await import(spec);
-      if (typeof mod.enqueueSystemEvent === "function") {
-        return mergeExports(mod);
-      }
-      errors.push(`${spec}: loaded but missing enqueueSystemEvent`);
+      if (isValid(mod)) return mergeExports(mod);
+      errors.push(`${spec}: loaded but missing dispatchInboundReplyWithBase`);
     } catch (err) {
       errors.push(`${spec}: ${err?.message || err}`);
     }
   }
 
-  // Strategy 2: resolve via the host's own node_modules. On a typical install
-  // `openclaw` is a globally linked package whose absolute path we can walk
-  // up from `process.argv[1]` (the openclaw CLI entry) or discover via the
-  // parent `openclaw` binary/module on disk.
+  // Strategy 2: resolve via the host's own node_modules. Walk up from the
+  // openclaw CLI entry.
   try {
     const { createRequire } = await import("node:module");
     const { dirname, resolve: resolvePath } = await import("node:path");
@@ -552,10 +635,8 @@ async function loadSystemEvents(log) {
               try {
                 const modPath = req.resolve(`openclaw/${sub}`);
                 const mod = await import(modPath);
-                if (typeof mod.enqueueSystemEvent === "function") {
-                  return mergeExports(mod);
-                }
-                errors.push(`resolved ${modPath}: missing enqueueSystemEvent`);
+                if (isValid(mod)) return mergeExports(mod);
+                errors.push(`resolved ${modPath}: missing dispatchInboundReplyWithBase`);
               } catch (err) {
                 errors.push(
                   `createRequire(${pkgPath}) → openclaw/${sub}: ${err?.message || err}`,
@@ -577,7 +658,7 @@ async function loadSystemEvents(log) {
   }
 
   throw new Error(
-    `unable to load plugin-sdk dispatch API (enqueueSystemEvent): ${errors.join("; ")}`,
+    `unable to load plugin-sdk dispatch primitives (dispatchInboundReplyWithBase): ${errors.join("; ")}`,
   );
 }
 

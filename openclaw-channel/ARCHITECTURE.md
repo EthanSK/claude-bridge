@@ -46,39 +46,87 @@ channel.
 
 ## Inbound dispatch
 
-Inbound messages are injected into the running agent session via
-`enqueueSystemEvent` from `openclaw/plugin-sdk/channel-core` (or
-`/channel-inbound` on older hosts — we try both). This is the same public
-API the built-in channels use for out-of-band system injections, and it
-lets us push a message without any CLI shell-out.
+Inbound messages are dispatched into the running agent session via
+`dispatchInboundReplyWithBase` from `openclaw/plugin-sdk/compat`. This is
+the SAME dispatch primitive the built-in IRC and Nextcloud Talk channels
+use, and it drives the same `dispatchReplyFromConfig` path the native
+Telegram bot drives for every real incoming message. It synchronously
+runs an agent turn for our synthetic `ctxPayload` and routes the reply
+back through the live Telegram outbound.
 
-As of **v2.1.0** the session key is derived from the per-target config, so
-bridge messages land in the SAME session the user is already talking to on
-Telegram — the agent answers back over Telegram, not back over the bridge.
-
-We use `enqueueSystemEvent` alone, matching the built-in telegram channel's
-pattern. No heartbeat call needed — the event loop picks up queued events
-automatically. (Earlier drafts called `requestHeartbeatNow` after enqueueing;
-verified via direct SDK read on 2026-04-20 that the built-in telegram channel
-doesn't do this, so we dropped it too.)
+As of **v2.2.0** we no longer use `enqueueSystemEvent`. That function is
+pure queueing — it only prepends a `System:` line to the next
+naturally-scheduled turn's prompt and does NOT trigger a turn on its own.
+See `openclaw-channel/docs/ACTUAL-SESSION-INJECTION-RESEARCH-2026-04-20.md`
+§4 for the full analysis.
 
 ```js
-const { enqueueSystemEvent } =
-  await import("openclaw/plugin-sdk/infra-runtime");
+// runtime = api.runtime (PluginRuntime)
+// hostCfg = api.config (OpenClawConfig)
 
-// Session key format: agent:<agentId>:<channel>:<account>:direct:<peerId>
-const sessionKey = `agent:${agentId}:${target.openclaw_channel}:${target.account}:direct:${target.peer_id}`;
+const route = runtime.channel.routing.resolveAgentRoute({
+  cfg: hostCfg,
+  channel: "telegram",
+  accountId: target.account,
+  peer: { kind: "direct", id: target.peer_id },
+});
 
-enqueueSystemEvent(envelopeText, {
-  sessionKey,
-  contextKey: fromMachine,
-  trusted: false,            // SSH pairing is not a first-party trust boundary
+const storePath = runtime.channel.session.resolveStorePath(
+  hostCfg?.session?.store,
+  { agentId: route.agentId },
+);
+
+const ctxPayload = runtime.channel.reply.finalizeInboundContext({
+  Body: envelopeText,
+  RawBody: raw,
+  CommandBody: raw,
+  From: `telegram:${peerId}`,
+  To: `telegram:${peerId}`,
+  SessionKey: route.sessionKey,
+  AccountId: route.accountId,
+  ChatType: "direct",
+  Provider: "telegram",
+  Surface: "telegram",
+  OriginatingChannel: "telegram",       // <-- steers reply routing
+  OriginatingTo: `telegram:${peerId}`,  // <-- ditto
+  MessageSid: msg.id,
+  Timestamp: Date.now(),
+});
+
+await dispatchInboundReplyWithBase({
+  cfg: hostCfg,
+  channel: "telegram",
+  accountId: route.accountId,
+  route,
+  storePath,
+  ctxPayload,
+  core: runtime,
+  deliver: async (payload) => {
+    await runtime.channel.telegram.sendMessageTelegram(
+      String(peerId), payload.text, { cfg: hostCfg, accountId: route.accountId },
+    );
+  },
+  onRecordError: (err) => log.error(...),
+  onDispatchError: (err, info) => log.error(...),
 });
 ```
 
-`deliveryContext` is intentionally omitted — letting the target session's
-own `lastChannel` drive reply routing is simpler and means the bridge
-message round-trips through Telegram naturally.
+### Reply routing uses OriginatingChannel, not lastChannel
+
+Replies are routed via `ctx.OriginatingChannel` + `ctx.OriginatingTo`
+(see `route-reply-CQe8rYFT.js:17-23` docstring). The session's persisted
+`lastChannel` is only a fallback for out-of-band / heartbeat / scheduled
+sends — NOT for in-turn replies. This protects us from `lastChannel`
+drifting (heartbeat runs set it to `webchat/heartbeat`) and is what every
+native channel does.
+
+### Session key resolution is SDK-driven
+
+We no longer hand-construct the session key. `resolveAgentRoute` uses
+`cfg.session.dmScope` internally, so the same code works regardless of
+whether Ethan's configured dmScope is `main`, `per-peer`,
+`per-channel-peer`, or `per-account-channel-peer` (current default —
+produces `agent:main:telegram:<account>:direct:<peerId>`).
 
 The envelope is formatted as a `<channel source="agent-bridge" from="..."
 to="..." target="..." message_id="..." ts="..." reply_to="...">content</channel>`
