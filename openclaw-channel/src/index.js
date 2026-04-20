@@ -370,26 +370,56 @@ function registerReplyTarget(replyTargets, { sessionKey, fromMachine, incoming, 
 
 /**
  * Resolve the provider-specific outbound delivery function for the given
- * channel. Returns a uniform `(args) => Promise<void>` or null if the host
- * doesn't expose that channel's runtime. We deliberately only plumb
- * telegram because that's the tested path; adding discord / slack etc. is
- * a one-line addition here.
+ * channel. Returns a uniform `async (args) => Promise<void>` or null.
+ *
+ * Two strategies, tried in order:
+ *
+ * 1. **2026.4.15+ generic path.** `runtime.channel.outbound.loadAdapter(
+ *    channelId)` returns a `ChannelOutboundAdapter` whose `sendText(ctx)`
+ *    we invoke. Same adapter the dispatcher uses internally for cross-
+ *    channel `routeReply`. Works for any registered provider channel.
+ * 2. **≤ 2026.4.14 provider-namespaced path.** Earlier SDKs exposed
+ *    per-provider functions like `runtime.channel.telegram.sendMessageTelegram`
+ *    directly. Fall back to that if `outbound.loadAdapter` isn't there.
  *
  * Args: `{ to, text, cfg, accountId, replyToId }`.
  */
 function resolveProviderDeliver({ runtime, targetChannel }) {
-  if (targetChannel === "telegram") {
-    const sendMessageTelegram = runtime?.channel?.telegram?.sendMessageTelegram;
-    if (typeof sendMessageTelegram !== "function") return null;
+  // Strategy 1: 2026.4.15+ generic adapter loader.
+  const loadAdapter = runtime?.channel?.outbound?.loadAdapter;
+  if (typeof loadAdapter === "function") {
     return async ({ to, text, cfg, accountId, replyToId }) => {
-      await sendMessageTelegram(to, text, {
+      const adapter = await loadAdapter(targetChannel);
+      if (!adapter || typeof adapter.sendText !== "function") {
+        throw new Error(
+          `channel.outbound.loadAdapter("${targetChannel}") returned no sendText adapter`,
+        );
+      }
+      await adapter.sendText({
         cfg,
-        accountId,
-        replyToMessageId: replyToId ? Number(replyToId) || undefined : undefined,
+        to: String(to),
+        text,
+        accountId: accountId ?? null,
+        replyToId: replyToId ?? null,
       });
     };
   }
-  // Future: discord/slack/signal/whatsapp — wire up analogously.
+
+  // Strategy 2: legacy per-provider function.
+  if (targetChannel === "telegram") {
+    const sendMessageTelegram = runtime?.channel?.telegram?.sendMessageTelegram;
+    if (typeof sendMessageTelegram === "function") {
+      return async ({ to, text, cfg, accountId, replyToId }) => {
+        await sendMessageTelegram(String(to), text, {
+          cfg,
+          accountId,
+          replyToMessageId: replyToId ? Number(replyToId) || undefined : undefined,
+        });
+      };
+    }
+  }
+  // Future: discord/slack/signal/whatsapp legacy fields — only if we ever
+  // need to support a host that old.
   return null;
 }
 
@@ -571,11 +601,15 @@ function isValidTargetName(name) {
  * Returns `{ dispatchInboundReplyWithBase, recordInboundSessionAndDispatchReply }`.
  */
 async function loadDispatchRuntime(log) {
-  // The compat subpath re-exports the inbound-reply-dispatch functions as
-  // of openclaw 2026.3.13 (see plugin-sdk/compat.js). That's our canonical
-  // import. We try both compat and the direct inbound-reply-dispatch file
-  // for resilience across host versions.
-  const subpaths = ["plugin-sdk/compat"];
+  // On openclaw 2026.4.15+ `plugin-sdk/compat` no longer re-exports the
+  // dispatch primitives (OPENCLAW_PLUGIN_SDK_COMPAT_DEPRECATED warning +
+  // functions removed from the re-export list). Use the focused subpath
+  // `plugin-sdk/inbound-reply-dispatch` first, then fall back to `compat`
+  // for older hosts (2026.3.x) that still re-export through it.
+  const subpaths = [
+    "plugin-sdk/inbound-reply-dispatch", // new canonical (2026.4.15+)
+    "plugin-sdk/compat",                 // legacy fallback (≤ 2026.4.14)
+  ];
   const errors = [];
 
   const mergeExports = (mod) => ({
