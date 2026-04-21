@@ -1,5 +1,46 @@
 # Changelog
 
+## agent-bridge 3.4.2 — 2026-04-21
+
+### Fix: prefer `internet_host` (Tailscale) over LAN when configured — no fallback
+
+Previously, `agent-bridge status`, `agent-bridge run`, `bridge_send_message`,
+`bridge_run_command`, `bridge_status`, etc. all probed the LAN `host` first
+and only fell back to `internet_host` on SSH exit 255. On a foreign Wi-Fi
+network the LAN probe to (e.g.) `192.168.1.58` would time out, the fallback
+mechanism would kick in, but `agent-bridge status` still reported the peer
+as unreachable when what it actually meant was "LAN is unreachable (and we
+already know it will be, because I'm not at home)."
+
+As of 3.4.2: **if `internet_host` is configured in `~/.agent-bridge/config`
+for a peer, the CLI and MCP server ALWAYS use it and do NOT fall back to
+LAN.** The LAN `host` field is only used when `internet_host` is absent.
+Tailscale works from any network; LAN only works from home — preferring
+Tailscale unconditionally is simpler and removes a whole class of
+"reports unreachable despite peer being online" bugs.
+
+Changed:
+
+- `mcp-server/src/ssh.ts`: `sshExec` now picks a single endpoint
+  (`internetHost` when set, else LAN) and does not fall back on exit 255.
+  Transient client-side retries (`Address already in use` etc.) still happen
+  on the same endpoint.
+- `mcp-server/src/ssh.ts`: new `sshPingDetailed()` returns which path was
+  used so callers can surface it. `sshPing()` is a thin boolean wrapper kept
+  for compatibility.
+- `mcp-server/src/pathCache.ts`: `pathOrder()` now returns a single entry
+  based on the new policy. The path cache is still written for
+  observability, but no longer drives endpoint selection.
+- `mcp-server/src/tools.ts`: `bridge_status` output includes `via lan` /
+  `via internet` so the chosen path is obvious. The `probe` flag is now a
+  no-op (kept for compatibility).
+- `agent-bridge` (bash CLI): `status`, `connect`, `run`, and
+  `ssh_exec_with_fallback` now pick a single endpoint with no retry loop.
+  `status` output clearly shows `via LAN` or `via internet`.
+- `agent-bridge reset-path` and the `--probe/--fresh` status flags are
+  retained as no-ops for backwards compatibility.
+- Versions: CLI `3.3.0 → 3.4.2`, `mcp-server 3.4.1 → 3.4.2`.
+
 ## mcp-server 3.4.1 — 2026-04-20
 
 ### Fix: orphan mcp-server instances race on `inbox/claude-code/` causing delivery starvation

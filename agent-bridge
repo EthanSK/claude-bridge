@@ -9,7 +9,7 @@ set -euo pipefail
 
 INVOKED_AS="$(basename "$0")"
 
-VERSION="3.3.0"
+VERSION="3.4.2"
 
 # -- Colours (ANSI) ----------------------------------------------------------
 RED='\033[0;31m'
@@ -653,33 +653,20 @@ path_cache_clear() {
   chmod 600 "$PATH_CACHE_FILE" 2>/dev/null || true
 }
 
-# Print the order in which to attempt paths for <machine>, one per line.
-# With cache bypass (PATH_CACHE_BYPASS=1), always emits "lan\ninternet".
-# Otherwise: cached-fresh -> cached path first, alt second.
-#           stale/missing -> lan first, internet second.
-# Callers can iterate the output.
+# DEPRECATED (3.4.2+). No longer consulted by the new Tailscale-first
+# endpoint selection. Kept as a no-op shim so external callers/tests that
+# source this script don't trip on a missing function.
 path_cache_order() {
-  local machine="$1"
-  if [ "${PATH_CACHE_BYPASS:-0}" = "1" ]; then
-    printf 'lan\ninternet\n'
-    return 0
-  fi
-  if path_cache_is_fresh "$machine"; then
-    local cached
-    cached="$(path_cache_read "$machine")"
-    case "$cached" in
-      lan)      printf 'lan\ninternet\n' ; return 0 ;;
-      internet) printf 'internet\nlan\n' ; return 0 ;;
-    esac
-  fi
-  printf 'lan\ninternet\n'
+  local _machine="$1"
+  printf 'internet\nlan\n'
 }
 
-# -- SSH helpers with dual-endpoint fallback ----------------------------------
-# Try cached path first (if fresh), fall back to the other. Timeouts: 3s for LAN
-# when a fallback exists, 10s for internet, 10s when there's no fallback at all.
-# Usage: ssh_with_fallback <machine> <ssh_args...>
-# Sets SSH_FALLBACK_USED=1 if internet fallback was used.
+# -- SSH helpers (3.4.2+: Tailscale-first, no fallback) ----------------------
+# Policy: If `internet_host` is configured for a peer, ALWAYS use it and do
+# NOT fall back to LAN. If it is absent, use LAN. LAN probes only succeed
+# from home, so the old LAN-first-then-internet retry pattern produced
+# misleading "unreachable" reports when on foreign Wi-Fi.
+# SSH_FALLBACK_USED is retained for ABI compatibility but is always 0.
 SSH_FALLBACK_USED=0
 
 # SSH exit 255 is ambiguous: it can mean "ssh itself failed to connect" OR
@@ -752,6 +739,9 @@ ssh_build_args_for() {
 }
 
 ssh_exec_with_fallback() {
+  # 3.4.2+ policy: Tailscale-first, no fallback. The "with_fallback" name is
+  # kept for backwards-compatibility; the function now picks a single
+  # endpoint (internet when configured, LAN otherwise) and runs once.
   local machine="$1"
   shift
   local extra_args=("$@")
@@ -762,85 +752,27 @@ ssh_exec_with_fallback() {
   internet_host="$(cfg_get "$machine" internet_host 2>/dev/null || true)"
   internet_port="$(cfg_get "$machine" internet_port 2>/dev/null || printf '22')"
 
-  local has_fallback=0
-  [ -n "$internet_host" ] && has_fallback=1
-
   SSH_FALLBACK_USED=0
 
-  # No internet fallback configured — single-path mode, no cache involvement.
-  if [ "$has_fallback" = "0" ]; then
-    local lan_args
-    readarray -t lan_args < <(ssh_build_args_for "$machine" "$host" "$port" "10")
-    lan_args+=("${extra_args[@]}")
-    local lan_exit=0
-    ssh "${lan_args[@]}" || lan_exit=$?
-    # Any non-255 exit means SSH connected; the command's own exit code still
-    # belongs to the caller, but the path itself is reachable.
-    [ "$lan_exit" -ne 255 ] && path_cache_write "$machine" "lan" 2>/dev/null || true
-    return "$lan_exit"
+  local try_host try_port chosen
+  if [ -n "$internet_host" ]; then
+    try_host="$internet_host"; try_port="$internet_port"; chosen="internet"
+  else
+    try_host="$host"; try_port="$port"; chosen="lan"
   fi
 
-  # Both paths available. Try them in the cache-informed order.
-  local order
-  order="$(path_cache_order "$machine")"
+  local try_args
+  readarray -t try_args < <(ssh_build_args_for "$machine" "$try_host" "$try_port" "10")
+  try_args+=("${extra_args[@]}")
 
-  local last_exit=0
-  local stderr_file client_log
-  stderr_file="$(mktemp -t ab-ssh-err.XXXXXX)"
-  client_log="$(mktemp -t ab-ssh-log.XXXXXX)"
-  trap 'rm -f "$stderr_file" "$client_log"' RETURN
-  local attempt
-  while IFS= read -r attempt; do
-    [ -z "$attempt" ] && continue
-    local try_host try_port try_timeout
-    if [ "$attempt" = "lan" ]; then
-      try_host="$host"; try_port="$port"; try_timeout=3
-    else
-      try_host="$internet_host"; try_port="$internet_port"; try_timeout=10
-    fi
-
-    local try_args
-    # Pass the client log path so ssh_build_args_for adds -E + LogLevel=INFO.
-    # This captures connection-level failures even when stderr would be empty
-    # under the default LogLevel=ERROR.
-    readarray -t try_args < <(ssh_build_args_for "$machine" "$try_host" "$try_port" "$try_timeout" "$client_log")
-    try_args+=("${extra_args[@]}")
-
-    # Tee stderr so the user still sees it live and we can sniff it
-    # afterwards to distinguish connection failures from a remote 255 exit.
-    : > "$stderr_file"
-    : > "$client_log"
-    local try_exit=0
-    ssh "${try_args[@]}" 2> >(tee "$stderr_file" >&2) || try_exit=$?
-    # Give the tee subshell a moment to flush before we read.
-    wait 2>/dev/null || true
-    last_exit="$try_exit"
-
-    if [ "$try_exit" -ne 255 ]; then
-      # SSH connected (command may have failed, but the path is alive).
-      path_cache_write "$machine" "$attempt" 2>/dev/null || true
-      [ "$attempt" = "internet" ] && SSH_FALLBACK_USED=1
-      return "$try_exit"
-    fi
-
-    # Exit 255 — ambiguous. Check both stderr and the captured client log for
-    # the well-known connection-failure signatures. If neither has one, SSH
-    # did connect and the remote command is what returned 255.
-    local err_text
-    err_text="$(cat "$stderr_file" "$client_log" 2>/dev/null || printf '')"
-    if ! _ssh_is_connection_failure "$err_text"; then
-      # Remote-side 255 on a live connection. Record the cache win and
-      # return as-is.
-      path_cache_write "$machine" "$attempt" 2>/dev/null || true
-      [ "$attempt" = "internet" ] && SSH_FALLBACK_USED=1
-      return "$try_exit"
-    fi
-
-    # Connection failure on this path — try the next.
-  done <<< "$order"
-
-  # Both paths failed with exit 255.
-  return "$last_exit"
+  local try_exit=0
+  ssh "${try_args[@]}" || try_exit=$?
+  # Any non-255 exit means SSH connected; the command's own exit code still
+  # belongs to the caller, but the path itself is reachable.
+  if [ "$try_exit" -ne 255 ]; then
+    path_cache_write "$machine" "$chosen" 2>/dev/null || true
+  fi
+  return "$try_exit"
 }
 
 # -- Network helpers ----------------------------------------------------------
@@ -1436,88 +1368,31 @@ cmd_connect() {
   internet_host="$(cfg_get "$machine_name" internet_host 2>/dev/null || true)"
   internet_port="$(cfg_get "$machine_name" internet_port 2>/dev/null || printf '22')"
 
-  local has_fallback=0
-  [ -n "$internet_host" ] && has_fallback=1
-
-  printf '\n'
-  printf "${CYAN}  Connecting to ${BOLD}%s${RESET}${CYAN} (%s@%s)...${RESET}\n" "$machine_name" "$user" "$host"
-  printf '\n'
-
-  # Build the ordered list of paths to try (cache-informed).
-  local order
-  if [ "$has_fallback" = "1" ]; then
-    order="$(path_cache_order "$machine_name")"
+  # 3.4.2+ policy: Tailscale-first, no fallback.
+  local try_host try_port chosen
+  if [ -n "$internet_host" ]; then
+    try_host="$internet_host"; try_port="$internet_port"; chosen="internet"
   else
-    order="lan"
+    try_host="$host"; try_port="$port"; chosen="lan"
   fi
 
+  printf '\n'
+  printf "${CYAN}  Connecting to ${BOLD}%s${RESET}${CYAN} (%s@%s via %s)...${RESET}\n" \
+    "$machine_name" "$user" "$try_host" "$chosen"
+  printf '\n'
+
+  local args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-o" "ConnectTimeout=10" "-p" "$try_port")
+  if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
+    args+=("-i" "$keypath")
+  fi
+  args+=("${user}@${try_host}")
+
   local exit_code=0
-  local attempt announced_fallback=0
-  while IFS= read -r attempt; do
-    [ -z "$attempt" ] && continue
-    local try_host try_port try_timeout
-    if [ "$attempt" = "lan" ]; then
-      try_host="$host"; try_port="$port"
-      try_timeout=10
-      [ "$has_fallback" = "1" ] && try_timeout=3
-    else
-      try_host="$internet_host"; try_port="$internet_port"
-      try_timeout=10
-    fi
+  ssh "${args[@]}" || exit_code=$?
 
-    if [ "$announced_fallback" = "1" ]; then
-      dim "Trying ${attempt} path (${try_host}:${try_port})..."
-      printf '\n'
-    fi
-
-    local args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-o" "ConnectTimeout=${try_timeout}" "-p" "$try_port")
-    if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
-      args+=("-i" "$keypath")
-    fi
-    args+=("${user}@${try_host}")
-
-    exit_code=0
-    local start_s end_s elapsed_s
-    start_s="$(_ssh_now_s)"
-    ssh "${args[@]}" || exit_code=$?
-    end_s="$(_ssh_now_s)"
-    elapsed_s=$((end_s - start_s))
-
-    if [ "$exit_code" -ne 255 ]; then
-      # Connected (or connected then exited cleanly). Record success.
-      path_cache_write "$machine_name" "$attempt" 2>/dev/null || true
-      break
-    fi
-
-    # Exit 255 with an interactive session — stderr goes straight to the
-    # user's terminal (we don't tee here, to avoid disturbing TUI apps), so
-    # rely on elapsed wall-clock alone. There are three regimes:
-    #
-    #   elapsed >= try_timeout          => looks exactly like a ConnectTimeout
-    #                                      failure. Retry alternate.
-    #   elapsed >= try_timeout + 2 secs => definitely connected (user ran stuff).
-    #                                      Don't retry.
-    #   elapsed < try_timeout           => too quick to be a timeout. Could be
-    #                                      either a fast connection failure
-    #                                      (refused/unreachable) or a user
-    #                                      hitting `exit 255` immediately.
-    #                                      Retry alternate — a real user
-    #                                      session would normally last longer,
-    #                                      and a retry only pops another
-    #                                      interactive session that the user
-    #                                      can immediately exit if unwanted.
-    local session_floor=$((try_timeout + 2))
-    if [ "$elapsed_s" -ge "$session_floor" ]; then
-      # Must have connected and the user actually used the session. Don't retry.
-      path_cache_write "$machine_name" "$attempt" 2>/dev/null || true
-      break
-    fi
-
-    # Connection failure on this path — note and loop for the next one.
-    printf '\n'
-    dim "${attempt} connection failed (SSH exit 255, ${elapsed_s}s)."
-    announced_fallback=1
-  done <<< "$order"
+  if [ "$exit_code" -ne 255 ]; then
+    path_cache_write "$machine_name" "$chosen" 2>/dev/null || true
+  fi
 
   printf '\n'
   if [ "$exit_code" -eq 0 ]; then
@@ -1572,75 +1447,39 @@ cmd_run() {
   internet_host="$(cfg_get "$machine_name" internet_host 2>/dev/null || true)"
   internet_port="$(cfg_get "$machine_name" internet_port 2>/dev/null || printf '22')"
 
-  local has_fallback=0
-  [ -n "$internet_host" ] && has_fallback=1
-
-  printf "${DIM}  Running command on %s...${RESET}\n" "$machine_name"
-  log_event info "cli.run.start" "running command on $machine_name" "{\"machine\":\"$machine_name\",\"command_length\":${#command}}"
-
-  # Cache-informed attempt order (LAN-first when no cache or stale).
-  local order
-  if [ "$has_fallback" = "1" ]; then
-    order="$(path_cache_order "$machine_name")"
+  # 3.4.2+ policy: Tailscale-first, no fallback.
+  local try_host try_port chosen
+  if [ -n "$internet_host" ]; then
+    try_host="$internet_host"; try_port="$internet_port"; chosen="internet"
   else
-    order="lan"
+    try_host="$host"; try_port="$port"; chosen="lan"
   fi
+
+  printf "${DIM}  Running command on %s (via %s)...${RESET}\n" "$machine_name" "$chosen"
+  log_event info "cli.run.start" "running command on $machine_name" "{\"machine\":\"$machine_name\",\"path\":\"$chosen\",\"command_length\":${#command}}"
 
   local exit_code=0
   local stderr_file client_log
   stderr_file="$(mktemp -t ab-ssh-err.XXXXXX)"
   client_log="$(mktemp -t ab-ssh-log.XXXXXX)"
   trap 'rm -f "$stderr_file" "$client_log"' EXIT
-  local attempt
-  while IFS= read -r attempt; do
-    [ -z "$attempt" ] && continue
-    local try_host try_port try_timeout
-    if [ "$attempt" = "lan" ]; then
-      try_host="$host"; try_port="$port"
-      try_timeout=10
-      [ "$has_fallback" = "1" ] && try_timeout=3
-    else
-      try_host="$internet_host"; try_port="$internet_port"
-      try_timeout=10
-    fi
 
-    # Capture client-side SSH diagnostics via -E so connection failures are
-    # always visible even when stderr would be silent.
-    local args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "ConnectTimeout=${try_timeout}" "-p" "$try_port" "-E" "$client_log" "-o" "LogLevel=INFO")
-    if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
-      args+=("-i" "$keypath")
-    fi
-    args+=("${user}@${try_host}" "$command")
+  # Capture client-side SSH diagnostics via -E so connection failures are
+  # always visible even when stderr would be silent.
+  local args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "ConnectTimeout=10" "-p" "$try_port" "-E" "$client_log" "-o" "LogLevel=INFO")
+  if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
+    args+=("-i" "$keypath")
+  fi
+  args+=("${user}@${try_host}" "$command")
 
-    # Tee stderr so the user sees it live AND we can sniff it to tell a
-    # connection failure apart from a remote command exiting 255.
-    : > "$stderr_file"
-    : > "$client_log"
-    exit_code=0
-    ssh "${args[@]}" 2> >(tee "$stderr_file" >&2) || exit_code=$?
-    wait 2>/dev/null || true
+  # Tee stderr so the user sees it live; no retry/fallback happens so we just
+  # let ssh's own error reporting surface.
+  ssh "${args[@]}" 2> >(tee "$stderr_file" >&2) || exit_code=$?
+  wait 2>/dev/null || true
 
-    if [ "$exit_code" -ne 255 ]; then
-      # SSH connected — remote command's exit code is authoritative.
-      path_cache_write "$machine_name" "$attempt" 2>/dev/null || true
-      break
-    fi
-
-    # Exit 255 — figure out if this was a connection failure or the remote
-    # command exiting 255 itself. Check both stderr and the client log.
-    local err_text
-    err_text="$(cat "$stderr_file" "$client_log" 2>/dev/null || printf '')"
-    if ! _ssh_is_connection_failure "$err_text"; then
-      # Remote-side 255 on a live connection. Don't retry — record the cache.
-      path_cache_write "$machine_name" "$attempt" 2>/dev/null || true
-      break
-    fi
-
-    # Connection failure — try the alternate path when one is configured.
-    if [ "$has_fallback" = "1" ]; then
-      dim "${attempt} connection failed (SSH exit 255), trying alternate path..."
-    fi
-  done <<< "$order"
+  if [ "$exit_code" -ne 255 ]; then
+    path_cache_write "$machine_name" "$chosen" 2>/dev/null || true
+  fi
 
   printf '\n'
   if [ "$exit_code" -eq 0 ]; then
@@ -1762,68 +1601,49 @@ cmd_status() {
     internet_host="$(cfg_get "$name" internet_host 2>/dev/null || true)"
     internet_port="$(cfg_get "$name" internet_port 2>/dev/null || printf '22')"
 
-    local has_fallback=0
-    [ -n "$internet_host" ] && has_fallback=1
-
-    # Cache-informed attempt order (or LAN-only when no fallback configured).
-    local order
-    if [ "$has_fallback" = "1" ]; then
-      order="$(path_cache_order "$name")"
+    # 3.4.2+ policy: Tailscale-first, no fallback. Pick a single endpoint.
+    local try_host try_port path_label chosen
+    if [ -n "$internet_host" ]; then
+      try_host="$internet_host"; try_port="$internet_port"
+      path_label="internet"; chosen="internet"
     else
-      order="lan"
+      try_host="$host"; try_port="$port"
+      path_label="LAN"; chosen="lan"
     fi
 
-    local last_attempt=""
-    local attempt
-    while IFS= read -r attempt; do
-      [ -z "$attempt" ] && continue
-      last_attempt="$attempt"
-      local try_host try_port try_timeout path_label
-      if [ "$attempt" = "lan" ]; then
-        try_host="$host"; try_port="$port"
-        try_timeout=5
-        [ "$has_fallback" = "1" ] && try_timeout=3
-        path_label="LAN"
-      else
-        try_host="$internet_host"; try_port="$internet_port"
-        try_timeout=10
-        path_label="internet"
-      fi
-
-      local args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-o" "ConnectTimeout=${try_timeout}" "-p" "$try_port")
-      if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
-        args+=("-i" "$keypath")
-      fi
-      args+=("${user}@${try_host}" "echo ok")
-
-      local start_time end_time probe_exit=0
-      start_time="$(_status_now_ms)"
-      ssh "${args[@]}" >/dev/null 2>&1 || probe_exit=$?
-      end_time="$(_status_now_ms)"
-
-      if [ "$probe_exit" -eq 0 ]; then
-        local latency=$((end_time - start_time))
-        path_cache_write "$name" "$attempt" 2>/dev/null || true
-        printf "${GREEN}  %s${RESET}${DIM} (%s@%s:%s via %s) -- %dms${RESET}\n" "$name" "$user" "$try_host" "$try_port" "$path_label" "$latency"
-        log_event info "cli.status.online" "$name reachable via $path_label" "{\"machine\":\"$name\",\"path\":\"$path_label\",\"host\":\"$try_host\",\"latency_ms\":$latency}"
-        return 0
-      fi
-
-      if [ "$probe_exit" -ne 255 ]; then
-        # Non-connection error (e.g. `echo ok` itself failed). Don't bother
-        # trying the other path for something that isn't a connectivity issue.
-        printf "${RED}  %s${RESET}${DIM} (%s via %s) -- probe exit %d${RESET}\n" "$name" "$try_host" "$path_label" "$probe_exit"
-        log_event warn "cli.status.probe_error" "$name probe non-255 exit" "{\"machine\":\"$name\",\"path\":\"$path_label\",\"exit_code\":$probe_exit}"
-        return 1
-      fi
-    done <<< "$order"
-
-    if [ "$has_fallback" = "1" ]; then
-      printf "${RED}  %s${RESET}${DIM} -- unreachable on both LAN (%s) and internet (%s)${RESET}\n" "$name" "$host" "$internet_host"
-    else
-      printf "${RED}  %s${RESET}${DIM} (%s) -- unreachable${RESET}\n" "$name" "$host"
+    local args=("-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" "-o" "LogLevel=ERROR" "-o" "ConnectTimeout=10" "-p" "$try_port")
+    if [ -n "$keypath" ] && [ "$keypath" != "(system default)" ]; then
+      args+=("-i" "$keypath")
     fi
-    log_event warn "cli.status.offline" "$name unreachable" "{\"machine\":\"$name\",\"has_fallback\":$has_fallback}"
+    args+=("${user}@${try_host}" "echo ok")
+
+    local start_time end_time probe_exit=0
+    start_time="$(_status_now_ms)"
+    ssh "${args[@]}" >/dev/null 2>&1 || probe_exit=$?
+    end_time="$(_status_now_ms)"
+
+    if [ "$probe_exit" -eq 0 ]; then
+      local latency=$((end_time - start_time))
+      path_cache_write "$name" "$chosen" 2>/dev/null || true
+      printf "${GREEN}  %s${RESET}${DIM} (%s@%s:%s via %s) -- %dms${RESET}\n" \
+        "$name" "$user" "$try_host" "$try_port" "$path_label" "$latency"
+      log_event info "cli.status.online" "$name reachable via $path_label" \
+        "{\"machine\":\"$name\",\"path\":\"$path_label\",\"host\":\"$try_host\",\"latency_ms\":$latency}"
+      return 0
+    fi
+
+    if [ "$probe_exit" -ne 255 ]; then
+      printf "${RED}  %s${RESET}${DIM} (%s via %s) -- probe exit %d${RESET}\n" \
+        "$name" "$try_host" "$path_label" "$probe_exit"
+      log_event warn "cli.status.probe_error" "$name probe non-255 exit" \
+        "{\"machine\":\"$name\",\"path\":\"$path_label\",\"exit_code\":$probe_exit}"
+      return 1
+    fi
+
+    printf "${RED}  %s${RESET}${DIM} (%s:%s via %s) -- unreachable${RESET}\n" \
+      "$name" "$try_host" "$try_port" "$path_label"
+    log_event warn "cli.status.offline" "$name unreachable via $path_label" \
+      "{\"machine\":\"$name\",\"path\":\"$path_label\",\"host\":\"$try_host\"}"
     return 1
   }
 
@@ -1863,10 +1683,13 @@ cmd_status_help() {
   printf 'Usage: agent-bridge status [--probe|--fresh] [machine]\n\n'
   printf 'Check if paired machine(s) are reachable.\n'
   printf 'Omit machine name to check all.\n\n'
+  printf 'As of 3.4.2, status uses a single endpoint per machine:\n'
+  printf '  - `internet_host` (Tailscale) when configured\n'
+  printf '  - `host` (LAN) otherwise\n'
+  printf 'No fallback is attempted — status reports reachability on the\n'
+  printf 'configured preferred path only.\n\n'
   printf 'Options:\n'
-  printf '  --probe, --fresh   Bypass the last-reachable-path cache and force\n'
-  printf '                     a LAN-first probe (refreshes the cache from\n'
-  printf '                     scratch on success).\n'
+  printf '  --probe, --fresh   Retained for compatibility. No-op in 3.4.2+.\n'
   printf '  -h, --help         Show this help\n'
 }
 
@@ -1899,17 +1722,18 @@ cmd_reset_path() {
   fi
 
   path_cache_clear "$machine_name"
-  ok "Cleared cached reachable path for $machine_name. Next call will re-probe LAN-first."
+  ok "Cleared cached reachable path for $machine_name. (3.4.2+: endpoint selection no longer uses the cache — command kept for compatibility.)"
 }
 
 cmd_reset_path_help() {
   printf 'Usage: agent-bridge reset-path <machine>\n'
   printf '       agent-bridge reset-path --all\n\n'
-  printf 'Invalidate the cached last-reachable-path (LAN vs internet) for a\n'
-  printf 'machine. The next SSH/ops call will re-probe LAN-first.\n\n'
-  printf 'The cache lives at ~/.agent-bridge/path-cache.json and is normally\n'
-  printf 'self-managed — only touch it if routing/network topology changes in\n'
-  printf 'a way agent-bridge cannot detect on its own.\n'
+  printf 'Invalidate the cached last-reachable-path entry for a machine.\n\n'
+  printf 'Note: as of 3.4.2 agent-bridge no longer uses the path cache to\n'
+  printf 'select an endpoint. It always prefers `internet_host` (Tailscale)\n'
+  printf 'when configured and only falls back to LAN when it is not. The\n'
+  printf 'cache is still written for observability, and this command is\n'
+  printf 'retained purely for backwards compatibility.\n'
 }
 
 cmd_unpair() {

@@ -190,17 +190,33 @@ export function clearPathCache(machine: string): void {
 /**
  * Pick the order in which to attempt paths for a machine.
  *
- *  - `bypass=true`         -> always `['lan', 'internet']` (forced fresh probe)
- *  - fresh cache entry     -> cached path first, alt second
- *  - no cache / stale      -> `['lan', 'internet']` (LAN-first)
+ * Policy (3.4.2+): Tailscale-first, no fallback.
+ *
+ *  - `hasInternet=true`    -> `['internet']` (always prefer internet_host when configured)
+ *  - `hasInternet=false`   -> `['lan']`      (LAN is the only path)
+ *
+ * The `bypass` flag is retained for API compatibility with callers that used
+ * to force a fresh LAN-first probe, but it no longer changes the order — we
+ * always follow the configured-endpoint preference. Keeping the parameter
+ * avoids a cascading signature change across ssh.ts callers.
+ *
+ * Rationale: Tailscale works from any network; LAN only works from home.
+ * The previous LAN-first-then-internet fallback produced misleading
+ * "unreachable" reports when the LAN probe timed out off-network before
+ * Tailscale was tried, and wasted a 3s probe on every op while off-LAN.
  */
-export function pathOrder(machine: string, opts: { bypass?: boolean } = {}): PathKind[] {
-  if (opts.bypass) {
-    return ['lan', 'internet'];
-  }
+export function pathOrder(
+  machine: string,
+  opts: { bypass?: boolean; hasInternet?: boolean } = {},
+): PathKind[] {
+  // Defensive: `hasInternet` is the signal callers should pass. If it's
+  // omitted, infer from the cache (not perfect, but better than guessing
+  // 'lan' outright). `opts.bypass` is a no-op in the new policy.
+  void opts.bypass;
+  if (opts.hasInternet === true) return ['internet'];
+  if (opts.hasInternet === false) return ['lan'];
+  // Unknown -- best-effort from cache.
   const entry = readPathCache(machine);
-  if (isFresh(entry) && entry) {
-    return entry.path === 'lan' ? ['lan', 'internet'] : ['internet', 'lan'];
-  }
-  return ['lan', 'internet'];
+  if (entry?.path === 'internet') return ['internet'];
+  return ['lan'];
 }

@@ -21,7 +21,7 @@ import {
   CLAUDE_CODE_TARGET,
   isValidTarget,
 } from './config.js';
-import { sshExec, sshPing } from './ssh.js';
+import { sshExec, sshPingDetailed } from './ssh.js';
 import {
   createMessage,
   sendMessage,
@@ -79,7 +79,7 @@ export function registerTools(server: McpServer): void {
     {
       title: 'Machine Status',
       description:
-        'Check if a paired machine is reachable via SSH. Uses the last-reachable-path cache so off-network checks stay fast. Pass `probe: true` to force a fresh LAN-first probe. If no machine name is provided, checks all paired machines.',
+        'Check if a paired machine is reachable via SSH. As of 3.4.2, uses a single endpoint per machine: the configured `internet_host` (Tailscale) when set, otherwise the LAN `host`. No fallback. The `probe` flag is accepted for API compatibility but is a no-op. If no machine name is provided, checks all paired machines.',
       inputSchema: {
         machine: z
           .string()
@@ -89,7 +89,7 @@ export function registerTools(server: McpServer): void {
           .boolean()
           .optional()
           .describe(
-            'Bypass the last-reachable-path cache and force a fresh LAN-first probe. Useful when network topology just changed.',
+            'Retained for API compatibility. No-op since 3.4.2 — Tailscale-first policy no longer uses the last-reachable-path cache to select an endpoint.',
           ),
       },
     },
@@ -127,14 +127,23 @@ export function registerTools(server: McpServer): void {
 
       const results: string[] = [];
       for (const m of toCheck) {
-        const reachable = await sshPing(m, { bypassPathCache: probe === true });
+        const ping = await sshPingDetailed(m, { bypassPathCache: probe === true });
+        const pathTag = `via ${ping.label.toLowerCase()}`;
         results.push(
-          `${m.name}: ${reachable ? 'ONLINE' : 'OFFLINE'} (${m.user}@${m.host}:${m.port})`,
+          `${m.name}: ${ping.reachable ? 'ONLINE' : 'OFFLINE'} ` +
+          `(${m.user}@${ping.host}:${ping.port} ${pathTag})`,
         );
         logEvent({
           event: 'tool.bridge_status',
-          msg: `bridge_status: ${m.name} is ${reachable ? 'ONLINE' : 'OFFLINE'}`,
-          context: { machine: m.name, host: m.host, reachable, bypass_cache: probe === true },
+          msg: `bridge_status: ${m.name} is ${ping.reachable ? 'ONLINE' : 'OFFLINE'} ${pathTag}`,
+          context: {
+            machine: m.name,
+            host: ping.host,
+            port: ping.port,
+            path: ping.kind,
+            reachable: ping.reachable,
+            bypass_cache: probe === true,
+          },
         });
       }
 
