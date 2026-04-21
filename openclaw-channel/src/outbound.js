@@ -18,12 +18,14 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 const AGENT_BRIDGE_HOME = join(homedir(), ".agent-bridge");
 const DEFAULT_OUTBOUND = join(AGENT_BRIDGE_HOME, "outbound");
 const DEFAULT_KEYS_DIR = join(AGENT_BRIDGE_HOME, "keys");
 const DEFAULT_CONFIG = join(AGENT_BRIDGE_HOME, "config");
+const DEFAULT_MACHINE_NAME_FILE = join(AGENT_BRIDGE_HOME, "machine-name");
+const DEFAULT_IDENTITY = join(AGENT_BRIDGE_HOME, ".identity");
 
 /**
  * Look up a paired machine in ~/.agent-bridge/config.
@@ -202,7 +204,50 @@ function runCommand(cmd, args, log) {
   });
 }
 
-export function localMachineName() {
-  // Prefer an env override so users running on renamed hosts can pin it.
-  return process.env.AGENT_BRIDGE_MACHINE_NAME || hostname();
+export function localMachineName(opts = {}) {
+  const env = opts.env ?? process.env;
+  const nameFilePath = opts.nameFilePath ?? DEFAULT_MACHINE_NAME_FILE;
+  const identityPath = opts.identityPath ?? DEFAULT_IDENTITY;
+  const getHostname = opts.getHostname ?? hostname;
+
+  // Explicit override wins, unchanged.
+  const override =
+    typeof env?.AGENT_BRIDGE_MACHINE_NAME === "string"
+      ? env.AGENT_BRIDGE_MACHINE_NAME.trim()
+      : "";
+  if (override) return override;
+
+  // Match the MCP server / README contract for a pinned local name.
+  const pinnedName = readNonEmptyFile(nameFilePath);
+  if (pinnedName) return pinnedName;
+
+  // Reuse the setup-time identity when available so reply labels stay stable
+  // even if the OS hostname later changes.
+  const identityName = machineNameFromIdentity(identityPath);
+  if (identityName) return identityName;
+
+  // Final fallback mirrors the CLI's get_machine_name() behavior.
+  return normalizeHostname(getHostname());
+}
+
+function readNonEmptyFile(path) {
+  if (!existsSync(path)) return "";
+  try {
+    return readFileSync(path, "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+function machineNameFromIdentity(identityPath) {
+  const keyPath = readNonEmptyFile(identityPath);
+  if (!keyPath) return "";
+  const base = basename(expandHome(keyPath));
+  if (!base.startsWith("agent-bridge_")) return "";
+  return base.slice("agent-bridge_".length).trim();
+}
+
+function normalizeHostname(value) {
+  if (typeof value !== "string") return "";
+  return value.trim().replace(/\.local$/i, "");
 }
