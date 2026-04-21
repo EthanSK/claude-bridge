@@ -216,6 +216,9 @@ cfg_save() {
 
   # Expand ~ in keypath
   keypath="${keypath/#\~/$HOME}"
+  # Normalize to a path usable by Node.js on Windows (MSYS /c/... -> C:/...).
+  # No-op on macOS/Linux.
+  keypath="$(normalize_path_for_config "$keypath")"
 
   {
     printf '[%s]\n' "$machine"
@@ -775,10 +778,91 @@ ssh_exec_with_fallback() {
   return "$try_exit"
 }
 
+# -- Windows compatibility helpers --------------------------------------------
+# These are no-ops on macOS/Linux. Each is guarded internally on uname -s.
+
+# Return the correct authorized_keys path for the current user. On Windows,
+# sshd routes Administrators-group users to administrators_authorized_keys
+# instead of ~/.ssh/authorized_keys; silently ignores the user file otherwise.
+get_authorized_keys_path() {
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+      if powershell.exe -NoProfile -Command "[bool](Get-LocalGroupMember -Group Administrators -Member \$env:USERNAME -ErrorAction SilentlyContinue)" 2>/dev/null | tr -d '\r' | grep -qi true; then
+        printf '%s' "/c/ProgramData/ssh/administrators_authorized_keys"
+        return
+      fi
+      ;;
+  esac
+  printf '%s' "$HOME/.ssh/authorized_keys"
+}
+
+# After writing to an authorized_keys file, ensure Windows file ACLs are
+# restrictive enough for sshd to honor them (sshd silently rejects the file
+# if non-owner principals have write access).
+windows_secure_authorized_keys() {
+  local auth_keys="$1"
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+      local win_path
+      win_path="$(cygpath -w "$auth_keys" 2>/dev/null || printf '%s' "$auth_keys")"
+      if [[ "$auth_keys" == */administrators_authorized_keys ]]; then
+        icacls.exe "$win_path" /inheritance:r /grant "SYSTEM:F" "Administrators:F" >/dev/null 2>&1 || true
+      else
+        icacls.exe "$win_path" /inheritance:r /grant:r "$(whoami):F" >/dev/null 2>&1 || true
+      fi
+      ;;
+  esac
+}
+
+# Lock down SSH private key file ACLs on Windows. ssh-keygen doesn't apply
+# Unix-mode 0600 semantics on Windows — the key inherits parent directory
+# ACLs (often too permissive). OpenSSH client refuses such keys with the
+# "UNPROTECTED PRIVATE KEY FILE" warning.
+windows_secure_key_file() {
+  local key_path="$1"
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+      local win_path
+      win_path="$(cygpath -w "$key_path" 2>/dev/null || printf '%s' "$key_path")"
+      icacls.exe "$win_path" /inheritance:r /grant:r "$(whoami):F" >/dev/null 2>&1 || true
+      ;;
+  esac
+}
+
+# Normalize a path so it's usable by native Windows tools (e.g., Node.js).
+# Git Bash stores paths as /c/Users/... which Node's fs.statSync can't resolve.
+# cygpath -m produces the mixed form: C:/Users/... (forward slashes + drive letter).
+normalize_path_for_config() {
+  local p="$1"
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+      if command -v cygpath >/dev/null 2>&1; then
+        cygpath -m "$p" 2>/dev/null || printf '%s' "$p"
+      else
+        printf '%s' "$p" | sed -E 's|^/([a-zA-Z])/|\1:/|'
+      fi
+      ;;
+    *)
+      printf '%s' "$p"
+      ;;
+  esac
+}
+
 # -- Network helpers ----------------------------------------------------------
 get_local_ip() {
-  if command -v ipconfig >/dev/null 2>&1; then
-    # macOS
+  # Windows (Git Bash / MSYS / Cygwin) — ipconfig.exe is in PATH but uses different syntax than macOS
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+      local ip
+      ip="$(powershell.exe -NoProfile -Command "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { \$_.PrefixOrigin -in 'Dhcp','Manual' -and \$_.InterfaceAlias -notmatch 'Loopback|vEthernet|WSL|Bluetooth' } | Select-Object -First 1).IPAddress" 2>/dev/null | tr -d '\r\n ' || true)"
+      if [ -n "$ip" ]; then
+        printf '%s' "$ip"
+        return
+      fi
+      ;;
+  esac
+  if command -v ipconfig >/dev/null 2>&1 && ipconfig getifaddr en0 >/dev/null 2>&1; then
+    # macOS (ipconfig has 'getifaddr' subcommand)
     local ip
     ip="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
     if [ -n "$ip" ]; then
@@ -1031,15 +1115,19 @@ cmd_setup() {
     dim "Generating SSH key pair..."
     ssh-keygen -t ed25519 -f "$key_path" -N "" -C "agent-bridge:${machine_name}" >/dev/null 2>&1
     chmod 600 "$key_path"
+    # On Windows, chmod is advisory — lock down ACLs explicitly so OpenSSH accepts the key.
+    windows_secure_key_file "$key_path"
     ok "Key pair generated."
   fi
 
   # Save identity so pair/run/connect use the same key
   printf '%s' "$key_path" > "$CONFIG_DIR/.identity"
 
-  # Add to authorized_keys
-  local ssh_dir="$HOME/.ssh"
-  local auth_keys="$ssh_dir/authorized_keys"
+  # Add to authorized_keys (Windows admin accounts use administrators_authorized_keys).
+  local auth_keys
+  auth_keys="$(get_authorized_keys_path)"
+  local ssh_dir
+  ssh_dir="$(dirname "$auth_keys")"
   [ -d "$ssh_dir" ] || mkdir -p "$ssh_dir" && chmod 700 "$ssh_dir"
   local pub_key
   pub_key="$(cat "$pub_key_path")"
@@ -1049,6 +1137,7 @@ cmd_setup() {
   else
     printf '%s\n' "$pub_key" >> "$auth_keys"
     chmod 600 "$auth_keys"
+    windows_secure_authorized_keys "$auth_keys"
     ok "Public key added to authorized_keys."
   fi
 
@@ -1267,6 +1356,8 @@ cmd_pair() {
       dim "Generating SSH key pair for $local_machine..."
       ssh-keygen -t ed25519 -f "$local_key" -N "" -C "agent-bridge:${local_machine}" >/dev/null 2>&1
       chmod 600 "$local_key"
+      # On Windows, chmod is advisory — lock down ACLs explicitly so OpenSSH accepts the key.
+      windows_secure_key_file "$local_key"
       ok "Key pair generated: $local_key"
     fi
     keypath="$local_key"
@@ -1274,9 +1365,12 @@ cmd_pair() {
   printf '\n'
 
   # Step 2: Authorize the other machine's public key on THIS machine
+  # (Windows admin accounts use administrators_authorized_keys — sshd ignores the user file).
   printf "${BOLD}  2. Authorize Remote Key${RESET}\n"
-  local ssh_dir="$HOME/.ssh"
-  local auth_keys="$ssh_dir/authorized_keys"
+  local auth_keys
+  auth_keys="$(get_authorized_keys_path)"
+  local ssh_dir
+  ssh_dir="$(dirname "$auth_keys")"
   [ -d "$ssh_dir" ] || mkdir -p "$ssh_dir" && chmod 700 "$ssh_dir"
 
   if [ -f "$auth_keys" ] && grep -qF "$pubkey" "$auth_keys" 2>/dev/null; then
@@ -1285,7 +1379,8 @@ cmd_pair() {
     printf '%s\n' "$pubkey" >> "$auth_keys"
     sort -u "$auth_keys" -o "$auth_keys"
     chmod 600 "$auth_keys"
-    ok "Remote public key added to ~/.ssh/authorized_keys."
+    windows_secure_authorized_keys "$auth_keys"
+    ok "Remote public key added to authorized_keys."
   fi
   dim "The other machine can now SSH into this one."
   printf '\n'
