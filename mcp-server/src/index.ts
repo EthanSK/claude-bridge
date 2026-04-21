@@ -258,7 +258,7 @@ async function main(): Promise<void> {
   // Clean shutdown. Triggered by:
   //   - SIGINT / SIGTERM / SIGHUP (explicit signals from parent)
   //   - stdin end / close / error (MCP stdio transport hung up, i.e. parent gone)
-  //   - parent-liveness watchdog (parent reparented to init, or parent PID gone)
+  //   - parent-liveness watchdog (parent PID gone — ESRCH on kill-0)
   //   - EPIPE detected in the global error handlers above (exits directly)
   // The force-exit timer below guarantees we die within 2s even if server.close() hangs.
   let shuttingDown = false;
@@ -325,19 +325,20 @@ async function main(): Promise<void> {
   // Parent-PID liveness watchdog.
   //
   // Motivation (2026-04-21 zombie incident): when a Claude Code session exits
-  // ungracefully (terminal killed, laptop sleep, crash), the stdio 'end'/
-  // 'close' events don't always fire on the MCP child. The child gets
-  // reparented to launchd (ppid=1) and keeps running indefinitely. If the
-  // file watcher is still active, it continues to receive inbox files and
-  // markDelivered() them — but there's no Claude to push the channel into.
-  // Result: messages silently disappear. A 10-hour-old zombie ate every
-  // bridge push on MBP that morning.
+  // ungracefully (terminal killed, laptop sleep, crash), stdio 'end'/'close'
+  // events don't always fire on the MCP child. The child keeps running
+  // indefinitely. If the file watcher is still active, it continues to receive
+  // inbox files and markDelivered() them — but there's no Claude to push the
+  // channel into. Result: messages silently disappear.
   //
-  // Fix: every 5s, verify the parent is (a) still our parent (not reparented)
-  // and (b) actually alive (signal-0 check). On either failure, shutdown.
+  // Design: check every 5s whether the ORIGINAL parent PID is still alive via
+  // kill(pid, 0). On ESRCH (process gone), shutdown. We deliberately DO NOT
+  // check for ppid reassignment — that false-positives when a shell wrapper
+  // exec-chains into node and the intermediate shell exits (ppid flips to 1
+  // even though the real owner is still alive).
   //
   // Opt-out: set AGENT_BRIDGE_DISABLE_PARENT_CHECK=1 for diagnostic scenarios
-  // where ppid-watching doesn't make sense (e.g. intentional detachment).
+  // (e.g. intentional detachment, debugging).
   const parentCheckDisabled = process.env.AGENT_BRIDGE_DISABLE_PARENT_CHECK === '1';
   if (parentCheckDisabled) {
     logInfo('Parent-PID liveness check disabled via AGENT_BRIDGE_DISABLE_PARENT_CHECK=1');
@@ -357,21 +358,7 @@ async function main(): Promise<void> {
     parentWatchdog = setInterval(() => {
       if (shuttingDown) return;
 
-      // (1) Reparent check — if our ppid changed, the original parent is gone
-      // and the OS handed us to init (pid 1) or some other supervisor.
-      if (process.platform !== 'win32' && process.ppid !== parentPid) {
-        const currentPpid = process.ppid;
-        logEvent({
-          event: 'parent.orphaned',
-          level: 'warn',
-          msg: `Parent process changed — orphaned (was ${parentPid}, now ${currentPpid})`,
-          context: { original_ppid: parentPid, current_ppid: currentPpid, pid: process.pid },
-        });
-        shutdown(`orphaned (ppid changed ${parentPid} -> ${currentPpid})`);
-        return;
-      }
-
-      // (2) Liveness check — kill(pid, 0) on a live process is a no-op; on a
+      // Liveness check — kill(pid, 0) on a live process is a no-op; on a
       // dead process it throws ESRCH. EPERM means the process exists but we
       // can't signal it, which still tells us it's alive — do nothing. Any
       // other error is unexpected; treat conservatively as "still alive" so
@@ -391,13 +378,6 @@ async function main(): Promise<void> {
           return;
         }
         // EPERM or anything else — parent still exists from our POV, keep running.
-      }
-
-      // (3) Also cover the stdin-dead case the old watchdog handled; some
-      // terminal-close scenarios kill stdio before ppid flips.
-      const stdinDead = process.stdin.destroyed || (process.stdin as { readableEnded?: boolean }).readableEnded;
-      if (stdinDead) {
-        shutdown('stdin dead');
       }
     }, 5000);
     parentWatchdog.unref();
