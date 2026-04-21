@@ -29,7 +29,7 @@ Both machines keep their own copies — when debugging a bidirectional issue, lo
 ### Common event types and what they mean
 
 - `server.starting` / `server.ready` — the MCP server is coming up on this machine
-- `watcher.started` (backend=fswatch/inotifywait/polling) — the inbox watcher is active
+- `watcher.started` (backend=polling) — the 2-second polling inbox watcher is active
 - `message.send_start` / `message.delivered` — outbound SSH write to the remote inbox succeeded
 - `message.send_retry` / `message.send_failed` — the first SSH attempt failed; if you see `send_failed` without a follow-up success, the message never left this machine
 - `message.received` — the local watcher saw a new inbox file

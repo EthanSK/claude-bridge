@@ -240,7 +240,7 @@ If both machines are on Tailscale, use the Tailscale hostname or IP instead of t
 1. Check watcher health: use `bridge_inbox_stats` tool
 2. Verify SSH connectivity: `agent-bridge status <machine>`
 3. Check logs: `~/.agent-bridge/logs/mcp-server.log`
-4. Install fswatch for real-time detection on macOS: `brew install fswatch`
+4. Watcher polls every 2 s — no dependencies (fswatch/inotifywait removed in 3.4.3)
 
 ## Security notes
 

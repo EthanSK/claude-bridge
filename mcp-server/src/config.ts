@@ -84,9 +84,9 @@ export const PRUNE_INTERVAL_MS = parseInt(
   10,
 ); // 5 minutes
 export const DEFAULT_TTL_SECONDS = parseInt(
-  process.env.BRIDGE_DEFAULT_TTL ?? '3600',
+  process.env.BRIDGE_DEFAULT_TTL ?? '86400',
   10,
-); // 1 hour
+); // 1 day
 export const PROCESSED_FILE_MAX_SIZE = 512 * 1024; // 512 KB — rotate when exceeded
 export const OUTBOX_MAX_AGE_MS = parseInt(
   process.env.BRIDGE_OUTBOX_MAX_AGE_MS ?? String(7 * 24 * 60 * 60 * 1000),

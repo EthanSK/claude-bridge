@@ -571,7 +571,7 @@ For **push** notifications, the harness must support the `claude/channel` experi
 ### Receive flow (push mode -- Claude Code)
 
 ```
-1. File watcher (fswatch/inotifywait/polling) detects new .json file in inbox/
+1. Polling watcher (2s interval) detects new .json file in inbox/
 2. Watcher parses the message and checks the .delivered tracker for dedup
 3. Channel notification is pushed via notifications/claude/channel
 4. Message appears in Claude's conversation as <channel source="agent-bridge" ...>content</channel>
@@ -581,7 +581,7 @@ For **push** notifications, the harness must support the `claude/channel` experi
 ### Receive flow (push mode -- OpenClaw plugin/daemon, v1.2.0+)
 
 ```
-1. File watcher (fswatch/inotifywait/polling) detects new .json file in inbox/
+1. Polling watcher (2s interval) detects new .json file in inbox/
 2. Watcher parses the message and checks .openclaw-delivered for dedup
 3. Plugin resolves per-message routing (msg.route / @@route header / plugin defaults)
 4. Plugin dispatches per `deliveryMode`:
@@ -919,7 +919,7 @@ tail -f ~/.agent-bridge/logs/agent-bridge.log | jq -c '"\(.ts) [\(.component)] \
 | Event | Who emits | When |
 |---|---|---|
 | `server.starting` / `server.ready` / `server.shutdown` | mcp-server | MCP lifecycle |
-| `watcher.started` / `watcher.stopped` | mcp-server | fswatch/inotifywait/polling up or down |
+| `watcher.started` / `watcher.stopped` | mcp-server | polling watcher (2s) up or down |
 | `message.received` | mcp-server | inbox file picked up by the watcher |
 | `message.pushed_to_channel` | mcp-server | message pushed into the running Claude session |
 | `message.push_failed` | mcp-server | channel notification failed |
@@ -1319,7 +1319,7 @@ tailscale ip -4
 2. Verify SSH connectivity: `agent-bridge status <machine>`
 3. Check inbox contents: `ls ~/.agent-bridge/inbox/`
 4. Check for quarantined messages: `ls ~/.agent-bridge/inbox/.failed/`
-5. On macOS, install `fswatch` for real-time detection: `brew install fswatch` (the server falls back to 2-second polling without it)
+5. The watcher polls the inbox every 2 s — no external dependencies (fswatch/inotifywait removed in 3.4.3)
 
 ### MCP server won't start
 
@@ -1360,7 +1360,7 @@ agent-bridge/
 │   │   ├── tools.ts     # MCP tool definitions (7 tools)
 │   │   ├── config.ts    # Config loader (INI parser, directory paths)
 │   │   ├── inbox.ts     # Message inbox/outbox management, pruning, dedup
-│   │   ├── watcher.ts   # File watcher (fswatch/inotifywait/polling)
+│   │   ├── watcher.ts   # File watcher (2s polling, no external deps)
 │   │   ├── ssh.ts       # SSH execution wrapper
 │   │   └── logger.ts    # Logger (file + stderr, auto-rotation)
 │   ├── build/           # Compiled JS output

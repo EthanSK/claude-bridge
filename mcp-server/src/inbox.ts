@@ -56,7 +56,7 @@ export interface BridgeMessage {
   content: string;
   timestamp: string;
   replyTo: string | null;
-  /** Time-to-live in seconds. 0 = no expiry. Default: 3600 (1 hour). */
+  /** Time-to-live in seconds. 0 = no expiry. Default: 86400 (1 day). */
   ttl?: number;
   /**
    * Slash-delimited routing target. Added in mcp-server 3.4.0 to support the

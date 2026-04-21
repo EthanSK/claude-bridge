@@ -69,6 +69,11 @@ Changed:
 - `mcp-server/src/index.ts`: replaced the old orphan-watchdog with the
   new parent-liveness check + structured events.
 
+### Simplify: polling-only watcher + default TTL bumped to 1 day
+
+- Removed fswatch and inotifywait watcher backends — polling-only (2s interval). No external dependencies.
+- Default message TTL bumped from 3600s (1h) to 86400s (1d) to tolerate transient bridge outages.
+
 ## mcp-server 3.4.1 — 2026-04-20
 
 ### Fix: orphan mcp-server instances race on `inbox/claude-code/` causing delivery starvation
