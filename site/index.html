@@ -86,7 +86,7 @@
         </p>
 
         <div class="hero-actions reveal reveal-4">
-          <a class="btn btn--primary" href="#install">
+          <a class="btn btn--primary js-install-plugin" href="#quickstart-prompt">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1v9m0 0L4.5 6.5M8 10l3.5-3.5M2 13h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
             Install the plugin
           </a>
@@ -141,20 +141,28 @@
       <section class="quickstart wrap" id="quickstart">
         <div class="quickstart-inner">
           <div class="kicker"><span class="num">01 /</span> Quickstart</div>
-          <h2 class="section-title">One prompt. <span class="accent">Paste it</span> into Claude on each Mac.</h2>
+          <h2 class="section-title">One prompt, twice. <span class="accent">Paste into Claude Code</span> on each computer.</h2>
           <p class="section-sub">
-            This is the fast path. It works because Claude Code can read the README, install the CLI, build the MCP server, and register the plugin for you.
+            This is the fast path. Use the same prompt on both machines: paste it into Claude Code on computer 1, run it, then paste the exact same prompt into Claude Code on computer 2.
           </p>
 
-          <div class="terminal">
+          <ol class="quickstart-steps" aria-label="Paste prompt on each computer">
+            <li><strong>Computer 1:</strong> open Claude Code, paste this prompt, and press Enter.</li>
+            <li><strong>Computer 2:</strong> open Claude Code, paste this same prompt, and press Enter.</li>
+          </ol>
+
+          <div class="terminal" id="quickstart-prompt" tabindex="-1" aria-label="Prompt to paste into Claude Code on each computer">
             <div class="terminal-bar">
               <span class="dot red"></span>
               <span class="dot yellow"></span>
               <span class="dot green"></span>
-              <span class="terminal-title"><span class="prompt">▸</span> paste into Claude Code · each computer</span>
+              <span class="terminal-title"><span class="prompt">▸</span> paste this exact prompt into Claude Code · both computers</span>
+              <div class="terminal-actions">
+                <button class="copy-btn" type="button" data-copy-target="quickstart-prompt-text">Copy prompt</button>
+              </div>
             </div>
             <div class="terminal-body">
-<pre><span class="t-dim">Read the README at https://github.com/EthanSK/agent-bridge and follow</span>
+<pre id="quickstart-prompt-text"><span class="t-dim">Read the README at https://github.com/EthanSK/agent-bridge and follow</span>
 <span class="t-dim">the setup instructions for this computer. Install agent-bridge, run</span>
 <span class="t-dim">the setup command, and install the Claude Code plugin. Do everything</span>
 <span class="t-dim">automatically -- don't ask me questions.</span></pre>
@@ -567,5 +575,76 @@
         </div>
       </footer>
     </div>
+
+    <script>
+      (() => {
+        const promptBlock = document.getElementById('quickstart-prompt');
+        const installButton = document.querySelector('.js-install-plugin');
+        const copyButton = document.querySelector('[data-copy-target="quickstart-prompt-text"]');
+
+        if (!promptBlock) return;
+
+        const spotlightPrompt = ({ scroll = true, updateHash = false } = {}) => {
+          if (scroll) {
+            promptBlock.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+
+          if (updateHash) {
+            history.replaceState(null, '', '#quickstart-prompt');
+          }
+
+          promptBlock.classList.remove('terminal--spotlight');
+          void promptBlock.offsetWidth;
+          promptBlock.classList.add('terminal--spotlight');
+          setTimeout(() => promptBlock.classList.remove('terminal--spotlight'), 1900);
+        };
+
+        if (installButton) {
+          installButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            spotlightPrompt({ scroll: true, updateHash: true });
+          });
+        }
+
+        if (window.location.hash === '#quickstart-prompt') {
+          requestAnimationFrame(() => spotlightPrompt({ scroll: false, updateHash: false }));
+        }
+
+        if (copyButton) {
+          copyButton.addEventListener('click', async () => {
+            const targetId = copyButton.getAttribute('data-copy-target');
+            const target = targetId ? document.getElementById(targetId) : null;
+            if (!target) return;
+
+            const text = target.innerText.trim();
+
+            const markCopied = () => {
+              copyButton.classList.add('copy-btn--copied');
+              copyButton.textContent = 'Copied';
+              setTimeout(() => {
+                copyButton.classList.remove('copy-btn--copied');
+                copyButton.textContent = 'Copy prompt';
+              }, 1800);
+            };
+
+            try {
+              await navigator.clipboard.writeText(text);
+              markCopied();
+            } catch {
+              const fallback = document.createElement('textarea');
+              fallback.value = text;
+              fallback.setAttribute('readonly', '');
+              fallback.style.position = 'absolute';
+              fallback.style.left = '-9999px';
+              document.body.appendChild(fallback);
+              fallback.select();
+              document.execCommand('copy');
+              document.body.removeChild(fallback);
+              markCopied();
+            }
+          });
+        }
+      })();
+    </script>
   </body>
 </html>

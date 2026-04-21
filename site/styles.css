@@ -579,6 +579,36 @@ h2.section-title .accent { color: var(--amber); }
   opacity: 0.6;
 }
 
+.quickstart-steps {
+  list-style: none;
+  margin: -10px 0 18px;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  max-width: 74ch;
+}
+.quickstart-steps li {
+  position: relative;
+  padding-left: 22px;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.quickstart-steps li::before {
+  content: '▸';
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--amber);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.quickstart-steps strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .prereq {
   display: flex;
   gap: 14px;
@@ -616,6 +646,32 @@ h2.section-title .accent { color: var(--amber); }
   box-shadow: 0 24px 48px -24px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.02);
 }
 .terminal + .terminal { margin-top: 20px; }
+.terminal--spotlight {
+  border-color: rgba(255, 122, 26, 0.85);
+  box-shadow:
+    0 0 0 2px rgba(255, 122, 26, 0.18),
+    0 0 0 6px rgba(255, 122, 26, 0.08),
+    0 24px 48px -24px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  animation: terminalSpotlight 1.9s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+@keyframes terminalSpotlight {
+  0% {
+    box-shadow:
+      0 0 0 2px rgba(255, 122, 26, 0.35),
+      0 0 0 12px rgba(255, 122, 26, 0.14),
+      0 24px 48px -24px rgba(0, 0, 0, 0.6),
+      inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  }
+  100% {
+    box-shadow:
+      0 0 0 2px rgba(255, 122, 26, 0.18),
+      0 0 0 6px rgba(255, 122, 26, 0.08),
+      0 24px 48px -24px rgba(0, 0, 0, 0.6),
+      inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  }
+}
 
 .terminal-bar {
   display: flex;
@@ -644,6 +700,41 @@ h2.section-title .accent { color: var(--amber); }
   letter-spacing: 0.04em;
 }
 .terminal-title .prompt { color: var(--amber); }
+
+.terminal-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+
+.copy-btn {
+  border: 1px solid rgba(77, 208, 225, 0.34);
+  background: rgba(77, 208, 225, 0.08);
+  color: var(--cyan-soft);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-radius: 2px;
+  line-height: 1;
+  padding: 6px 9px;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+.copy-btn:hover {
+  border-color: var(--cyan);
+  color: var(--text);
+  background: rgba(77, 208, 225, 0.16);
+}
+.copy-btn:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+.copy-btn--copied {
+  border-color: rgba(198, 255, 61, 0.6);
+  background: rgba(198, 255, 61, 0.16);
+  color: var(--lime);
+}
 
 .terminal-body {
   padding: 18px 20px;
