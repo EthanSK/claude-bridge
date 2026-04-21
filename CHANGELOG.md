@@ -1,5 +1,43 @@
 # Changelog
 
+## mcp-server 3.4.1 — 2026-04-20
+
+### Fix: orphan mcp-server instances race on `inbox/claude-code/` causing delivery starvation
+
+When multiple mcp-server processes run on the same machine (Claude Code's
+stdio child + one instance per OpenClaw agent session that lists
+`agent-bridge` under `mcp.servers`), they all start the file watcher in
+`watcher.ts :: startWatcher`, all detect new files in
+`~/.agent-bridge/inbox/claude-code/`, and all race to call
+`markDelivered(msg.id)`. Whichever orphan wins flips the shared
+`.delivered` bookkeeping to `true`, after which the instance actually
+wired to the running Claude Code session hits the `isDelivered`
+short-circuit at `watcher.ts:113` and skips the channel notification
+entirely. User-visible symptom: bridge messages never surface in Claude
+Code's conversation (or only after the process restarts and drops the
+in-memory delivered set).
+
+Fix: new `AGENT_BRIDGE_DISABLE_WATCHER=1` /
+`AGENT_BRIDGE_ROLE=tools-only` env var. Hosts that only need the
+outbound tools (send, run_command, status) and do NOT consume the
+channel notification stream should set this. Typical usage — add to the
+OpenClaw or any non-Claude-Code mcp.json:
+
+```json
+"mcp": { "servers": { "agent-bridge": {
+    "command": "node",
+    "args": ["/Users/ethansk/Projects/agent-bridge/mcp-server/build/index.js"],
+    "env":  { "AGENT_BRIDGE_DISABLE_WATCHER": "1" }
+} } }
+```
+
+Also skips `replayUndeliveredMessages()` in tools-only mode (otherwise
+startup replay would markDelivered the entire backlog and starve the
+real Claude Code instance).
+
+Claude Code's own mcp.json leaves the env unset so its single instance
+keeps watching `inbox/claude-code/` and owns delivery exclusively.
+
 ## openclaw-channel 2.3.0 — 2026-04-20
 
 ### `replyVia` mode — agent-bridge back-channel for silent agent-to-agent replies

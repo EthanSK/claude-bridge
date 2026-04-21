@@ -80,14 +80,14 @@ async function main(): Promise<void> {
   logEvent({
     event: 'server.starting',
     msg: `agent-bridge MCP server starting on "${localName}"`,
-    context: { machineName: localName, version: '3.4.0', pid: process.pid, nodeVersion: process.version },
+    context: { machineName: localName, version: '3.4.1', pid: process.pid, nodeVersion: process.version },
   });
 
   // Create MCP server with channel capability
   const server = new McpServer(
     {
       name: 'agent-bridge',
-      version: '3.4.0',
+      version: '3.4.1',
     },
     {
       capabilities: {
@@ -140,10 +140,49 @@ async function main(): Promise<void> {
   // Register all tools
   registerTools(server);
 
-  // Start the inbox file watcher with channel notification callback.
-  // When new messages arrive, we push them into Claude's conversation
-  // via the MCP channel notification protocol.
-  await startWatcher(
+  // Watcher-gate (3.4.1): when multiple mcp-server instances run on the same
+  // machine (e.g. Claude Code + every OpenClaw agent that lists agent-bridge
+  // under `mcp.servers`), they all race to watch `inbox/claude-code/` and
+  // `markDelivered` the same files. Whichever wins the race poisons the
+  // shared `.delivered` bookkeeping so the OTHER instance — the one actually
+  // wired to a running Claude Code session via stdio — hits the
+  // `isDelivered` short-circuit in watcher.ts and never pushes the channel
+  // notification. The user-visible symptom is "messages take 60 min to show
+  // up" (really: never, until the process restarts and drops the in-memory
+  // delivered set).
+  //
+  // Any host that spawns mcp-server purely for its OUTBOUND tools (send,
+  // run_command, status) and does NOT consume the channel notification
+  // stream should set `AGENT_BRIDGE_DISABLE_WATCHER=1`. Typical example:
+  //   "mcp": { "servers": { "agent-bridge": {
+  //       "command": "node",
+  //       "args": ["/…/mcp-server/build/index.js"],
+  //       "env":  { "AGENT_BRIDGE_DISABLE_WATCHER": "1" }
+  //   } } }
+  // Claude Code's own mcp.json leaves the variable unset so its single
+  // instance keeps watching inbox/claude-code/ and owns delivery.
+  const watcherDisabled =
+    process.env.AGENT_BRIDGE_DISABLE_WATCHER === '1'
+    || process.env.AGENT_BRIDGE_ROLE === 'tools-only';
+
+  if (watcherDisabled) {
+    logInfo(
+      'Watcher disabled via AGENT_BRIDGE_DISABLE_WATCHER / AGENT_BRIDGE_ROLE=tools-only '
+      + '— this process exposes outbound tools only (no inbox polling, no channel push, no markDelivered).',
+    );
+    logEvent({
+      event: 'watcher.disabled',
+      msg: 'Watcher disabled (tools-only mode)',
+      context: {
+        reason: process.env.AGENT_BRIDGE_ROLE === 'tools-only' ? 'role=tools-only' : 'disable_watcher=1',
+        pid: process.pid,
+      },
+    });
+  } else {
+    // Start the inbox file watcher with channel notification callback.
+    // When new messages arrive, we push them into Claude's conversation
+    // via the MCP channel notification protocol.
+    await startWatcher(
     (newFiles) => {
       logInfo(`New messages detected: ${newFiles.length} file(s)`);
     },
@@ -193,7 +232,8 @@ async function main(): Promise<void> {
         throw err;
       });
     },
-  );
+    );
+  }
 
   // Connect to stdio transport
   const transport = new StdioServerTransport();
@@ -208,8 +248,12 @@ async function main(): Promise<void> {
 
   // Replay any messages that arrived while Claude was offline.
   // This must happen AFTER server.connect() so channel notifications
-  // can actually be delivered to the client.
-  void replayUndeliveredMessages();
+  // can actually be delivered to the client. Skipped in tools-only mode
+  // (see watcherDisabled above) — replay would otherwise markDelivered the
+  // entire backlog and starve the real Claude Code instance.
+  if (!watcherDisabled) {
+    void replayUndeliveredMessages();
+  }
 
   // Clean shutdown. Triggered by:
   //   - SIGINT / SIGTERM / SIGHUP (explicit signals from parent)
