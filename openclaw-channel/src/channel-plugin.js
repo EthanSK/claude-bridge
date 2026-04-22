@@ -144,8 +144,6 @@ export function createAgentBridgeChannelPlugin(opts) {
           typeof ctx.accountId === "string" ? ctx.accountId.trim() : "";
         const ownTarget =
           hit?.ownTarget ??
-          pluginCfg.defaultFromTarget ??
-          pluginCfg.defaultOwnTarget ??
           (accountId ? `openclaw/${accountId}` : undefined);
         const msg = buildReply({
           fromMachine: localMachineName(),
@@ -199,7 +197,10 @@ function resolveOutboundTarget(ctx, getReplyTargets) {
   // Fallback: treat ctx.to as the machine name directly (bridge messages
   // often encode that explicitly). No incoming context in this case.
   if (typeof ctx.to === "string" && ctx.to.trim()) {
-    return { fromMachine: ctx.to.trim(), ownTarget: `openclaw/${accountId || "default"}` };
+    return {
+      fromMachine: ctx.to.trim(),
+      ownTarget: accountId ? `openclaw/${accountId}` : undefined,
+    };
   }
   return null;
 }
