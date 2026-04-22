@@ -29,7 +29,7 @@ const DEFAULT_IDENTITY = join(AGENT_BRIDGE_HOME, ".identity");
 
 /**
  * Look up a paired machine in ~/.agent-bridge/config.
- * Returns { user, host, port, key } or null.
+ * Returns { user, host, port, key, internetHost?, internetPort? } or null.
  */
 export function resolvePairedMachine(name, configPath = DEFAULT_CONFIG) {
   if (!existsSync(configPath)) return null;
@@ -53,6 +53,8 @@ export function resolvePairedMachine(name, configPath = DEFAULT_CONFIG) {
     host: entry.host ?? entry.address ?? null,
     port: entry.port ?? 22,
     key: entry.key ? expandHome(entry.key) : null,
+    internetHost: entry.internet_host ?? entry.internetHost ?? null,
+    internetPort: entry.internet_port ?? entry.internetPort ?? null,
   };
 }
 
@@ -78,6 +80,8 @@ function resolvePairedMachineFromIni(name, raw) {
     host: fields.host,
     port: Number.parseInt(fields.port ?? "22", 10) || 22,
     key: fields.key ? expandHome(fields.key) : null,
+    internetHost: fields.internet_host || null,
+    internetPort: Number.parseInt(fields.internet_port ?? "", 10) || null,
   };
 }
 
@@ -120,6 +124,13 @@ export async function deliverReply(opts) {
     throw new Error(`no SSH key for machine "${toMachine}" at ${keyPath}`);
   }
 
+  // Mirror mcp-server / CLI policy (3.4.2+): if `internet_host` is configured,
+  // use it as the sole endpoint. Otherwise use the LAN host.
+  const endpointHost = target.internetHost || target.host;
+  const endpointPort = target.internetHost
+    ? (target.internetPort ?? target.port ?? 22)
+    : (target.port ?? 22);
+
   mkdirSync(outboundDir, { recursive: true });
   const tmpPath = join(outboundDir, `${msg.id}.json`);
   writeFileSync(tmpPath, JSON.stringify(msg, null, 2));
@@ -132,20 +143,20 @@ export async function deliverReply(opts) {
     "-i",
     keyPath,
     "-p",
-    String(target.port ?? 22),
+    String(endpointPort),
     "-o",
     "StrictHostKeyChecking=accept-new",
     "-o",
     "BatchMode=yes",
     "-o",
     "ConnectTimeout=10",
-    `${target.user}@${target.host}`,
+    `${target.user}@${endpointHost}`,
   ];
   const scpArgs = [
     "-i",
     keyPath,
     "-P",
-    String(target.port ?? 22),
+    String(endpointPort),
     "-o",
     "StrictHostKeyChecking=accept-new",
     "-o",
@@ -153,10 +164,10 @@ export async function deliverReply(opts) {
     "-o",
     "ConnectTimeout=10",
     tmpPath,
-    `${target.user}@${target.host}:${remoteTmp}`,
+    `${target.user}@${endpointHost}:${remoteTmp}`,
   ];
 
-  log.debug?.(`scp -> ${target.user}@${target.host}:${remoteInbox}`);
+  log.debug?.(`scp -> ${target.user}@${endpointHost}:${remoteInbox}`);
 
   try {
     await runCommand("ssh", [

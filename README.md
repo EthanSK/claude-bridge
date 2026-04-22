@@ -714,7 +714,7 @@ key=~/.agent-bridge/keys/agent-bridge_MacBook-Pro
 paired_at=2026-04-09T12:00:00Z
 ```
 
-`internet_host` and `internet_port` are optional. When present, SSH/SCP tries `host:port` first (3s timeout), then falls back to `internet_host:internet_port`. The recommended `internet_host` value is a [Tailscale](#internet-connectivity-tailscale) `100.x.y.z` IP.
+`internet_host` and `internet_port` are optional. When present, current agent-bridge transport paths use `internet_host:internet_port` as the active endpoint instead of the LAN `host:port`. If `internet_host` is absent, LAN is used. The recommended `internet_host` value is a [Tailscale](#internet-connectivity-tailscale) `100.x.y.z` IP.
 
 ### Hostname variants (`.lan` / MagicDNS) and safe aliases
 
@@ -986,7 +986,7 @@ See [AGENTS.md](AGENTS.md) for the "first thing an agent does when debugging" ch
 
 ## Internet connectivity (Tailscale)
 
-When two machines are not on the same LAN (e.g. one is on mobile data, at a coffee shop, or behind a different NAT), use [Tailscale](https://tailscale.com) to give each machine a stable `100.x.y.z` IP that's reachable from anywhere. Agent-bridge stores that IP as the `internet_host` for the paired machine and falls back to it when the LAN address isn't reachable.
+When two machines are not on the same LAN (e.g. one is on mobile data, at a coffee shop, or behind a different NAT), use [Tailscale](https://tailscale.com) to give each machine a stable `100.x.y.z` IP that's reachable from anywhere. Agent-bridge stores that IP as the `internet_host` for the paired machine and, when configured, uses it as the active endpoint for transport instead of the LAN address.
 
 ### How agent-bridge uses `internet_host`
 
@@ -994,8 +994,8 @@ Each machine can have two endpoints in its config:
 
 ```ini
 [MacBookPro]
-host=192.168.1.208            # LAN address (primary)
-internet_host=100.126.23.87   # Tailscale IP (fallback)
+host=192.168.1.208            # LAN address
+internet_host=100.126.23.87   # Tailscale IP (preferred when configured)
 internet_port=22
 port=22
 user=ethansarif-kattan
@@ -1003,7 +1003,7 @@ key=/Users/ethansk/.agent-bridge/keys/agent-bridge_Mac-Mini
 paired_at=2026-04-13T00:03:01Z
 ```
 
-When SSH/SCP connects to a machine, it picks the path to try first based on the [path cache](#path-cache-lan-vs-internet): if a recent successful connection is known, that path is tried first (LAN 3s timeout, internet 10s); otherwise it starts with LAN. On failure, the other path is tried. If both fail, a clear error is reported. This fallback applies to the bash CLI (`run`, `connect`, `status`) and the MCP server (`sshExec`, `sshWriteFile`, `sshPing`).
+As of 3.4.2, the transport rule is simple: if `internet_host` is configured, agent-bridge dials `internet_host:internet_port` directly. If `internet_host` is absent, it dials `host:port`. This applies to the bash CLI, the MCP server, and the OpenClaw channel plugin outbound reply path.
 
 ### Tailscale setup
 
@@ -1192,9 +1192,9 @@ With kernel-TUN mode, drop the `Host 100.*` block from `~/.ssh/config` (it's unn
 
 ## Path cache (LAN vs internet)
 
-When a machine has both a LAN `host` and an `internet_host` configured, every SSH/ops call is a race between the two. Historically agent-bridge always tried LAN first (3s timeout) and only fell back to the internet path on failure — fine on the same wifi, but ~3 seconds of wasted time on every off-network call.
+Historical note: older agent-bridge builds raced LAN vs `internet_host` and used a per-machine cache to remember which path last worked. As of **3.4.2**, endpoint selection itself is no longer cache-driven: if `internet_host` is configured we dial it directly, otherwise we use the LAN `host`. The path-cache details below are retained for older logs/notes and compatibility context.
 
-As of **v3.1.0**, agent-bridge keeps a tiny per-machine cache of which path last worked:
+As of **v3.1.0**, agent-bridge kept a tiny per-machine cache of which path last worked:
 
 ```json
 // ~/.agent-bridge/path-cache.json  (mode 0600)

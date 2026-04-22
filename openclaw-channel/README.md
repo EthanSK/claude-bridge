@@ -24,6 +24,7 @@ v1.3.0 hack that shelled out to `openclaw agent --to ...` per message.
 - **Per-target inbox subdirs.** Watches `~/.agent-bridge/inbox/openclaw/<target>/*.json` instead of the single flat `inbox/`. Each subdir name maps to one configured target in `openclaw.json`.
 - **Auto-discovery of targets from `channels.telegram.accounts`.** In the common case you don't have to write a `targets` block at all — the plugin inspects the OpenClaw global config's `channels.telegram.accounts` map and creates one bridge target per account, routing to `telegram:<account>`. An explicit `targets` block is still accepted as an advanced override. Peer-id resolution walks `targets.<name>.peer_id` → `config.peer_id` → `meta.user_id` → first numeric `chat_id` in `channels.telegram.accounts[<name>].allowFrom`.
 - **Round-trip bridge replies (`fromTarget`).** Inbound BridgeMessages carry an optional `fromTarget` telling the receiver where to put replies. When the agent answers back over the bridge (cross-harness flows), `buildReply(...)` populates the outgoing `target` from `incoming.fromTarget` so the conversation lands in the session that originated it. There is no implicit fallback to `claude-code` or any other shared back-channel target.
+- **Outbound reply delivery honors `internet_host`.** The native OpenClaw channel's outbound SCP adapter now mirrors the CLI / MCP transport rule: if a paired machine has `internet_host` configured, replies go there instead of getting stuck on a stale LAN `host`.
 
 ## How it works
 
