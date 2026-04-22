@@ -83,6 +83,7 @@ import { encodeBridgePeerId } from "./bridge-peer.js";
 const PLUGIN_ID = "agent-bridge";
 const PLUGIN_NAME = "Agent Bridge (Channel v2)";
 const DEFAULT_AGENT_ID = "main";
+const PROCESS_STATE_KEY = Symbol.for("agent-bridge.openclaw-channel.process-state");
 
 export default {
   id: PLUGIN_ID,
@@ -113,12 +114,16 @@ export default {
     const regMode = api?.registrationMode;
     const isSetupOnly = regMode === "cli-metadata" || regMode === "setup-only";
 
+    const processState = getProcessState();
+
     // Map of session-key-ish hint -> { fromMachine } so the outbound adapter
     // knows which machine to SCP a reply to when the agent replies in-turn
     // via our NATIVE agent-bridge channel (cross-harness flows). This is
     // irrelevant for the Telegram-injection path — replies there travel
     // back through telegram automatically via OriginatingChannel routing.
-    const replyTargets = new Map();
+    // Keep it process-global so duplicate register() calls don't split
+    // routing hints across multiple short-lived maps.
+    const replyTargets = processState.replyTargets;
 
     // Register the native channel FIRST — this is the primary v2 contract
     // for the cross-harness bridge case, and must happen regardless of
@@ -187,7 +192,6 @@ export default {
 
     // Load the compat dispatch primitive. We MUST have this — enqueueSystemEvent
     // doesn't trigger a turn (see module-level comment).
-    let stopWatcher = () => {};
     loadDispatchRuntime(log)
       .then(({ dispatchInboundReplyWithBase }) => {
         const inboxRoot = pluginCfg.inboxRoot
@@ -199,7 +203,14 @@ export default {
           `dispatch mode: agentId="${agentId}", inboxRoot=${inboxRoot}, targets=[${Object.keys(targets).join(", ")}]`,
         );
 
-        stopWatcher = startInboxWatcher({
+        startOrReuseWatcher({
+          processState,
+          agentId,
+          inboxRoot,
+          pollIntervalMs,
+          targets,
+          log,
+          start: () => startInboxWatcher({
           inboxRoot,
           pollIntervalMs,
           logger: log,
@@ -436,6 +447,7 @@ export default {
               `dispatched ${msg.id} from ${fromMachine} target=${target.name} sessionKey=${route.sessionKey}`,
             );
           },
+          }),
         });
       })
       .catch((err) => {
@@ -444,18 +456,103 @@ export default {
         );
       });
 
-    const disposeAll = () => {
-      try {
-        stopWatcher();
-      } catch {
-        /* ignore */
-      }
-    };
-    process.once("SIGTERM", disposeAll);
-    process.once("SIGINT", disposeAll);
-    process.once("beforeExit", disposeAll);
+    if (!processState.cleanupInstalled) {
+      const disposeAll = () => {
+        const activeState = getProcessState();
+        try {
+          activeState.watcherStop?.();
+        } catch {
+          /* ignore */
+        }
+        activeState.watcherStop = null;
+        activeState.watcherSignature = null;
+      };
+      process.once("SIGTERM", disposeAll);
+      process.once("SIGINT", disposeAll);
+      process.once("beforeExit", disposeAll);
+      processState.cleanupInstalled = true;
+    }
   },
 };
+
+function getProcessState() {
+  const g = globalThis;
+  if (!g[PROCESS_STATE_KEY]) {
+    g[PROCESS_STATE_KEY] = {
+      replyTargets: new Map(),
+      watcherStop: null,
+      watcherSignature: null,
+      cleanupInstalled: false,
+    };
+  }
+  return g[PROCESS_STATE_KEY];
+}
+
+function buildWatcherSignature({ agentId, inboxRoot, pollIntervalMs, targets }) {
+  const normalizedTargets = Object.keys(targets)
+    .sort()
+    .map((name) => {
+      const cfg = targets[name] ?? {};
+      return [
+        name,
+        cfg.openclaw_channel ?? null,
+        cfg.account ?? null,
+        cfg.peer_id ?? null,
+        cfg.replyVia ?? null,
+        Boolean(cfg.legacy_session),
+      ];
+    });
+  return JSON.stringify({
+    agentId,
+    inboxRoot,
+    pollIntervalMs: pollIntervalMs ?? null,
+    targets: normalizedTargets,
+  });
+}
+
+function startOrReuseWatcher({
+  processState,
+  agentId,
+  inboxRoot,
+  pollIntervalMs,
+  targets,
+  log,
+  start,
+}) {
+  const watcherSignature = buildWatcherSignature({
+    agentId,
+    inboxRoot,
+    pollIntervalMs,
+    targets,
+  });
+
+  if (
+    processState.watcherSignature === watcherSignature &&
+    typeof processState.watcherStop === "function"
+  ) {
+    log.info(
+      `watcher already active for agentId="${agentId}" inboxRoot=${inboxRoot} — skipping duplicate startup`,
+    );
+    return "reused";
+  }
+
+  if (typeof processState.watcherStop === "function") {
+    log.warn(
+      `watcher config changed for agentId="${agentId}" inboxRoot=${inboxRoot} — restarting inbox watcher`,
+    );
+    try {
+      processState.watcherStop();
+    } catch (err) {
+      log.warn(`failed to stop prior watcher cleanly: ${err?.message ?? err}`);
+    }
+    processState.watcherStop = null;
+    processState.watcherSignature = null;
+  }
+
+  processState.watcherStop = start();
+  processState.watcherSignature = watcherSignature;
+  return "started";
+}
 
 /**
  * Register reply-target hints for the outbound SCP path. Keyed by a few
@@ -556,6 +653,12 @@ function resolveProviderDeliver({ runtime, targetChannel }) {
  *     auto_discovered?: boolean       // true ⇒ came from channels.telegram.accounts
  *   }
  */
+export const __testing = {
+  getProcessState,
+  buildWatcherSignature,
+  startOrReuseWatcher,
+};
+
 function resolveTargets({ pluginCfg, openclawGlobalCfg, log }) {
   // 1. Explicit override wins.
   if (
