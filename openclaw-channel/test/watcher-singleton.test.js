@@ -88,3 +88,27 @@ test("startOrReuseWatcher restarts when watcher config changes", () => {
   assert.equal(starts, 2);
   assert.equal(stops, 1);
 });
+
+test("normalizeExplicitTargets preserves legacy_session", () => {
+  const warnings = [];
+  const targets = indexTesting.normalizeExplicitTargets(
+    {
+      peer_id: "6164541473",
+      targets: {
+        default: {
+          openclaw_channel: "telegram",
+          account: "default",
+          legacy_session: true,
+        },
+      },
+    },
+    {
+      warn(msg) {
+        warnings.push(msg);
+      },
+    },
+  );
+
+  assert.deepEqual(warnings, []);
+  assert.equal(targets.default.legacy_session, true);
+});

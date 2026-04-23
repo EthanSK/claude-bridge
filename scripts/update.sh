@@ -7,8 +7,9 @@
 # Steps:
 #   1. git fetch + fast-forward pull on main
 #   2. npm install + npm run build in mcp-server/
-#   3. (optional) restart the OpenClaw gateway
-#   4. (macOS only) trigger /reload-plugins in the running Claude Code terminal
+#   3. sync any installed Claude Code plugin cache copies
+#   4. (optional) restart the OpenClaw gateway
+#   5. (macOS only) trigger /reload-plugins in the running Claude Code terminal
 #      if ~/.claude/skills/self-reload-plugins is present
 #
 # Usage:
@@ -135,10 +136,40 @@ else
   popd >/dev/null
 fi
 
-# ---------- 3. OpenClaw gateway restart -------------------------------------
+# ---------- 3. Claude plugin cache sync -------------------------------------
 
 hr
-echo "==> Step 3/4: OpenClaw gateway restart"
+echo "==> Step 3/5: Claude plugin cache sync"
+
+sync_cache_dir() {
+  local cache_dir="$1"
+  mkdir -p "$cache_dir/build" "$cache_dir/src" "$cache_dir/.claude-plugin"
+  rsync -a --delete "$REPO_ROOT/mcp-server/build/" "$cache_dir/build/"
+  rsync -a --delete "$REPO_ROOT/mcp-server/src/" "$cache_dir/src/"
+  cp "$REPO_ROOT/mcp-server/package.json" "$cache_dir/package.json"
+  cp "$REPO_ROOT/mcp-server/package-lock.json" "$cache_dir/package-lock.json"
+  cp "$REPO_ROOT/mcp-server/tsconfig.json" "$cache_dir/tsconfig.json"
+  cp "$REPO_ROOT/mcp-server/.mcp.json" "$cache_dir/.mcp.json"
+  cp "$REPO_ROOT/mcp-server/.claude-plugin/plugin.json" "$cache_dir/.claude-plugin/plugin.json"
+}
+
+CACHE_ROOT="$HOME/.claude/plugins/cache/agent-bridge/agent-bridge"
+if [[ ! -d "$CACHE_ROOT" ]]; then
+  echo "no Claude plugin cache found at $CACHE_ROOT — skipping."
+else
+  synced=0
+  while IFS= read -r -d '' cache_dir; do
+    echo "    syncing cache: $cache_dir"
+    sync_cache_dir "$cache_dir"
+    synced=$((synced + 1))
+  done < <(find "$CACHE_ROOT" -mindepth 1 -maxdepth 1 -type d -print0)
+  echo "==> Synced $synced cache director$([[ "$synced" == 1 ]] && printf 'y' || printf 'ies')."
+fi
+
+# ---------- 4. OpenClaw gateway restart -------------------------------------
+
+hr
+echo "==> Step 4/5: OpenClaw gateway restart"
 
 if (( SKIP_OPENCLAW )); then
   echo "--skip-openclaw — skipping."
@@ -162,10 +193,10 @@ else
   fi
 fi
 
-# ---------- 4. /reload-plugins via self-reload-plugins skill ----------------
+# ---------- 5. /reload-plugins via self-reload-plugins skill ----------------
 
 hr
-echo "==> Step 4/4: Claude Code /reload-plugins"
+echo "==> Step 5/5: Claude Code /reload-plugins"
 
 if (( SKIP_RELOAD )); then
   echo "--skip-reload — skipping."

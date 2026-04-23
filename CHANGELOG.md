@@ -1,5 +1,32 @@
 # Changelog
 
+## agent-bridge 3.4.5 / openclaw-channel 2.3.4 — 2026-04-24
+
+### Fix: OpenClaw bridge replies after delivery recovery
+
+- Decode OpenClaw route ids with the channel prefix (`agent-bridge:bridge-v1...`)
+  instead of treating them as legacy machine names. This fixes recovered
+  replies that already contained a valid encoded return target but still
+  failed with “cannot resolve return target”.
+- Preserve `legacy_session` in explicit OpenClaw target config.
+- Add a cross-process OpenClaw inbox watcher lease so overlapping gateway
+  starts do not race the same inbox file.
+
+### Fix: Claude Code bridge return routing
+
+- `bridge_send_message` now defaults `from_target` to `claude-code` for
+  normal Claude Code sends. Use `one_way=true` only when intentionally
+  omitting a bridge reply path.
+- Empty message bodies (`content: ""`) are valid and are no longer skipped
+  by live push or startup replay.
+- Watcher lease heartbeat write failures now flip watcher health to unhealthy
+  and stop polling after repeated failures.
+
+### Fix: CLI status over multiple machines
+
+- `agent-bridge status` detaches SSH probe stdin, so checking all machines no
+  longer stops after the first configured peer.
+
 ## openclaw-channel 2.3.1 — 2026-04-21
 
 Sender-derived replyVia default — reply on the channel the message arrived

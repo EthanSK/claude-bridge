@@ -9,6 +9,7 @@
  */
 
 const PREFIX = "bridge-v1.";
+const CHANNEL_PREFIX = "agent-bridge:";
 
 export function encodeBridgePeerId(fromMachine, returnTarget) {
   const machine = typeof fromMachine === "string" ? fromMachine.trim() : "";
@@ -27,7 +28,7 @@ export function encodeBridgePeerId(fromMachine, returnTarget) {
 }
 
 export function decodeBridgePeerId(value) {
-  const raw = typeof value === "string" ? value.trim() : "";
+  const raw = normalizeBridgePeerId(value);
   if (!raw) return null;
   if (!raw.startsWith(PREFIX)) {
     return {
@@ -55,6 +56,12 @@ export function decodeBridgePeerId(value) {
   }
 }
 
+export function normalizeBridgePeerId(value) {
+  const raw = typeof value === "string" ? value.trim() : "";
+  return raw.startsWith(CHANNEL_PREFIX) ? raw.slice(CHANNEL_PREFIX.length) : raw;
+}
+
 export const __testing = {
   PREFIX,
+  CHANNEL_PREFIX,
 };

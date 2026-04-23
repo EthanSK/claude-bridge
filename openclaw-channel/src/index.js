@@ -669,6 +669,7 @@ export const __testing = {
   getProcessState,
   buildWatcherSignature,
   startOrReuseWatcher,
+  normalizeExplicitTargets,
 };
 
 function resolveTargets({ pluginCfg, openclawGlobalCfg, log }) {
@@ -741,6 +742,7 @@ function normalizeExplicitTargets(pluginCfg, log) {
       account: cfg.account ?? name,
       peer_id: peerId,
       agent_id: cfg.agent_id ?? null,
+      legacy_session: Boolean(cfg.legacy_session),
       replyVia: cfg.replyVia ?? null,
     };
   }

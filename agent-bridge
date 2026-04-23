@@ -9,7 +9,7 @@ set -euo pipefail
 
 INVOKED_AS="$(basename "$0")"
 
-VERSION="3.4.2"
+VERSION="3.4.5"
 
 # -- Colours (ANSI) ----------------------------------------------------------
 RED='\033[0;31m'
@@ -1619,7 +1619,7 @@ cmd_status() {
 
     local start_time end_time probe_exit=0
     start_time="$(_status_now_ms)"
-    ssh "${args[@]}" >/dev/null 2>&1 || probe_exit=$?
+    ssh "${args[@]}" </dev/null >/dev/null 2>&1 || probe_exit=$?
     end_time="$(_status_now_ms)"
 
     if [ "$probe_exit" -eq 0 ]; then

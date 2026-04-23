@@ -12,13 +12,17 @@
  */
 
 import {
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   renameSync,
   statSync,
   appendFileSync,
+  unlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -29,7 +33,11 @@ const DEFAULT_POLL_MS = 2000;
 const DEFAULT_INBOX_ROOT = join(homedir(), ".agent-bridge", "inbox");
 const DEFAULT_LEDGER = join(homedir(), ".agent-bridge", ".openclaw-v2-delivered");
 const DEFAULT_ARCHIVE_ROOT = join(homedir(), ".agent-bridge", "archive", "openclaw");
+const DEFAULT_LEASE_PATH = join(homedir(), ".agent-bridge", "locks", "openclaw.watcher-lock.json");
 const OPENCLAW_HARNESS_PREFIX = "openclaw";
+const LEASE_STALE_MS = 15_000;
+const LEASE_HEARTBEAT_MS = 5_000;
+const MAX_HEARTBEAT_FAILURES = 3;
 
 /**
  * @typedef {Object} TargetSpec
@@ -44,6 +52,7 @@ const OPENCLAW_HARNESS_PREFIX = "openclaw";
  * @param {object} opts
  * @param {string} [opts.inboxRoot]      absolute path of ~/.agent-bridge/inbox (defaults to homedir/.agent-bridge/inbox)
  * @param {string} [opts.ledgerPath]     absolute path of the delivered-id ledger
+ * @param {string} [opts.leasePath]      cross-process watcher lease path
  * @param {number} [opts.pollIntervalMs] polling interval per subdir (default 2000)
  * @param {object} [opts.logger]         logger with {info,warn,error,debug}
  * @param {Record<string, object>} opts.targets  map of <targetName> -> target config. The watcher creates and watches a subdir per target.
@@ -54,6 +63,7 @@ export function startInboxWatcher(opts) {
   const inboxRoot = opts.inboxRoot ?? DEFAULT_INBOX_ROOT;
   const ledgerPath = opts.ledgerPath ?? DEFAULT_LEDGER;
   const archiveRoot = opts.archiveRoot ?? DEFAULT_ARCHIVE_ROOT;
+  const leasePath = opts.leasePath ?? DEFAULT_LEASE_PATH;
   const pollMs = Math.max(500, opts.pollIntervalMs ?? DEFAULT_POLL_MS);
   const log = opts.logger ?? console;
   const onMessage = opts.onMessage;
@@ -99,6 +109,10 @@ export function startInboxWatcher(opts) {
   const delivered = loadLedger(ledgerPath);
   let stopped = false;
   let timer = null;
+  let standbyTimer = null;
+  let leaseHeartbeat = null;
+  let leaseMeta = null;
+  let heartbeatFailures = 0;
   let scanning = false;
 
   async function scanOneTarget(target) {
@@ -214,13 +228,96 @@ export function startInboxWatcher(opts) {
     }
   }
 
-  // Kick off first scan on next tick so the host finishes registering first.
-  timer = setTimeout(scan, 250);
+  function clearActiveTimers() {
+    if (timer) clearTimeout(timer);
+    if (leaseHeartbeat) clearInterval(leaseHeartbeat);
+    timer = null;
+    leaseHeartbeat = null;
+  }
+
+  function releaseLease() {
+    if (!leaseMeta) return;
+    const meta = leaseMeta;
+    leaseMeta = null;
+    heartbeatFailures = 0;
+    try {
+      const current = readLease(leasePath);
+      if (current?.token === meta.token) {
+        unlinkSync(leasePath);
+        log.info?.(`inbox watcher: released lease pid=${process.pid}`);
+      }
+    } catch (err) {
+      log.warn?.(`inbox watcher: failed to release lease: ${err?.message ?? err}`);
+    }
+  }
+
+  function becomeStandby(reason) {
+    clearActiveTimers();
+    releaseLease();
+    if (stopped) return;
+    log.warn?.(`inbox watcher: standing by (${reason})`);
+    scheduleStandby();
+  }
+
+  function renewLease() {
+    if (!leaseMeta) return;
+    try {
+      const current = readLease(leasePath);
+      if (!current || current.token !== leaseMeta.token) {
+        becomeStandby("lease replaced by another process");
+        return;
+      }
+      leaseMeta.updatedAt = Date.now();
+      writeFileSync(leasePath, JSON.stringify(leaseMeta, null, 2), { mode: 0o600 });
+      heartbeatFailures = 0;
+    } catch (err) {
+      heartbeatFailures += 1;
+      log.warn?.(
+        `inbox watcher: lease heartbeat failed (${heartbeatFailures}/${MAX_HEARTBEAT_FAILURES}): `
+        + `${err?.message ?? err}`,
+      );
+      if (heartbeatFailures >= MAX_HEARTBEAT_FAILURES) {
+        becomeStandby("lease heartbeat failures");
+      }
+    }
+  }
+
+  function startActive() {
+    if (stopped || leaseMeta) return true;
+    const acquired = acquireLease(leasePath, "openclaw", log);
+    if (!acquired) return false;
+    leaseMeta = acquired;
+    heartbeatFailures = 0;
+    log.info?.(`inbox watcher: acquired lease pid=${process.pid}`);
+    leaseHeartbeat = setInterval(renewLease, LEASE_HEARTBEAT_MS);
+    leaseHeartbeat.unref?.();
+    timer = setTimeout(scan, Math.min(250, pollMs));
+    return true;
+  }
+
+  function scheduleStandby() {
+    if (stopped || standbyTimer) return;
+    standbyTimer = setTimeout(function retry() {
+      standbyTimer = null;
+      if (stopped) return;
+      if (startActive()) return;
+      standbyTimer = setTimeout(retry, pollMs);
+      standbyTimer.unref?.();
+    }, Math.min(250, pollMs));
+    standbyTimer.unref?.();
+  }
+
+  if (!startActive()) {
+    log.warn?.(`inbox watcher: lease busy at ${leasePath}; waiting as standby`);
+    scheduleStandby();
+  }
 
   return function stop() {
     stopped = true;
-    if (timer) clearTimeout(timer);
-    timer = null;
+    if (standbyTimer) clearTimeout(standbyTimer);
+    standbyTimer = null;
+    clearActiveTimers();
+    releaseLease();
   };
 }
 
@@ -289,6 +386,95 @@ function archiveFile(filePath, targetName, archiveRoot, log) {
   }
 }
 
+function leaseIsStale(filePath, lease) {
+  if (!pidIsAlive(lease.pid)) return true;
+  try {
+    const stats = statSync(filePath);
+    const lastUpdated = Math.max(Number(lease.updatedAt) || 0, stats.mtimeMs);
+    return Date.now() - lastUpdated > LEASE_STALE_MS;
+  } catch {
+    return true;
+  }
+}
+
+function pidIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code !== "ESRCH";
+  }
+}
+
+function readLease(filePath) {
+  if (!existsSync(filePath)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, "utf8"));
+    const pid = Number(parsed?.pid);
+    const startedAt = Number(parsed?.startedAt);
+    const updatedAt = Number(parsed?.updatedAt);
+    if (!Number.isInteger(pid) || pid <= 0) return null;
+    if (typeof parsed?.target !== "string" || !parsed.target) return null;
+    if (typeof parsed?.token !== "string" || !parsed.token) return null;
+    if (!Number.isFinite(startedAt) || !Number.isFinite(updatedAt)) return null;
+    return {
+      pid,
+      target: parsed.target,
+      token: parsed.token,
+      startedAt,
+      updatedAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function acquireLease(filePath, target, log) {
+  mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
+  const now = Date.now();
+  const meta = {
+    pid: process.pid,
+    target,
+    token: `${process.pid}-${now}-${Math.random().toString(36).slice(2, 10)}`,
+    startedAt: now,
+    updatedAt: now,
+  };
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const fd = openSync(filePath, "wx", 0o600);
+      try {
+        writeFileSync(fd, JSON.stringify(meta, null, 2));
+      } finally {
+        closeSync(fd);
+      }
+      return meta;
+    } catch (err) {
+      if (err?.code !== "EEXIST") {
+        log.warn?.(`inbox watcher: failed to acquire lease ${filePath}: ${err?.message ?? err}`);
+        return null;
+      }
+      const existing = readLease(filePath);
+      if (!existing || leaseIsStale(filePath, existing)) {
+        try {
+          unlinkSync(filePath);
+          continue;
+        } catch (unlinkErr) {
+          log.warn?.(
+            `inbox watcher: failed to remove stale lease ${filePath}: `
+            + `${unlinkErr?.message ?? unlinkErr}`,
+          );
+          return null;
+        }
+      }
+      return null;
+    }
+  }
+
+  return null;
+}
+
 function quarantine(filePath, targetName, failedRoot) {
   try {
     const failedDir = join(failedRoot, `${OPENCLAW_HARNESS_PREFIX}__${targetName}`);
@@ -309,6 +495,7 @@ export const __testing = {
   DEFAULT_INBOX_ROOT,
   DEFAULT_LEDGER,
   DEFAULT_ARCHIVE_ROOT,
+  DEFAULT_LEASE_PATH,
   UNROUTED_SUBDIR: unroutedSubdir(DEFAULT_INBOX_ROOT),
   OPENCLAW_HARNESS_PREFIX,
 };

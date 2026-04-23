@@ -160,7 +160,7 @@ Prefer the plugin install path above — it removes the need for this flag.
 
 ### Offline recovery
 
-Messages persist in the inbox until consumed or expired (default TTL: 1 hour). On MCP server startup, undelivered messages are replayed as channel notifications in chronological order. A `.delivered` tracker prevents duplicate notifications across restarts.
+Messages persist in the inbox until consumed or expired (default TTL: 1 day). On MCP server startup, undelivered messages are replayed as channel notifications in chronological order. A `.delivered` tracker prevents duplicate notifications across restarts.
 
 ### Authentication
 
@@ -177,7 +177,7 @@ All messages are delivered via SSH with key-based authentication. The `authentic
   "content": "The tests are passing now.",
   "timestamp": "2026-04-13T01:15:00Z",
   "replyTo": null,
-  "ttl": 3600,
+  "ttl": 86400,
   "target": "claude-code"
 }
 ```

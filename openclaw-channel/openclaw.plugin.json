@@ -43,7 +43,7 @@
       "replyVia": {
         "type": "string",
         "enum": ["telegram", "agent-bridge"],
-        "description": "Plugin-level default reply routing for inbound bridge messages. 'telegram' (default) routes the agent's reply back through the same Telegram chat that injected the session (visible to Ethan's phone). 'agent-bridge' routes the reply back to the SENDER machine via agent-bridge SCP (invisible to Telegram) — use for agent-to-agent back-channel conversations. Per-target overrides win over this default."
+        "description": "Plugin-level default reply routing for inbound bridge messages. 'telegram' routes the agent's reply back through the same Telegram chat that injected the session (visible to Ethan's phone). 'agent-bridge' routes the reply back to the SENDER machine via agent-bridge SCP (invisible to Telegram). If unset, routing mirrors the sender: messages with fromTarget reply over agent-bridge; messages without it reply through Telegram. Per-target overrides win over this default."
       },
       "targets": {
         "type": "object",
@@ -73,7 +73,7 @@
             "replyVia": {
               "type": "string",
               "enum": ["telegram", "agent-bridge"],
-              "description": "Override plugin-level `replyVia` for this target. 'telegram' = reply goes out through Telegram (Ethan's phone pings). 'agent-bridge' = reply is SCP'd back to the sender machine as a BridgeMessage (no Telegram traffic). Default: inherits plugin-level, falling back to 'telegram'."
+              "description": "Override plugin-level `replyVia` for this target. 'telegram' = reply goes out through Telegram (Ethan's phone pings). 'agent-bridge' = reply is SCP'd back to the sender machine as a BridgeMessage (no Telegram traffic). Default: inherits plugin-level, then mirrors the sender (agent-bridge when fromTarget is present, otherwise telegram)."
             }
           },
           "required": ["account"]

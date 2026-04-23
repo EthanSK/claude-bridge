@@ -207,7 +207,7 @@ Add to Claude Code MCP config (`~/.claude/.mcp.json`):
 
 All messages are authenticated via SSH keys. The channel notification includes `authenticated: ssh-key` metadata confirming the sender was verified by the SSH transport.
 
-Messages include sender name, timestamp, content, optional reply-to ID for threading, and TTL (default 1 hour, 0 = no expiry).
+Messages include sender name, timestamp, content, optional reply-to ID for threading, and TTL (default 1 day, 0 = no expiry).
 
 ## Troubleshooting
 

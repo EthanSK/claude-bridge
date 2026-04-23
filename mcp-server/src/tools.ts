@@ -17,6 +17,7 @@ import {
   loadConfig,
   getMachine,
   getLocalMachineName,
+  CLAUDE_CODE_TARGET,
   DEFAULT_TTL_SECONDS,
   isValidTarget,
 } from './config.js';
@@ -164,9 +165,10 @@ export function registerTools(server: McpServer): void {
         + '  • target="openclaw/clawdiboi2"   — OpenClaw @Clawdiboi2bot running Telegram session\n'
         + '  • target="openclaw/clordlethird" — OpenClaw @ClordLeThirdBot running Telegram session\n'
         + '  • target="<harness>/<name>"      — any other configured harness\n\n'
-        + 'The target field is REQUIRED as of agent-bridge 3.4.0 — there is intentionally no default routing. '
+        + 'The target field is REQUIRED as of agent-bridge 3.4.0 — there is intentionally no default delivery routing. '
         + 'Messages without a target are rejected at the sender. Legacy messages that land at the root of the inbox on the receiver are moved to .failed/_unrouted/ on next startup. '
-        + '`from_target` / `fromTarget` is optional only for one-way sends. If you expect the remote agent to reply over agent-bridge, set it explicitly to your own local target-id (for example `claude-code`, `openclaw/default`, or `openclaw/clawdiboi2`). There is no implicit back-channel default.',      inputSchema: {
+        + '`from_target` / `fromTarget` defaults to `claude-code` for normal Claude Code sends so the remote agent can reply over agent-bridge. '
+        + 'Set `one_way=true` only when you intentionally do not want a bridge reply path.',      inputSchema: {
         machine: z.string().describe('Name of the target machine'),
         message: z.string().describe('The message content to send'),
         target: z
@@ -178,13 +180,19 @@ export function registerTools(server: McpServer): void {
           .string()
           .optional()
           .describe(
-            'Optional sender-side reply target for one-way sends, but REQUIRED for explicit round-trip routing. Set this to your own local target-id (for example `claude-code`, `openclaw/default`, or `openclaw/clawdiboi2`) when you expect replies to come back over agent-bridge. There is no implicit default back-channel target.',
+            'Sender-side reply target for round-trip routing. Defaults to `claude-code` for Claude Code sends. Set explicitly when sending from another local target such as `openclaw/default` or `openclaw/clawdiboi2`.',
           ),
         fromTarget: z
           .string()
           .optional()
           .describe(
-            'CamelCase alias for `from_target`. Same meaning: your own local target-id for return routing.',
+            'CamelCase alias for `from_target`. Same meaning.',
+          ),
+        one_way: z
+          .boolean()
+          .optional()
+          .describe(
+            'If true, omit fromTarget entirely. Use only for deliberate one-way injection where no bridge reply should be routed back.',
           ),
         reply_to: z
           .string()
@@ -198,7 +206,7 @@ export function registerTools(server: McpServer): void {
           ),
       },
     },
-    async ({ machine: machineName, message, target, from_target, fromTarget, reply_to, ttl }) => {
+    async ({ machine: machineName, message, target, from_target, fromTarget, one_way, reply_to, ttl }) => {
       const machine = getMachine(machineName);
       if (!machine) {
         const all = loadConfig();
@@ -248,6 +256,20 @@ export function registerTools(server: McpServer): void {
           isError: true,
         };
       }
+      if (one_way && resolvedFromTarget) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: 'Invalid routing: one_way=true cannot be combined with from_target/fromTarget.',
+            },
+          ],
+          isError: true,
+        };
+      }
+      if (!resolvedFromTarget && !one_way) {
+        resolvedFromTarget = CLAUDE_CODE_TARGET;
+      }
       if (resolvedFromTarget && !isValidTarget(resolvedFromTarget)) {
         return {
           content: [
@@ -281,7 +303,10 @@ export function registerTools(server: McpServer): void {
           content: [
             {
               type: 'text' as const,
-              text: `Message sent to ${machineName} target=${target} (id: ${msg.id})`,
+              text:
+                `Message sent to ${machineName} target=${target}`
+                + `${resolvedFromTarget ? ` from_target=${resolvedFromTarget}` : ' one_way=true'}`
+                + ` (id: ${msg.id})`,
             },
           ],
         };

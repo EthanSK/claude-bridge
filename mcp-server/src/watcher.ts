@@ -72,11 +72,13 @@ type WatcherLeaseState = {
 let pollInterval: ReturnType<typeof setInterval> | null = null;
 let knownFiles = new Set<string>();
 let watcherLease: WatcherLeaseState | null = null;
+let watcherLeaseRenewFailures = 0;
 
 /** Maximum entries in knownFiles before evicting oldest (insertion-order). */
 const KNOWN_FILES_MAX = 2000;
 const WATCHER_LEASE_STALE_MS = 15_000;
 const WATCHER_LEASE_HEARTBEAT_MS = 5_000;
+const WATCHER_LEASE_MAX_RENEW_FAILURES = 3;
 
 function addKnownFile(name: string): void {
   if (knownFiles.has(name)) return;
@@ -159,6 +161,7 @@ function clearWatcherLeaseState(): void {
     clearInterval(watcherLease.heartbeat);
   }
   watcherLease = null;
+  watcherLeaseRenewFailures = 0;
 }
 
 function releaseWatcherLease(): void {
@@ -206,8 +209,30 @@ function renewWatcherLease(): void {
     }
     watcherLease.meta.updatedAt = Date.now();
     writeFileSync(watcherLease.filePath, JSON.stringify(watcherLease.meta, null, 2));
+    watcherLeaseRenewFailures = 0;
+    setWatcherStatus(currentBackend, true);
   } catch (err) {
-    logWarn(`Watcher: failed to renew lease heartbeat: ${err}`);
+    watcherLeaseRenewFailures += 1;
+    setWatcherStatus(currentBackend, false);
+    logWarn(
+      `Watcher: failed to renew lease heartbeat `
+      + `(${watcherLeaseRenewFailures}/${WATCHER_LEASE_MAX_RENEW_FAILURES}): ${err}`,
+    );
+    logEvent({
+      event: 'watcher.heartbeat_failed',
+      level: 'warn',
+      msg: `Watcher lease heartbeat failed for ${CLAUDE_CODE_TARGET}`,
+      context: {
+        target: CLAUDE_CODE_TARGET,
+        pid: process.pid,
+        failures: watcherLeaseRenewFailures,
+        maxFailures: WATCHER_LEASE_MAX_RENEW_FAILURES,
+        error: String(err),
+      },
+    });
+    if (watcherLeaseRenewFailures >= WATCHER_LEASE_MAX_RENEW_FAILURES) {
+      stopPollingForLeaseLoss('lease heartbeat write failures');
+    }
   }
 }
 
@@ -334,7 +359,7 @@ function emitChannelNotification(fileName: string): void {
     if (!existsSync(filePath)) return;
     const raw = readFileSync(filePath, 'utf8');
     const msg = JSON.parse(raw) as BridgeMessage;
-    if (!msg.id || !msg.timestamp || !msg.content) {
+    if (!msg.id || !msg.timestamp || typeof msg.content !== 'string') {
       logWarn(`Channel: skipping malformed message file ${fileName}`);
       return;
     }
@@ -500,7 +525,7 @@ export async function replayUndeliveredMessages(): Promise<void> {
       try {
         const raw = readFileSync(filePath, 'utf8');
         const msg = JSON.parse(raw) as BridgeMessage;
-        if (!msg.id || !msg.timestamp || !msg.content) continue;
+        if (!msg.id || !msg.timestamp || typeof msg.content !== 'string') continue;
         if (!msg.target || !isValidTarget(msg.target) || msg.target !== CLAUDE_CODE_TARGET) {
           quarantineUnrouted(
             fileName,

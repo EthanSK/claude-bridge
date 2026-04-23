@@ -602,7 +602,7 @@ For **push** notifications, the harness must support the `claude/channel` experi
 
 ### Offline recovery
 
-Messages persist in `~/.agent-bridge/inbox/` as JSON files until consumed or expired (default TTL: 1 hour). This means messages are never lost if the agent is temporarily unavailable. On MCP server startup:
+Messages persist in `~/.agent-bridge/inbox/` as JSON files until consumed or expired (default TTL: 1 day). This means messages are never lost if the agent is temporarily unavailable. On MCP server startup:
 
 1. The inbox is scanned for any messages not yet marked in `.delivered`
 2. Undelivered messages are replayed as channel notifications in chronological order
@@ -625,7 +625,7 @@ Messages are JSON files stored in `~/.agent-bridge/inbox/`:
   "content": "The tests are passing now. I fixed the import path in utils.ts.",
   "timestamp": "2026-04-13T01:15:00.000Z",
   "replyTo": null,
-  "ttl": 3600
+  "ttl": 86400
 }
 ```
 
@@ -638,7 +638,7 @@ Messages are JSON files stored in `~/.agent-bridge/inbox/`:
 | `content` | string | The message body |
 | `timestamp` | string | ISO 8601 creation time |
 | `replyTo` | string or null | Message ID this is a reply to (for threading) |
-| `ttl` | number | Time-to-live in seconds. `0` = no expiry. Default: `3600` (1 hour) |
+| `ttl` | number | Time-to-live in seconds. `0` = no expiry. Default: `86400` (1 day) |
 
 ---
 
@@ -806,12 +806,16 @@ As of **mcp-server 3.4.0** and **openclaw-channel 2.1.0**, every bridge message 
 **Calling `bridge_send_message`:**
 
 ```jsonc
-// Talk to Claude Code on the other machine (cross-machine agent-to-agent):
+// Talk to Claude Code on the other machine (cross-machine agent-to-agent).
+// fromTarget defaults to "claude-code", so replies can route back.
 bridge_send_message({ machine: "Mac-Mini", message: "hi", target: "claude-code" })
 
-// Inject into the OpenClaw @Clawdiboi2bot Telegram session:
-// reply goes back to the Telegram chat, NOT over the bridge
+// Inject into the OpenClaw @Clawdiboi2bot session and let it reply over the bridge:
 bridge_send_message({ machine: "Mac-Mini", message: "what's up?", target: "openclaw/clawdiboi2" })
+
+// Deliberate one-way injection: omit fromTarget so OpenClaw can fall back to
+// its configured/default visible route instead of a bridge back-channel.
+bridge_send_message({ machine: "Mac-Mini", message: "FYI", target: "openclaw/clawdiboi2", one_way: true })
 ```
 
 There is **no default routing** — a call without `target` is rejected. Legacy flat files that arrive at the root of `inbox/` (from pre-3.4.0 senders) are moved to `.failed/_unrouted/` on next startup with a deprecation log line. Upgrade your senders.
@@ -862,9 +866,9 @@ Explicit `targets` blocks (advanced override, still fully supported):
 
 Each entry resolves to an OpenClaw session route via `runtime.channel.routing.resolveAgentRoute({cfg, channel, accountId, peer})` — for Ethan's `dmScope=per-account-channel-peer` that produces keys of the form `agent:main:telegram:<account>:direct:<peer_id>`. The openclaw-channel plugin calls `dispatchInboundReplyWithBase` (from `openclaw/plugin-sdk/compat`) with a synthetic `ctxPayload` pinned to `Provider: "telegram"` + `OriginatingChannel: "telegram"` + `OriginatingTo: "telegram:<peer_id>"`, which runs a real agent turn and sends the agent's reply back via the live Telegram outbound — same dispatch path a native Telegram DM would take.
 
-**Round-trip bridge replies.** `BridgeMessage` carries an optional `fromTarget` field — the sender's OWN target-id. When an agent replies back over the bridge (cross-harness agent ↔ agent flows), `fromTarget` is copied into the reply's `target` field so the reply lands back in the session that started the conversation. There is no implicit fallback to `claude-code` or any other shared back-channel target. For round-trip conversations, send `from_target` / `fromTarget` explicitly as your local target-id (for example `claude-code`, `openclaw/default`, or `openclaw/clawdiboi2`).
+**Round-trip bridge replies.** `BridgeMessage` carries an optional `fromTarget` field — the sender's OWN target-id. When an agent replies back over the bridge (cross-harness agent ↔ agent flows), `fromTarget` is copied into the reply's `target` field so the reply lands back in the session that started the conversation. The Claude Code MCP tool now defaults `fromTarget` to `claude-code`; pass `from_target` / `fromTarget` explicitly when sending from another local target (for example `openclaw/default` or `openclaw/clawdiboi2`), and pass `one_way: true` when no bridge reply path should be included.
 
-Listeners are independent processes: Claude Code's channel-owner plugin watches only `inbox/claude-code/`, and the OpenClaw gateway watches only its configured `inbox/openclaw/<target>/` subdirs. Tool-only MCP hosts should not watch `claude-code` at all. One crashing doesn't affect the other, and the Claude-side watcher lease auto-recovers from stale locks on restart.
+Listeners are independent processes: Claude Code's channel-owner plugin watches only `inbox/claude-code/`, and the OpenClaw gateway watches only its configured `inbox/openclaw/<target>/` subdirs. Tool-only MCP hosts should not watch `claude-code` at all. One crashing doesn't affect the other, and both watcher paths use cross-process leases with stale-lock recovery.
 
 ---
 
@@ -874,7 +878,7 @@ The MCP server includes production-grade inbox management:
 
 | Feature | Description |
 |---------|-------------|
-| **TTL expiry** | Messages expire after their TTL (default 1 hour). TTL `0` = no expiry. |
+| **TTL expiry** | Messages expire after their TTL (default 1 day). TTL `0` = no expiry. |
 | **Max-age pruning** | Messages older than 24 hours are pruned regardless of TTL (configurable). |
 | **Max inbox size** | Inbox is capped at 100 messages; oldest are pruned first (configurable). |
 | **Deduplication** | Processed message IDs are tracked in `.processed`; duplicates are skipped. |
@@ -886,7 +890,7 @@ The MCP server includes production-grade inbox management:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BRIDGE_DEFAULT_TTL` | `3600` | Default message TTL in seconds |
+| `BRIDGE_DEFAULT_TTL` | `86400` | Default message TTL in seconds |
 | `BRIDGE_PRUNE_MAX_AGE_MS` | `86400000` | Max message age in milliseconds (24h) |
 | `BRIDGE_PRUNE_MAX_INBOX` | `100` | Max inbox message count |
 | `BRIDGE_PRUNE_INTERVAL_MS` | `300000` | Prune interval in milliseconds (5 min) |

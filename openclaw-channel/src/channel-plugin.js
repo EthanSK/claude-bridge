@@ -25,7 +25,7 @@
 
 import { deliverReply, localMachineName } from "./outbound.js";
 import { buildReply } from "./envelope.js";
-import { decodeBridgePeerId } from "./bridge-peer.js";
+import { decodeBridgePeerId, normalizeBridgePeerId } from "./bridge-peer.js";
 
 const CHANNEL_ID = "agent-bridge";
 const DEFAULT_ACCOUNT_ID = "default";
@@ -253,7 +253,8 @@ function resolveOutboundTarget(ctx, getReplyTargets) {
   const targets = getReplyTargets?.();
   const accountId =
     typeof ctx.accountId === "string" ? ctx.accountId.trim() : "";
-  const decodedTo = decodeBridgePeerId(ctx.to);
+  const normalizedTo = normalizeBridgePeerId(ctx.to);
+  const decodedTo = decodeBridgePeerId(normalizedTo);
   const mergeHit = (hit) => {
     if (!hit && !decodedTo?.fromMachine) return null;
     const hitReturnTarget = hit?.returnTarget ?? hit?.incoming?.fromTarget ?? null;
@@ -284,7 +285,7 @@ function resolveOutboundTarget(ctx, getReplyTargets) {
       decodedTo?.fromMachine && decodedTo?.returnTarget
         ? `${decodedTo.fromMachine}|${decodedTo.returnTarget}`
         : null;
-    const sessionHints = [ctx.threadId, ctx.to, machineTargetHint, ctx.accountId]
+    const sessionHints = [ctx.threadId, ctx.to, normalizedTo, machineTargetHint, ctx.accountId]
       .filter((v) => v != null)
       .map((v) => String(v));
     for (const hint of sessionHints) {

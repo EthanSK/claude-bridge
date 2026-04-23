@@ -10,7 +10,7 @@
  *   content: string,
  *   timestamp: 1712345678901,
  *   replyTo?: "msg-<uuid>",
- *   ttl?: 3600,
+ *   ttl?: 86400,
  *   target?: "claude-code",              // where the RECEIVER should deliver this
  *   fromTarget?: "openclaw/clawdiboi2",  // where the SENDER wants replies routed
  *   replyVia?: "telegram" | "agent-bridge" // per-message override for how the
@@ -38,6 +38,8 @@
 
 import { randomUUID } from "node:crypto";
 
+const DEFAULT_TTL_SECONDS = 86400;
+
 /** Generate a stable id compatible with the rest of agent-bridge. */
 export function newMessageId() {
   return `msg-${randomUUID()}`;
@@ -52,10 +54,11 @@ export function parseBridgeMessage(raw) {
     return null;
   }
   if (!obj || typeof obj !== "object") return null;
-  const required = ["id", "from", "to", "content"];
+  const required = ["id", "from", "to"];
   for (const k of required) {
     if (typeof obj[k] !== "string" || !obj[k]) return null;
   }
+  if (typeof obj.content !== "string") return null;
   // timestamp is permitted as a number (epoch ms) or an ISO-8601 string.
   if (
     obj.timestamp != null &&
@@ -100,7 +103,7 @@ export function buildReply({
     content,
     timestamp: Date.now(),
     replyTo: replyToId,
-    ttl: 3600,
+    ttl: DEFAULT_TTL_SECONDS,
   };
   if (typeof resolvedTarget === "string" && resolvedTarget) {
     reply.target = resolvedTarget;

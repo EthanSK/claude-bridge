@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildReply } from "../src/envelope.js";
+import { buildReply, parseBridgeMessage } from "../src/envelope.js";
 
 test("buildReply preserves message id threading and explicit return target", () => {
   const reply = buildReply({
@@ -32,4 +32,18 @@ test("buildReply can derive return target from incoming.fromTarget", () => {
   });
 
   assert.equal(reply.target, "openclaw/default");
+});
+
+test("parseBridgeMessage accepts empty string content", () => {
+  const msg = parseBridgeMessage(JSON.stringify({
+    id: "msg-empty",
+    from: "MacBookPro",
+    to: "Mac-Mini",
+    content: "",
+    timestamp: Date.now(),
+    target: "openclaw/default",
+  }));
+
+  assert.equal(msg.id, "msg-empty");
+  assert.equal(msg.content, "");
 });
