@@ -100,16 +100,28 @@ export default {
       return;
     }
 
-    // Short-lived CLI contexts (help, inspect, list, setup --help, etc.) also
-    // load plugins. Skip the watcher for those to avoid stalled processes.
-    const argv = process.argv.join(" ");
+    // Short-lived CLI contexts (help, inspect, list, `gateway status`, etc.)
+    // also load plugins. Only start the inbox watcher for the long-lived
+    // gateway daemon itself; otherwise ad-hoc CLI processes can briefly start
+    // competing watchers and race the real gateway over inbox files.
+    const argvTail = process.argv.slice(2);
+    const gatewaySubcommand = argvTail[0] === "gateway";
+    const gatewayControlTokens = new Set([
+      "status",
+      "start",
+      "stop",
+      "restart",
+      "help",
+      "doctor",
+      "--help",
+      "-h",
+    ]);
+    const gatewayLooksLikeControlCommand = gatewaySubcommand
+      && argvTail.slice(1).some((arg) => gatewayControlTokens.has(String(arg)));
     const isGateway =
-      argv.includes(" gateway ") ||
-      argv.endsWith(" gateway") ||
-      argv.includes("/gateway ") ||
-      argv.includes("gateway-run") ||
-      argv.includes("/entry.js gateway") ||
-      process.env.OPENCLAW_ROLE === "gateway";
+      process.env.OPENCLAW_ROLE === "gateway"
+      || argvTail[0] === "gateway-run"
+      || (gatewaySubcommand && !gatewayLooksLikeControlCommand);
 
     const regMode = api?.registrationMode;
     const isSetupOnly = regMode === "cli-metadata" || regMode === "setup-only";

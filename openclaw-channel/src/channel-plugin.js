@@ -16,12 +16,11 @@
  *   - setup             : applyAccountConfig (no-op for us — config is owned
  *                         by the top-level channels.agent-bridge block, not
  *                         per-account)
+ *   - gateway/status    : keep a passive runtime alive so OpenClaw marks the
+ *                         account as running instead of repeatedly restarting
+ *                         it as "stopped"
  *   - outbound          : direct-delivery sendText that SCPs a BridgeMessage
  *                         back to the sender machine
- *
- * Everything else (security, groups, pairing, doctor, status) is intentionally
- * omitted. Channels are allowed to ship without those surfaces — the host
- * treats them as "no-op adapter available" and uses its defaults.
  */
 
 import { deliverReply, localMachineName } from "./outbound.js";
@@ -30,6 +29,26 @@ import { decodeBridgePeerId } from "./bridge-peer.js";
 
 const CHANNEL_ID = "agent-bridge";
 const DEFAULT_ACCOUNT_ID = "default";
+const DEFAULT_RUNTIME = {
+  accountId: DEFAULT_ACCOUNT_ID,
+  running: false,
+  connected: false,
+  lastConnectedAt: null,
+  lastError: null,
+  lastInboundAt: null,
+  lastOutboundAt: null,
+};
+
+function waitUntilAbort(signal) {
+  return new Promise((resolve) => {
+    if (!signal) return;
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
 
 /**
  * Build the ChannelPlugin. The returned object is passed straight to
@@ -120,6 +139,58 @@ export function createAgentBridgeChannelPlugin(opts) {
       resolveAccountId({ accountId }) {
         return accountId ?? DEFAULT_ACCOUNT_ID;
       },
+    },
+
+    gateway: {
+      async startAccount(ctx) {
+        const accountId = ctx.accountId ?? ctx.account?.accountId ?? DEFAULT_ACCOUNT_ID;
+        const now = Date.now();
+        ctx.setStatus({
+          ...ctx.getStatus(),
+          accountId,
+          running: true,
+          connected: true,
+          lastConnectedAt: now,
+          lastEventAt: now,
+          lastError: null,
+        });
+        log?.info?.(`[${accountId}] agent-bridge channel runtime marked ready`);
+        try {
+          await waitUntilAbort(ctx.abortSignal);
+        } finally {
+          ctx.setStatus({
+            ...ctx.getStatus(),
+            accountId,
+            running: false,
+            connected: false,
+            lastStopAt: Date.now(),
+          });
+        }
+      },
+    },
+
+    status: {
+      defaultRuntime: { ...DEFAULT_RUNTIME },
+      skipStaleSocketHealthCheck: true,
+      buildChannelSummary: ({ snapshot }) => ({
+        configured: snapshot.configured ?? false,
+        running: snapshot.running ?? false,
+        connected: snapshot.connected ?? false,
+        lastConnectedAt: snapshot.lastConnectedAt ?? null,
+        lastError: snapshot.lastError ?? null,
+      }),
+      buildAccountSnapshot: ({ account, runtime }) => ({
+        accountId: account?.accountId ?? DEFAULT_ACCOUNT_ID,
+        enabled: account?.enabled !== false,
+        configured: true,
+        linked: true,
+        running: runtime?.running ?? false,
+        connected: runtime?.connected ?? false,
+        lastConnectedAt: runtime?.lastConnectedAt ?? null,
+        lastError: runtime?.lastError ?? null,
+        lastInboundAt: runtime?.lastInboundAt ?? null,
+        lastOutboundAt: runtime?.lastOutboundAt ?? null,
+      }),
     },
 
     outbound: {
