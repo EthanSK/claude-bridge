@@ -80,9 +80,20 @@ process.on('uncaughtException', (err) => {
   logError(`Uncaught exception: ${err}`);
 });
 
-// SIGPIPE: Node ignores SIGPIPE by default (converts it to EPIPE errors), but
-// be explicit — if something raises SIGPIPE to us, treat it as parent death.
-process.on('SIGPIPE', () => process.exit(0));
+// SIGPIPE: Node normally ignores SIGPIPE and surfaces broken pipes as stream
+// EPIPE errors. Keep that behaviour. Claude Code can close diagnostic pipes
+// between tool turns; an undifferentiated SIGPIPE must not kill a channel-owner
+// watcher. stdout EPIPE is still handled above by process.stdout.on('error').
+process.on('SIGPIPE', () => {
+  try {
+    logEvent({
+      event: 'sigpipe.ignored',
+      level: 'warn',
+      msg: 'SIGPIPE ignored; stream-specific EPIPE handlers decide liveness',
+      context: { pid: process.pid },
+    });
+  } catch {}
+});
 
 function readParentCommandLine(): string {
   // Best-effort diagnostic guard for POSIX hosts. If this fails (for example
@@ -121,14 +132,14 @@ async function main(): Promise<void> {
   logEvent({
     event: 'server.starting',
     msg: `agent-bridge MCP server starting on "${localName}"`,
-    context: { machineName: localName, version: '3.4.12', pid: process.pid, nodeVersion: process.version },
+    context: { machineName: localName, version: '3.4.13', pid: process.pid, nodeVersion: process.version },
   });
 
   // Create MCP server with channel capability
   const server = new McpServer(
     {
       name: 'agent-bridge',
-      version: '3.4.12',
+      version: '3.4.13',
     },
     {
       capabilities: {

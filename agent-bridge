@@ -9,7 +9,7 @@ set -euo pipefail
 
 INVOKED_AS="$(basename "$0")"
 
-VERSION="3.4.12"
+VERSION="3.4.13"
 
 # -- Colours (ANSI) ----------------------------------------------------------
 RED='\033[0;31m'

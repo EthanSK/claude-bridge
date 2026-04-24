@@ -1,5 +1,9 @@
 # Changelog
 
+## agent-bridge 3.4.13 — 2026-04-24
+
+- Fixed the remaining channel-owner death path after 3.4.12: an explicit SIGPIPE handler was still exiting the process after Claude Code closed a pipe. SIGPIPE is now ignored and stream-specific EPIPE handlers decide liveness, so diagnostic-pipe closure cannot kill a live `claude-code` watcher while stdout/JSON-RPC failure remains fatal.
+
 ## agent-bridge 3.4.12 — 2026-04-24
 
 - Fixed channel-owner survival when Claude Code closes the diagnostic stderr pipe between turns: stderr EPIPE is now swallowed after durable file logging, while stdout/JSON-RPC EPIPE still exits because channel delivery would be impossible. This addresses 3.4.11 watchers dying after ignored stdin/SIGTERM despite the parent Claude process staying alive.
