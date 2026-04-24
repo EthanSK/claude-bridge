@@ -50,6 +50,21 @@ function isBrokenPipe(err: unknown): boolean {
   return /write EPIPE|Broken pipe|premature close|ERR_STREAM_DESTROYED/i.test(msg);
 }
 
+process.stderr.on('error', (err) => {
+  // stderr is diagnostic only. Claude Code may close it between tool turns;
+  // logger.ts already writes the durable file log first, so swallow stderr
+  // broken-pipe errors instead of letting them kill a channel-owner watcher.
+  if (isBrokenPipe(err)) return;
+  try { logError(`stderr error: ${err}`); } catch {}
+});
+
+process.stdout.on('error', (err) => {
+  // stdout is the JSON-RPC transport. If that pipe breaks, the MCP connection
+  // is gone and channel notifications cannot be delivered to Claude anymore.
+  if (isBrokenPipe(err)) process.exit(0);
+  try { logError(`stdout error: ${err}`); } catch {}
+});
+
 process.on('unhandledRejection', (err) => {
   if (isBrokenPipe(err)) {
     try { logError(`Unhandled rejection EPIPE — parent pipe closed, exiting`); } catch {}
@@ -106,14 +121,14 @@ async function main(): Promise<void> {
   logEvent({
     event: 'server.starting',
     msg: `agent-bridge MCP server starting on "${localName}"`,
-    context: { machineName: localName, version: '3.4.11', pid: process.pid, nodeVersion: process.version },
+    context: { machineName: localName, version: '3.4.12', pid: process.pid, nodeVersion: process.version },
   });
 
   // Create MCP server with channel capability
   const server = new McpServer(
     {
       name: 'agent-bridge',
-      version: '3.4.11',
+      version: '3.4.12',
     },
     {
       capabilities: {

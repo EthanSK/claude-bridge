@@ -70,12 +70,26 @@ function formatMessage(level: string, msg: string): string {
   return `[${new Date().toISOString()}] [${level}] ${msg}\n`;
 }
 
+function writeStderrBestEffort(formatted: string): void {
+  // stderr is only diagnostic. Claude Code may close the stderr pipe between
+  // tool turns while the channel-owner watcher should keep running; a broken
+  // diagnostic pipe must never take down the inbox watcher. stdout remains the
+  // JSON-RPC transport and is handled separately in index.ts.
+  try {
+    if (!process.stderr.destroyed && process.stderr.writable) {
+      process.stderr.write(formatted);
+    }
+  } catch {
+    // Ignore all stderr write failures. The file log above is the source of truth.
+  }
+}
+
 export function logInfo(msg: string): void {
   ensureLogsDir();
   rotateIfNeeded();
   const formatted = formatMessage('INFO', msg);
   try { appendFileSync(getLogFile(), formatted); } catch { /* ignore */ }
-  process.stderr.write(formatted);
+  writeStderrBestEffort(formatted);
 }
 
 export function logWarn(msg: string): void {
@@ -83,7 +97,7 @@ export function logWarn(msg: string): void {
   rotateIfNeeded();
   const formatted = formatMessage('WARN', msg);
   try { appendFileSync(getLogFile(), formatted); } catch { /* ignore */ }
-  process.stderr.write(formatted);
+  writeStderrBestEffort(formatted);
 }
 
 export function logError(msg: string, err?: unknown): void {
@@ -94,7 +108,7 @@ export function logError(msg: string, err?: unknown): void {
     formatted += `  Stack: ${err.stack}\n`;
   }
   try { appendFileSync(getLogFile(), formatted); } catch { /* ignore */ }
-  process.stderr.write(formatted);
+  writeStderrBestEffort(formatted);
 }
 
 export function logDebug(msg: string): void {
