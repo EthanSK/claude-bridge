@@ -2,7 +2,7 @@
 
 **Bridge Claude Code sessions across machines. Agent-to-agent push comms over SSH.**
 
-> ⚠️ **Tested end-to-end with Claude Code only (as of v3.0.0, 2026-04-14).** Integrations for other harnesses (Codex, Gemini CLI, OpenClaw, Aider) are scaffolded via standard MCP but haven't been exercised yet. Don't assume cross-harness parity.
+> ✅ **Tested end-to-end with Claude Code and OpenClaw.** Claude Code uses the channel plugin for push delivery. OpenClaw uses the native `openclaw-channel/` plugin plus the MCP server, including cross-machine `replyVia: "agent-bridge"` round trips. Codex CLI, Gemini CLI, Aider, and other MCP hosts remain scaffolded/polling integrations until verified in their own harnesses.
 >
 > ⚠️ **Breaking change in 3.0.0:** the `--claude`, `--codex`, and `--agent` flags on `agent-bridge run` have been removed. Agent-to-agent communication is channel-mode only (`bridge_send_message` → inbox drop → running remote agent's context). See [CHANGELOG.md](CHANGELOG.md) for details. The plain-shell `agent-bridge run <machine> "<cmd>"` is still supported for diagnostics.
 
@@ -37,7 +37,7 @@ agent-bridge lets Claude Code sessions on different machines talk to each other 
 - **Peer-to-peer** -- no central server, no cloud, direct SSH between your machines
 - **Real-time push** -- remote messages arrive as `<channel source="agent-bridge">` events in the running Claude Code session, no polling needed
 - **Zero dependencies** -- just bash, ssh, and node (bundled with Claude Code) -- no Docker, no services
-- **MCP-based** -- speaks standard Model Context Protocol, so other agents that consume MCP can in principle use it, but only Claude Code is the day-one confirmed harness
+- **MCP-based** -- speaks standard Model Context Protocol, with confirmed Claude Code push and OpenClaw channel integrations; other MCP hosts can use the polling tools until their harness-specific flow is verified
 
 ---
 
@@ -77,7 +77,7 @@ agent-bridge lets Claude Code sessions on different machines talk to each other 
 | Agent Harness | Status | Integration |
 |---------------|--------|-------------|
 | **Claude Code** | ✅ **Tested end-to-end**, both machines confirmed | Channel plugin + MCP server — push-based, `<channel source="agent-bridge">` events auto-surface in the running session |
-| OpenClaw | ✅ First-class channel | Native channel plugin in [`openclaw-channel/`](openclaw-channel/README.md) + MCP server |
+| OpenClaw | ✅ **Tested end-to-end**, first-class channel | Native channel plugin in [`openclaw-channel/`](openclaw-channel/README.md) + MCP server, including bridge reply routing over the agent-bridge back-channel |
 | Codex CLI (OpenAI) | 🟡 Scaffolded, not exercised yet | MCP server + skill file at `AGENTS.md` — would poll via `bridge_receive_messages` |
 | Gemini CLI | 🟡 Scaffolded, not exercised yet | MCP server + skill file at `GEMINI.md` |
 | Aider / other MCP hosts | 🟡 Scaffolded, not exercised yet | MCP server + skill file at `INSTRUCTIONS.md` |
@@ -404,7 +404,7 @@ v2 adds an MCP server that enables running AI agent sessions to communicate dire
 | `bridge_clear_inbox` | Clear all messages from the local inbox |
 | `bridge_inbox_stats` | Get inbox statistics: pending count, oldest message age, watcher health, etc. |
 
-> **Note:** The MCP server does NOT spawn new agent processes. It enables _existing running_ agent sessions to communicate. Machine A's agent sends a message to Machine B's inbox, and Machine B's already-running agent picks it up via channel push (Claude Code) or `bridge_receive_messages` (all other harnesses).
+> **Note:** The MCP server does NOT spawn new agent processes. It enables _existing running_ agent sessions to communicate. Machine A's agent sends a message to Machine B's inbox, and Machine B's already-running agent picks it up via channel push (Claude Code), the OpenClaw native channel plugin, or `bridge_receive_messages` in polling-only harnesses.
 
 ### Building the MCP server
 
@@ -553,7 +553,7 @@ Register the server using your harness's MCP configuration mechanism, pointing t
 node /absolute/path/to/agent-bridge/mcp-server/build/index.js
 ```
 
-For **push** notifications, the harness must support the `claude/channel` experimental capability (currently only Claude Code). Without push, agents poll with `bridge_receive_messages`. Reference `INSTRUCTIONS.md` for a plain-English description of all commands.
+For **push** notifications, Claude Code uses the `claude/channel` experimental capability and OpenClaw uses the native `openclaw-channel/` plugin. Without a push integration, agents poll with `bridge_receive_messages`. Reference `INSTRUCTIONS.md` for a plain-English description of all commands.
 
 ---
 

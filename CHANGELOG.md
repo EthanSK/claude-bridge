@@ -1,5 +1,15 @@
 # Changelog
 
+## agent-bridge 3.4.6 — 2026-04-24
+
+### Docs/site: align public docs with the current bridge behavior
+
+- Update the README compatibility warning now that OpenClaw channel delivery
+  and agent-bridge reply round trips have been tested end-to-end.
+- Refresh the public site version labels, TTL copy, compatibility copy, and
+  changelog highlights so they match the 3.4.x per-target routing behavior
+  and the 1-day default message TTL.
+
 ## agent-bridge 3.4.5 / openclaw-channel 2.3.4 — 2026-04-24
 
 ### Fix: OpenClaw bridge replies after delivery recovery
