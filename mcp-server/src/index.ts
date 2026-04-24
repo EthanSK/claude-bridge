@@ -464,7 +464,15 @@ async function main(): Promise<void> {
         // EPERM or anything else — parent still exists from our POV, keep running.
       }
     }, 5000);
-    parentWatchdog.unref();
+    // Tool-only MCP children should not keep Node alive once stdio closes.
+    // Channel-owner watchers are intentionally different: after Claude Code
+    // closes stdin between turns, every watcher/prune timer is unref'ed, so
+    // the process can otherwise exit immediately despite ignoring the stdin
+    // event. Keep the parent watchdog ref'ed for channel owners; it is the
+    // minimal live handle and will still shut us down when the parent dies.
+    if (!keepAliveAfterStdioEnd) {
+      parentWatchdog.unref();
+    }
   }
 }
 

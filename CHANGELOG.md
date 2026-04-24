@@ -1,5 +1,9 @@
 # Changelog
 
+## agent-bridge 3.4.10 — 2026-04-24
+
+- Fixed the 3.4.9 channel-owner keepalive: ignoring Claude Code stdin end was not enough because all watcher timers were unref'ed, so Node could still exit between turns. Channel-owner MCP servers now keep the parent-liveness watchdog ref'ed after stdio closes, preserving the `claude-code` watcher until parent death/EPIPE.
+
 ## agent-bridge 3.4.9 — 2026-04-24
 
 ### Fix: keep Claude Code channel watcher alive between turns
