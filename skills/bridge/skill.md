@@ -237,10 +237,12 @@ tailscale ip -4
 If both machines are on Tailscale, use the Tailscale hostname or IP instead of the local IP. This works across networks.
 
 ### Messages not arriving
-1. Check watcher health: use `bridge_inbox_stats` tool
+1. Check watcher health: use `bridge_inbox_stats` tool (Claude Code target)
 2. Verify SSH connectivity: `agent-bridge status <machine>`
-3. Check logs: `~/.agent-bridge/logs/mcp-server.log`
-4. Watcher polls every 2 s — no dependencies (fswatch/inotifywait removed in 3.4.3)
+3. Check the target inbox: `ls ~/.agent-bridge/inbox/claude-code/` or `ls ~/.agent-bridge/inbox/openclaw/default/`
+4. Check archives/quarantine: `ls ~/.agent-bridge/inbox/.archive/claude-code/`, `ls ~/.agent-bridge/archive/openclaw/`, and `find ~/.agent-bridge/inbox/.failed -maxdepth 3 -type f -name '*.json'`
+5. Check logs: `~/.agent-bridge/logs/mcp-server.log` (Claude Code) or `~/.openclaw/logs/gateway.log` (OpenClaw)
+6. Watchers poll every 2 s — no dependencies (fswatch/inotifywait removed in 3.4.3)
 
 ## Security notes
 

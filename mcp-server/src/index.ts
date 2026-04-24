@@ -18,7 +18,7 @@
  * receives it automatically via the channel.
  *
  * Communication protocol:
- * - Messages are JSON files written to ~/.agent-bridge/inbox/ on the target
+ * - Messages are JSON files written to ~/.agent-bridge/inbox/<target>/ on the target
  * - SSH is used for delivery (reusing v1 key pairs from ~/.agent-bridge/keys/)
  * - A file watcher detects incoming messages and pushes them via channel notifications
  *
@@ -28,6 +28,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { execFileSync } from 'node:child_process';
 import { ensureDirectories, getLocalMachineName } from './config.js';
 import { initInbox, shutdownInbox } from './inbox.js';
 import type { BridgeMessage } from './inbox.js';
@@ -68,6 +69,31 @@ process.on('uncaughtException', (err) => {
 // be explicit — if something raises SIGPIPE to us, treat it as parent death.
 process.on('SIGPIPE', () => process.exit(0));
 
+function readParentCommandLine(): string {
+  // Best-effort diagnostic guard for POSIX hosts. If this fails (for example
+  // on Windows), return an empty string and leave the explicit role alone.
+  try {
+    return execFileSync('ps', ['-p', String(process.ppid), '-o', 'command='], {
+      encoding: 'utf8',
+      timeout: 1000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return '';
+  }
+}
+
+function parentLooksChannelCapable(commandLine: string): boolean {
+  // Claude channel notifications are only delivered to sessions launched with
+  // the channel plugin flags. Plain MCP/tool sessions (including editor helper
+  // processes) may start this server from the same plugin manifest, but they do
+  // not process notifications/claude/channel. If they win the watcher lease,
+  // messages are marked delivered and then disappear from the intended live
+  // channel. Treat those parents as tools-only by default.
+  return /--channels/.test(commandLine)
+    || /--dangerously-load-development-channels/.test(commandLine);
+}
+
 async function main(): Promise<void> {
   // Ensure all directories exist
   ensureDirectories();
@@ -80,14 +106,14 @@ async function main(): Promise<void> {
   logEvent({
     event: 'server.starting',
     msg: `agent-bridge MCP server starting on "${localName}"`,
-    context: { machineName: localName, version: '3.4.6', pid: process.pid, nodeVersion: process.version },
+    context: { machineName: localName, version: '3.4.7', pid: process.pid, nodeVersion: process.version },
   });
 
   // Create MCP server with channel capability
   const server = new McpServer(
     {
       name: 'agent-bridge',
-      version: '3.4.6',
+      version: '3.4.7',
     },
     {
       capabilities: {
@@ -146,7 +172,32 @@ async function main(): Promise<void> {
   // server only for outbound bridge_* tools) must disable watching entirely.
   // We now support explicit roles plus a single-owner lease with stale-lock
   // recovery so a crashed/zombie session cannot permanently block the next run.
-  const bridgeRole = process.env.AGENT_BRIDGE_ROLE?.trim() || '';
+  const requestedBridgeRole = process.env.AGENT_BRIDGE_ROLE?.trim() || '';
+  const parentCommandLine = readParentCommandLine();
+  let bridgeRole = requestedBridgeRole;
+  if (
+    bridgeRole === 'channel-owner'
+    && process.env.AGENT_BRIDGE_ALLOW_NON_CHANNEL_PARENT !== '1'
+    && parentCommandLine
+    && !parentLooksChannelCapable(parentCommandLine)
+  ) {
+    logWarn(
+      'AGENT_BRIDGE_ROLE=channel-owner requested, but parent process does not look channel-capable; '
+      + 'demoting this MCP server to tools-only so it cannot steal claude-code inbox delivery.',
+    );
+    logEvent({
+      event: 'watcher.role_demoted_non_channel_parent',
+      level: 'warn',
+      msg: 'Demoted channel-owner to tools-only because parent lacks Claude channel flags',
+      context: {
+        pid: process.pid,
+        parentPid: process.ppid,
+        requestedRole: requestedBridgeRole,
+        parentCommandLine,
+      },
+    });
+    bridgeRole = 'tools-only';
+  }
   const watcherDisabled =
     process.env.AGENT_BRIDGE_DISABLE_WATCHER === '1'
     || bridgeRole === 'tools-only';

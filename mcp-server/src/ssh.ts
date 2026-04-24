@@ -150,8 +150,9 @@ function sshExecSingle(
 /** Options for tuning a single sshExec call. */
 export interface SSHExecOptions {
   /**
-   * Force a LAN-first probe regardless of the last-reachable-path cache.
-   * Used by status/health checks that want an authoritative answer.
+   * Compatibility flag retained from the old cache/probe era. 3.4.2+ endpoint
+   * selection remains `internet_host` when configured, otherwise LAN; callers
+   * may still pass this without changing endpoint selection.
    */
   bypassPathCache?: boolean;
 }

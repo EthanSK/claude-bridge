@@ -1,10 +1,10 @@
 /**
- * Last-reachable-path cache for agent-bridge.
+ * Historical last-reachable-path cache for agent-bridge.
  *
- * Remembers whether LAN or internet worked most recently per-machine so that
- * off-network ops don't eat a 3s LAN probe on every call. Entries older than
- * PATH_CACHE_TTL_MS (default 1h) are considered stale — the next call will
- * re-probe LAN-first to ensure the cache reflects current topology.
+ * As of 3.4.2, endpoint selection is deterministic: use `internet_host`
+ * when configured, otherwise use the LAN `host`. No fallback is attempted,
+ * and this cache is retained only for compatibility/observability with older
+ * commands and logs.
  *
  * Cache file: ~/.agent-bridge/path-cache.json, mode 0600.
  *

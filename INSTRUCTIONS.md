@@ -63,9 +63,11 @@ There is no fresh-spawn / `--print` equivalent. The old `agent-bridge run ... --
 - Inbox: `~/.agent-bridge/inbox/` — per-harness/per-target subdirs (3.4.0+):
   - `inbox/claude-code/` — watched by the Claude Code channel plugin
   - `inbox/openclaw/<target>/` — watched by the openclaw-channel plugin
-  - `inbox/.archive/<target>/` — delivered messages retained for debug
-  - `inbox/.failed/<target>/` — malformed messages, per target
-  - `inbox/.failed/_unrouted/` — messages with no `target` field, quarantined
+  - `inbox/.archive/claude-code/` — delivered Claude Code messages retained for debug
+  - `inbox/.failed/claude-code/` — malformed/misrouted Claude Code-target files
+  - `inbox/.failed/_unrouted/` — legacy flat messages with no routable target, quarantined
+  - `archive/openclaw/<target>/` — delivered OpenClaw messages retained for debug
+  - `.openclaw-v2-delivered` — OpenClaw delivered-ID ledger
 - Outbox: `~/.agent-bridge/outbox/` (copies of sent messages)
 - Logs: `~/.agent-bridge/logs/` (MCP server logs, auto-rotated)
 - No cloud, no dependencies -- pure bash over SSH
@@ -152,7 +154,7 @@ Prefer the plugin install path above — it removes the need for this flag.
 ### Message flow
 
 1. Machine A's agent calls `bridge_send_message("MacBook", "check the test results")`
-2. The message is written to Machine B's `~/.agent-bridge/inbox/` via SSH
+2. The message is written to Machine B's target-specific inbox subdir via SSH, e.g. `~/.agent-bridge/inbox/claude-code/<id>.json`
 3. Machine B's file watcher detects the new file
 4. **Push mode:** Channel plugin pushes the message into the running Claude session
 5. **Polling mode:** Agent calls `bridge_receive_messages()` to consume it
@@ -160,7 +162,7 @@ Prefer the plugin install path above — it removes the need for this flag.
 
 ### Offline recovery
 
-Messages persist in the inbox until consumed or expired (default TTL: 1 day). On MCP server startup, undelivered messages are replayed as channel notifications in chronological order. A `.delivered` tracker prevents duplicate notifications across restarts.
+Pending messages persist in their per-target inbox subdir until delivered, consumed, expired, or quarantined (default TTL: 1 day). On MCP server startup, undelivered Claude Code messages in `inbox/claude-code/` are replayed as channel notifications in chronological order; successfully delivered files are archived to `inbox/.archive/claude-code/`. A `.delivered` tracker prevents duplicate Claude Code notifications across restarts. OpenClaw uses `~/.agent-bridge/.openclaw-v2-delivered` and archives under `~/.agent-bridge/archive/openclaw/<target>/`.
 
 ### Authentication
 

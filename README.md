@@ -339,10 +339,10 @@ agent-bridge run MacBook-Pro "uname -a"
 | `agent-bridge pair` | Interactive or flag-based pairing to connect to another machine. |
 | `agent-bridge config <machine>` | View or set machine config (e.g. `--internet-host`, `--internet-port`). |
 | `agent-bridge connect <machine>` | Open an interactive SSH session. |
-| `agent-bridge status [machine]` | Check if machine(s) are reachable. Uses the [path cache](#path-cache-lan-vs-internet); add `--probe`/`--fresh` to force a LAN-first re-probe. |
+| `agent-bridge status [machine]` | Check whether machine(s) are reachable on the configured endpoint: `internet_host` when present, otherwise LAN `host`. `--probe`/`--fresh` are compatibility no-ops in 3.4.2+. |
 | `agent-bridge list` | List all paired machines (shows internet_host if set). |
 | `agent-bridge run <machine> "cmd"` | Run a PLAIN shell command on a paired machine (diagnostics only — no agent wrapping). |
-| `agent-bridge reset-path <machine>` | Clear the cached LAN/internet path for a machine (or `--all`). See [Path cache](#path-cache-lan-vs-internet). |
+| `agent-bridge reset-path <machine>` | Compatibility command for clearing old path-cache files. It no longer changes endpoint selection in 3.4.2+. |
 | `agent-bridge unpair <machine>` | Remove a pairing. |
 
 > To talk to the **running agent** on the other machine, use the channel plugin's `bridge_send_message` MCP tool. `agent-bridge run` does not spawn agents. The old `--claude` / `--codex` / `--agent` flags were removed in 3.0.0.
@@ -562,53 +562,54 @@ For **push** notifications, Claude Code uses the `claude/channel` experimental c
 ### Send flow
 
 ```
-1. Agent calls bridge_send_message("MacBookPro", "check the test results")
-2. MCP server creates a JSON message file with UUID, timestamp, TTL
-3. The message is delivered to the remote machine's ~/.agent-bridge/inbox/ via SSH
+1. Agent calls bridge_send_message({ machine: "MacBookPro", message: "check the test results", target: "claude-code" })
+2. MCP server creates a JSON message file with UUID, timestamp, TTL, target, and fromTarget
+3. The message is delivered to the remote machine's per-target inbox subdir via SSH
+   (for example ~/.agent-bridge/inbox/claude-code/<id>.json)
 4. A copy is saved locally in ~/.agent-bridge/outbox/ for tracking
 ```
 
 ### Receive flow (push mode -- Claude Code)
 
 ```
-1. Polling watcher (2s interval) detects new .json file in inbox/
+1. Polling watcher (2s interval) detects a new .json file in inbox/claude-code/
 2. Watcher parses the message and checks the .delivered tracker for dedup
 3. Channel notification is pushed via notifications/claude/channel
 4. Message appears in Claude's conversation as <channel source="agent-bridge" ...>content</channel>
 5. Message ID is recorded in .delivered to prevent re-delivery on restart
+6. The delivered file is moved to inbox/.archive/claude-code/ for debug tailing
 ```
 
-### Receive flow (push mode -- OpenClaw plugin/daemon, v1.2.0+)
+### Receive flow (push mode -- OpenClaw channel plugin, v2.3+)
 
 ```
-1. Polling watcher (2s interval) detects new .json file in inbox/
-2. Watcher parses the message and checks .openclaw-delivered for dedup
-3. Plugin resolves per-message routing (msg.route / @@route header / plugin defaults)
-4. Plugin dispatches per `deliveryMode`:
-   - log-only: parse + archive only
-   - message-send: `openclaw message send --channel <ch> --account <acc> --target <chat>`
-   - agent-turn: `openclaw agent --agent <id> --message <env> --deliver --reply-channel <ch> --reply-account <acc> --reply-to <chat>`
-5. On success, message ID is recorded in .openclaw-delivered and the file is moved to inbox/.openclaw-delivered/ to prevent re-delivery on restart
+1. Polling watcher (2s interval) detects a new .json file in inbox/openclaw/<target>/
+2. Watcher parses the message and checks ~/.agent-bridge/.openclaw-v2-delivered for dedup
+3. Plugin resolves the target to an OpenClaw route (auto-discovered Telegram account or explicit targets block)
+4. Plugin dispatches via dispatchInboundReplyWithBase, so a real agent turn runs in the resolved session
+5. Replies route via agent-bridge when fromTarget is present, or via Telegram when configured/one-way
+6. On success, the file is archived under ~/.agent-bridge/archive/openclaw/<target>/ and the ID is ledgered
 ```
 
 ### Receive flow (polling mode -- Codex, Gemini, etc.)
 
 ```
-1. File watcher detects new .json file in inbox/ and updates internal cache
+1. Message is written to the target's inbox subdir
 2. Agent calls bridge_receive_messages at natural breakpoints
-3. Messages are returned sorted chronologically, deduplicated, TTL-checked
-4. Consumed messages are deleted from inbox/ and their IDs tracked in .processed
+3. Messages are returned sorted chronologically, deduplicated, and TTL-checked
+4. Consumed Claude Code-target messages are deleted from inbox/claude-code/ and their IDs tracked in .processed
 ```
 
 ### Offline recovery
 
-Messages persist in `~/.agent-bridge/inbox/` as JSON files until consumed or expired (default TTL: 1 day). This means messages are never lost if the agent is temporarily unavailable. On MCP server startup:
+Pending messages remain as JSON files in their per-target inbox subdir until delivered, consumed, expired, or quarantined. For Claude Code push mode, delivered files are archived after a successful channel push, so `inbox/claude-code/` should normally contain only genuinely pending work. On MCP server startup:
 
-1. The inbox is scanned for any messages not yet marked in `.delivered`
+1. `inbox/claude-code/` is scanned for messages not yet marked in `.delivered`
 2. Undelivered messages are replayed as channel notifications in chronological order
-3. This happens after `server.connect()` so notifications can actually be delivered
+3. Already-delivered stragglers are moved to `inbox/.archive/claude-code/`
+4. Replay happens after `server.connect()` so notifications can actually be delivered
 
-The `.delivered` tracker file (`~/.agent-bridge/inbox/.delivered`) prevents duplicate notifications across MCP server restarts.
+The `.delivered` tracker file (`~/.agent-bridge/inbox/.delivered`) prevents duplicate Claude Code notifications across MCP server restarts. OpenClaw uses its own `~/.agent-bridge/.openclaw-v2-delivered` ledger.
 
 ---
 
@@ -650,8 +651,8 @@ Messages are JSON files stored in `~/.agent-bridge/inbox/`:
 Machine A (Claude Code)                   Machine B (Claude Code)
 ┌─────────────────────────┐               ┌─────────────────────────┐
 │                         │               │                         │
-│ bridge_send_message     │    SSH        │  ~/.agent-bridge/inbox/ │
-│ ("MacBookPro", "hello") │──────────────>│  msg-uuid.json          │
+│ bridge_send_message     │    SSH        │  inbox/claude-code/     │
+│ target="claude-code"   │──────────────>│  msg-uuid.json          │
 │                         │               │                         │
 │                         │               │ file watcher ──> push   │
 │                         │               │ <channel ...>hello      │
@@ -662,17 +663,17 @@ Machine A (Claude Code)                   Machine B (Claude Code)
 └─────────────────────────┘               └─────────────────────────┘
 ```
 
-### Polling mode (Codex/OpenClaw/Gemini to any harness)
+### Polling mode (manual MCP fallback)
 
 ```
-Machine A (Codex)                         Machine B (any harness)
+Machine A (MCP client)                    Machine B (manual MCP client)
 ┌─────────────────────────┐               ┌─────────────────────────┐
 │                         │               │                         │
-│ bridge_send_message     │    SSH        │  ~/.agent-bridge/inbox/ │
-│ ("MacBookPro", "hello") │──────────────>│  msg-uuid.json          │
+│ bridge_send_message     │    SSH        │  target inbox subdir    │
+│ target="<harness>/..." │──────────────>│  msg-uuid.json          │
 │                         │               │                         │
 │ bridge_receive_messages │    SSH        │ bridge_send_message     │
-│ -> polls & returns msgs │<──────────────│ ("Mac-Mini", "hi back") │
+│ -> polls & returns msgs │<──────────────│ target="..."            │
 │                         │               │                         │
 └─────────────────────────┘               └─────────────────────────┘
 ```
@@ -683,18 +684,24 @@ Machine A (Codex)                         Machine B (any harness)
 
 ```
 ~/.agent-bridge/
-├── config               # Paired machines (INI-style key-value)
-├── machine-name         # Optional: override local machine name
-├── .pending-token       # One-time pairing token (deleted after use)
-├── inbox/               # Incoming messages from other machines
-│   ├── msg-uuid.json    # Pending message files
-│   ├── .processed       # Consumed message IDs (dedup tracker)
-│   ├── .delivered        # Channel-delivered message IDs (push dedup)
-│   └── .failed/         # Quarantined malformed messages
-├── outbox/              # Copies of sent messages (local tracking)
-├── logs/                # MCP server logs
+├── config                         # Paired machines (INI-style key-value)
+├── machine-name                   # Optional: override local machine name
+├── .pending-token                 # One-time pairing token (deleted after use)
+├── .openclaw-v2-delivered         # OpenClaw delivered-ID ledger
+├── inbox/                         # Incoming fan-out root
+│   ├── claude-code/               # Claude Code target; pending <id>.json files
+│   ├── openclaw/<target>/         # OpenClaw targets; pending <id>.json files
+│   ├── .processed                 # Manual-consume dedup tracker
+│   ├── .delivered                 # Claude Code channel-delivery dedup tracker
+│   ├── .archive/claude-code/      # Claude Code delivered-message archive
+│   └── .failed/                   # Quarantine root
+│       ├── claude-code/           # Malformed/misrouted files from claude-code/
+│       └── _unrouted/             # Legacy flat files with no target
+├── archive/openclaw/<target>/     # OpenClaw delivered-message archives
+├── outbox/                        # Copies of sent messages (local tracking)
+├── logs/                          # MCP server logs
 │   └── mcp-server.log
-└── keys/                # SSH key pairs (ED25519)
+└── keys/                          # SSH key pairs (ED25519)
     ├── agent-bridge_MacBook-Pro
     └── agent-bridge_MacBook-Pro.pub
 ```
@@ -774,9 +781,9 @@ For agent-to-agent communication (channel mode — the only supported path):
 ```
 Claude on Machine A                             Claude on Machine B
 -------------------                             -------------------
-bridge_send_message("MacBook", "fix the tests")
-  |-> SSH writes JSON to ~/.agent-bridge/inbox/ on MacBook
-      |-> file watcher on MacBook picks it up
+bridge_send_message({ machine: "MacBook", message: "fix the tests", target: "claude-code" })
+  |-> SSH writes JSON to ~/.agent-bridge/inbox/claude-code/<id>.json on MacBook
+      |-> Claude Code watcher on MacBook picks it up
           |-> channel plugin pushes it into MacBook's RUNNING
               Claude session as <channel source="agent-bridge" ...>
               |-> MacBook's Claude reads it in-context and replies via
@@ -798,9 +805,11 @@ As of **mcp-server 3.4.0** and **openclaw-channel 2.1.0**, every bridge message 
 │   ├── default/              ← OpenClaw @ClawdStationMiniBot session
 │   ├── clawdiboi2/           ← OpenClaw @Clawdiboi2bot session
 │   └── clordlethird/         ← OpenClaw @ClordLeThirdBot session
-├── .archive/<target>/        ← delivered messages kept for debug tail
-├── .failed/<target>/         ← malformed messages, quarantined per target
-└── .failed/_unrouted/        ← messages with no `target` or no matching subdir
+├── .archive/claude-code/     ← Claude Code delivered messages kept for debug tail
+├── .failed/claude-code/      ← malformed/misrouted Claude Code-target files
+└── .failed/_unrouted/        ← legacy flat files with no routable target
+
+~/.agent-bridge/archive/openclaw/<target>/  ← OpenClaw delivered-message archives
 ```
 
 **Calling `bridge_send_message`:**
@@ -868,7 +877,7 @@ Each entry resolves to an OpenClaw session route via `runtime.channel.routing.re
 
 **Round-trip bridge replies.** `BridgeMessage` carries an optional `fromTarget` field — the sender's OWN target-id. When an agent replies back over the bridge (cross-harness agent ↔ agent flows), `fromTarget` is copied into the reply's `target` field so the reply lands back in the session that started the conversation. The Claude Code MCP tool now defaults `fromTarget` to `claude-code`; pass `from_target` / `fromTarget` explicitly when sending from another local target (for example `openclaw/default` or `openclaw/clawdiboi2`), and pass `one_way: true` when no bridge reply path should be included.
 
-Listeners are independent processes: Claude Code's channel-owner plugin watches only `inbox/claude-code/`, and the OpenClaw gateway watches only its configured `inbox/openclaw/<target>/` subdirs. Tool-only MCP hosts should not watch `claude-code` at all. One crashing doesn't affect the other, and both watcher paths use cross-process leases with stale-lock recovery.
+Listeners are independent processes: Claude Code's channel-owner plugin watches only `inbox/claude-code/`, and the OpenClaw gateway watches only its configured `inbox/openclaw/<target>/` subdirs. Tool-only MCP hosts should not watch `claude-code` at all. One crashing doesn't affect the other, and both watcher paths use cross-process leases with stale-lock recovery. After a successful push, Claude Code-target files are archived to `inbox/.archive/claude-code/`; OpenClaw files are archived to `~/.agent-bridge/archive/openclaw/<target>/`.
 
 ---
 
@@ -882,7 +891,8 @@ The MCP server includes production-grade inbox management:
 | **Max-age pruning** | Messages older than 24 hours are pruned regardless of TTL (configurable). |
 | **Max inbox size** | Inbox is capped at 100 messages; oldest are pruned first (configurable). |
 | **Deduplication** | Processed message IDs are tracked in `.processed`; duplicates are skipped. |
-| **Malformed quarantine** | Invalid JSON files are moved to `.failed/` instead of blocking the inbox. |
+| **Malformed quarantine** | Invalid Claude Code-target JSON files are moved to `inbox/.failed/claude-code/`; legacy flat files go to `inbox/.failed/_unrouted/`. |
+| **Delivered archive** | Successfully pushed Claude Code files move to `inbox/.archive/claude-code/`; OpenClaw archives under `~/.agent-bridge/archive/openclaw/<target>/`. |
 | **Periodic pruning** | A background timer runs every 5 minutes to clean up expired messages. |
 | **File rotation** | The `.processed` and `.delivered` tracker files are rotated when they exceed 512 KB. |
 
@@ -1208,37 +1218,30 @@ As of **v3.1.0**, agent-bridge kept a tiny per-machine cache of which path last 
 }
 ```
 
-### Behavior
+### Current behavior (3.4.2+)
 
-- **Fresh entry (< 1h since `last_success`)** → try the cached path first, fall back to the other on connection failure (SSH exit 255).
-- **Stale or missing entry (> 1h or no cache)** → LAN-first probe, like before. LAN is preferred because it's more efficient when available.
-- On every successful connection, the cache is updated. On failure of the cached path, the alternate is tried and — if it succeeds — replaces the cached path.
+Endpoint selection is deterministic now:
 
-This means if you spend the day tethered to mobile data, every `agent-bridge run …` hits the internet path directly without a 3s LAN probe. Reconnect to your home wifi and, after the 1h TTL elapses (or whenever the cached internet path fails), the next call re-probes LAN-first and switches back.
+- If the machine config has `internet_host`, agent-bridge dials `internet_host:internet_port` directly.
+- If `internet_host` is absent, agent-bridge dials the LAN `host:port`.
+- There is no LAN-first probe, no internet fallback, and no cache-based endpoint choice.
 
-The cache TTL can be tuned via environment variables:
+This applies to the bash CLI, the MCP server, and the OpenClaw channel plugin reply path. The simple rule avoids stale-cache surprises and avoids wasting a LAN timeout when a machine is off-network.
 
-- Bash CLI: `AGENT_BRIDGE_PATH_CACHE_TTL=<seconds>`
-- MCP server: `AGENT_BRIDGE_PATH_CACHE_TTL_MS=<milliseconds>`
+### Historical cache compatibility
 
-### Manually invalidating the cache
-
-Normally the cache is self-managing, but if routing/topology changes in a way agent-bridge can't detect (e.g. a Tailscale IP changed, or a NAT quirk is causing stale cache entries), you can clear it:
+The legacy cache file may still exist at `~/.agent-bridge/path-cache.json`, and the CLI still accepts these commands for compatibility:
 
 ```bash
-agent-bridge reset-path Mac-Mini     # clear for one machine
-agent-bridge reset-path --all        # nuke the whole cache
-```
-
-You can also force a single status call to bypass the cache and re-probe LAN-first:
-
-```bash
+agent-bridge reset-path Mac-Mini
+agent-bridge reset-path --all
 agent-bridge status --probe Mac-Mini
-# or equivalently:
 agent-bridge status --fresh Mac-Mini
 ```
 
-The MCP server's `bridge_status` tool accepts the same `{ probe: true }` option to force a fresh probe.
+In 3.4.2+ these commands do **not** change endpoint selection. If a Tailscale IP changes, update the machine's `internet_host` with `agent-bridge config <machine> --internet-host <100.x.y.z>`.
+
+The MCP server's `bridge_status` tool still accepts `{ probe: true }` for API compatibility, but it is a no-op in 3.4.2+.
 
 ### File format and corruption handling
 
@@ -1263,6 +1266,21 @@ cp skills/bridge/skill.md ~/.claude/skills/agent-bridge/skill.md
 curl -fsSL https://raw.githubusercontent.com/EthanSK/agent-bridge/main/skills/bridge/skill.md \
   -o ~/.claude/skills/agent-bridge/skill.md --create-dirs
 ```
+
+#### Claude Code watcher ownership
+
+Only one process may own `~/.agent-bridge/inbox/claude-code/` at a time. In 3.4.7+, the MCP server refuses to act as that owner when it is launched by a plain tool-only parent that lacks Claude channel flags. This prevents editor helper processes or hidden MCP-only sessions from stealing the `claude-code` watcher lease and silently swallowing bridge messages.
+
+For the real Claude Code channel process, launch Claude with the channel plugin flags (for example `--channels ... --dangerously-load-development-channels plugin:agent-bridge@agent-bridge`). For tool-only hosts, set `AGENT_BRIDGE_ROLE=tools-only` or `AGENT_BRIDGE_DISABLE_WATCHER=1`.
+
+If messages pile up in `~/.agent-bridge/inbox/claude-code/`, inspect the owner first:
+
+```bash
+cat ~/.agent-bridge/locks/claude-code.watcher-lock.json
+ps -p <pid-from-lock> -o pid,ppid,stat,etime,command
+```
+
+A channel-capable owner should have Claude channel flags in its parent command line. If it does not, restart that stale MCP server/parent after upgrading to 3.4.7 so the real channel session can acquire the lease.
 
 ### Codex CLI (OpenAI)
 
@@ -1349,9 +1367,10 @@ tailscale ip -4
 
 1. Check that the MCP server is running: `bridge_inbox_stats` tool or check `~/.agent-bridge/logs/mcp-server.log`
 2. Verify SSH connectivity: `agent-bridge status <machine>`
-3. Check inbox contents: `ls ~/.agent-bridge/inbox/`
-4. Check for quarantined messages: `ls ~/.agent-bridge/inbox/.failed/`
-5. The watcher polls the inbox every 2 s — no external dependencies (fswatch/inotifywait removed in 3.4.3)
+3. Check the target-specific inbox, e.g. `ls ~/.agent-bridge/inbox/claude-code/` or `ls ~/.agent-bridge/inbox/openclaw/default/`
+4. Check delivered archives: `ls ~/.agent-bridge/inbox/.archive/claude-code/` and `ls ~/.agent-bridge/archive/openclaw/`
+5. Check for quarantined messages: `find ~/.agent-bridge/inbox/.failed -maxdepth 3 -type f -name '*.json'`
+6. The watcher polls the inbox every 2 s — no external dependencies (fswatch/inotifywait removed in 3.4.3)
 
 ### `paired machine "..." not found` (label mismatch)
 

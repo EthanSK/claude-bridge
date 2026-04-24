@@ -9,7 +9,7 @@ set -euo pipefail
 
 INVOKED_AS="$(basename "$0")"
 
-VERSION="3.4.6"
+VERSION="3.4.7"
 
 # -- Colours (ANSI) ----------------------------------------------------------
 RED='\033[0;31m'
@@ -31,7 +31,7 @@ CONFIG_FILE="$CONFIG_DIR/config"
 KEYS_DIR="$CONFIG_DIR/keys"
 PATH_CACHE_FILE="$CONFIG_DIR/path-cache.json"
 
-# How long a cached last-success is "fresh". After this, we re-probe LAN-first.
+# Legacy cache TTL. 3.4.2+ endpoint selection does not use this cache.
 PATH_CACHE_TTL_SECS="${AGENT_BRIDGE_PATH_CACHE_TTL:-3600}"
 case "$PATH_CACHE_TTL_SECS" in
   ''|*[!0-9]*) PATH_CACHE_TTL_SECS=3600 ;;
@@ -319,12 +319,12 @@ cfg_set() {
 }
 
 # -- Last-reachable-path cache ------------------------------------------------
-# Remembers which path (LAN vs internet) last worked per machine, so off-network
-# ops don't eat a 3s LAN probe on every call. Stored at ~/.agent-bridge/path-cache.json,
-# mode 0600. After PATH_CACHE_TTL_SECS of no successful activity on the cached path,
-# the next call re-probes LAN-first. On a successful connection, we update the cache.
-# Corrupt or missing files are treated as "no cache" — callers fall through to
-# standard LAN-first probing.
+# Historical compatibility cache. As of 3.4.2, endpoint selection is no longer
+# cache-driven: if `internet_host` is configured we use it directly, otherwise
+# we use the LAN `host`. No fallback is attempted. We still write/clear the
+# cache for observability and compatibility with older logs/scripts. Stored at
+# ~/.agent-bridge/path-cache.json, mode 0600.
+# Corrupt or missing files are treated as an empty cache.
 #
 # File shape:
 #   {
@@ -340,7 +340,7 @@ cfg_set() {
 # Note: the no-jq *reader* uses a regex that doesn't fully grok escaped
 # quotes, so machines with literal `"` in their names won't be read back on
 # jq-less systems. That's acceptable degradation (the caller just falls
-# through to a LAN-first probe). jq is present on all modern macOS / Linux
+# through to the deterministic endpoint choice). jq is present on all modern macOS / Linux
 # installs and handles these perfectly.
 _path_cache_json_escape() {
   local s="$1"
@@ -710,8 +710,8 @@ _ssh_now_s() {
   date +%s 2>/dev/null || printf '0'
 }
 
-# Allow callers (e.g. `agent-bridge status --probe`) to force a fresh LAN-first
-# probe by setting PATH_CACHE_BYPASS=1 before invoking the helpers.
+# Compatibility knob retained for old callers. 3.4.2+ endpoint selection ignores
+# PATH_CACHE_BYPASS and always uses internet_host when configured, otherwise LAN.
 PATH_CACHE_BYPASS="${PATH_CACHE_BYPASS:-0}"
 
 ssh_build_args_for() {
@@ -1568,8 +1568,8 @@ cmd_status() {
     case "$1" in
       --help|-h)       cmd_status_help; exit 0 ;;
       --probe|--fresh)
-        # Bypass the last-reachable-path cache for this invocation (force
-        # LAN-first probe and refresh the cache from scratch).
+        # Accepted for compatibility. 3.4.2+ endpoint selection ignores
+        # the legacy path cache, so this does not change the probed endpoint.
         PATH_CACHE_BYPASS=1
         shift ;;
       -*)              die "Unknown option: $1" ;;
@@ -1883,8 +1883,8 @@ cmd_help() {
   printf '  connect <machine>  Open an interactive SSH session\n'
   printf '  run <machine> "cmd"  Run a plain shell command on a paired machine (diagnostics only)\n'
   printf '  list               List all paired machines\n'
-  printf '  status [machine]   Check reachability (uses path cache; add --probe to force LAN-first)\n'
-  printf '  reset-path <m>     Clear the cached LAN/internet path for a machine (or --all)\n'
+  printf '  status [machine]   Check reachability (internet_host if configured, else LAN; --probe is no-op)\n'
+  printf '  reset-path <m>     Clear legacy path-cache files (compatibility; no endpoint-selection effect)\n'
   printf '  unpair <machine>   Remove a pairing\n'
   printf '  version            Show version\n'
   printf '  help               Show this help\n'

@@ -52,7 +52,7 @@ If the agent-bridge MCP server is registered, these tools are available directly
 | `bridge_clear_inbox` | Clear the local inbox |
 | `bridge_inbox_stats` | Get inbox statistics and watcher health |
 
-**Delivery mode:** If the OpenClaw agent-bridge plugin (or the standalone daemon) is installed, incoming messages are **pushed** into your running session automatically as a new user turn formatted `<channel source="agent-bridge" from="..." ...>content</channel>` — no polling required. If the plugin/daemon is NOT installed, fall back to polling with `bridge_receive_messages` at natural breakpoints. Messages persist in the inbox until consumed (default TTL: 1 hour).
+**Delivery mode:** With the OpenClaw agent-bridge channel plugin installed, incoming messages addressed to `target: "openclaw/<account>"` are picked up from `~/.agent-bridge/inbox/openclaw/<account>/` and injected into the matching running OpenClaw session as a real agent turn. No polling is required. Delivered OpenClaw files are archived under `~/.agent-bridge/archive/openclaw/<account>/`, and the delivered-ID ledger is `~/.agent-bridge/.openclaw-v2-delivered`. The default bridge TTL is 1 day unless the sender overrides it.
 
 ### Install the OpenClaw push channel plugin (recommended)
 

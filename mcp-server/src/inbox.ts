@@ -39,6 +39,8 @@ import {
   OUTBOX_MAX_AGE_MS,
   CLAUDE_CODE_TARGET,
   inboxSubdir,
+  archiveSubdir,
+  failedSubdir,
   isValidTarget,
 } from './config.js';
 import { sshWriteFile } from './ssh.js';
@@ -83,6 +85,7 @@ export interface BridgeMessage {
 }
 
 export interface InboxStats {
+  /** Pending files in the claude-code target inbox only. */
   pendingCount: number;
   oldestMessageAge: number | null; // seconds, or null if empty
   totalSizeBytes: number;
@@ -124,6 +127,8 @@ export function ensureInboxDirs(): void {
     ARCHIVE_DIR,
     UNROUTED_DIR,
     CLAUDE_CODE_INBOX_DIR,
+    CLAUDE_CODE_ARCHIVE_DIR,
+    CLAUDE_CODE_FAILED_DIR,
   ]) {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -138,6 +143,8 @@ export function ensureInboxDirs(): void {
  * harness) and is not scanned directly.
  */
 export const CLAUDE_CODE_INBOX_DIR = inboxSubdir(CLAUDE_CODE_TARGET);
+export const CLAUDE_CODE_ARCHIVE_DIR = archiveSubdir(CLAUDE_CODE_TARGET);
+export const CLAUDE_CODE_FAILED_DIR = failedSubdir(CLAUDE_CODE_TARGET);
 
 /**
  * One-shot migration: any JSON file at the top level of INBOX_DIR is a legacy
@@ -344,10 +351,10 @@ function parseMessageFile(filePath: string): BridgeMessage | null {
     return msg;
   } catch (err) {
     const fileName = filePath.split('/').pop() ?? filePath;
-    logWarn(`Malformed message file ${fileName}, moving to .failed/_unrouted/: ${err}`);
+    logWarn(`Malformed claude-code inbox file ${fileName}, moving to .failed/${CLAUDE_CODE_TARGET}/: ${err}`);
     try {
-      if (!existsSync(UNROUTED_DIR)) mkdirSync(UNROUTED_DIR, { recursive: true, mode: 0o700 });
-      const dest = join(UNROUTED_DIR, fileName);
+      if (!existsSync(CLAUDE_CODE_FAILED_DIR)) mkdirSync(CLAUDE_CODE_FAILED_DIR, { recursive: true, mode: 0o700 });
+      const dest = join(CLAUDE_CODE_FAILED_DIR, fileName);
       renameSync(filePath, dest);
     } catch (moveErr) {
       logError(`Failed to quarantine ${fileName}: ${moveErr}`);
@@ -514,7 +521,7 @@ export async function sendMessage(
 }
 
 /**
- * Read all messages from the local inbox (batch read).
+ * Read all messages from the local claude-code inbox (batch read).
  * Returns messages sorted by timestamp (oldest first).
  * Skips duplicates and expired messages (auto-prunes them).
  */
@@ -616,7 +623,7 @@ export function peekInbox(): { count: number; messages: BridgeMessage[] } {
 }
 
 /**
- * Clear all messages from the inbox.
+ * Clear all messages from the claude-code inbox.
  */
 export function clearInbox(): number {
   ensureInboxDirs();
@@ -641,7 +648,7 @@ export function clearInbox(): number {
 // ── Pruning ──────────────────────────────────────────────────────────────────
 
 /**
- * Run a single prune pass:
+ * Run a single prune pass for the claude-code inbox:
  * 1. Remove TTL-expired messages
  * 2. Remove messages older than PRUNE_MAX_AGE_MS
  * 3. Enforce max inbox size (oldest first)

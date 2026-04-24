@@ -127,6 +127,8 @@ export function ensureDirectories(): void {
     ARCHIVE_DIR,
     UNROUTED_DIR,
     inboxSubdir(CLAUDE_CODE_TARGET),
+    archiveSubdir(CLAUDE_CODE_TARGET),
+    failedSubdir(CLAUDE_CODE_TARGET),
   ]) {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true, mode: 0o700 });

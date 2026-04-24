@@ -1,5 +1,16 @@
 # Changelog
 
+## agent-bridge 3.4.7 — 2026-04-24
+
+### Fix: prevent tool-only Claude helpers stealing `claude-code` watcher ownership
+
+- `mcp-server/src/index.ts`: when `AGENT_BRIDGE_ROLE=channel-owner` is requested but the parent process does not look channel-capable (no Claude `--channels` / `--dangerously-load-development-channels` flags), demote the server to tools-only by default.
+- This prevents editor helper / hidden MCP-only Claude processes from winning the `claude-code` inbox watcher lease, marking bridge messages as delivered, and then never surfacing them in the intended live channel.
+- Set `AGENT_BRIDGE_ALLOW_NON_CHANNEL_PARENT=1` only for an unusual host that genuinely supports `notifications/claude/channel` without those flags.
+- After a successful Claude Code channel push or startup replay, delivered files now move out of `inbox/claude-code/` into `inbox/.archive/claude-code/`; stale already-delivered files are swept there too. This makes a non-empty `inbox/claude-code/` mean genuinely pending work again.
+- Malformed or misrouted files found under `inbox/claude-code/` now quarantine to `inbox/.failed/claude-code/`; legacy flat files at the root still move to `inbox/.failed/_unrouted/`.
+- README/CLI help now describe the current 3.4.2+ endpoint rule correctly: `internet_host` when configured, otherwise LAN `host`; `--probe`, `--fresh`, and `reset-path` are compatibility no-ops for endpoint selection.
+
 ## agent-bridge 3.4.6 — 2026-04-24
 
 ### Docs/site: align public docs with the current bridge behavior

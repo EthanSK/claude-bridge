@@ -1,5 +1,5 @@
 /**
- * File watcher for incoming messages in ~/.agent-bridge/inbox/.
+ * File watcher for incoming Claude Code messages in ~/.agent-bridge/inbox/claude-code/.
  *
  * Polling-only (2s interval). No external dependencies.
  *
@@ -32,7 +32,14 @@ import {
   writeFileSync,
 } from 'fs';
 import { join } from 'path';
-import { CLAUDE_CODE_TARGET, LOCKS_DIR, UNROUTED_DIR, inboxSubdir, isValidTarget } from './config.js';
+import {
+  CLAUDE_CODE_TARGET,
+  LOCKS_DIR,
+  inboxSubdir,
+  archiveSubdir,
+  failedSubdir,
+  isValidTarget,
+} from './config.js';
 
 /**
  * The inbox subdir this watcher owns. As of mcp-server 3.4.0 the watcher
@@ -40,6 +47,8 @@ import { CLAUDE_CODE_TARGET, LOCKS_DIR, UNROUTED_DIR, inboxSubdir, isValidTarget
  * harnesses (openclaw-channel etc.) watch their own subdirs independently.
  */
 const CLAUDE_CODE_INBOX_DIR = inboxSubdir(CLAUDE_CODE_TARGET);
+const CLAUDE_CODE_ARCHIVE_DIR = archiveSubdir(CLAUDE_CODE_TARGET);
+const CLAUDE_CODE_FAILED_DIR = failedSubdir(CLAUDE_CODE_TARGET);
 const INBOX_DIR = CLAUDE_CODE_INBOX_DIR;
 import { logInfo, logError, logDebug, logWarn } from './logger.js';
 import { logEvent } from './log.js';
@@ -336,18 +345,42 @@ function tryAcquireWatcherLease(role: string): boolean {
  * Marks the message as delivered to avoid re-emitting on next startup.
  * Errors are logged but never thrown — the watcher must keep running.
  */
-function quarantineUnrouted(fileName: string, reason: string): void {
+function quarantineFailed(fileName: string, reason: string): void {
   const filePath = join(INBOX_DIR, fileName);
   try {
-    if (!existsSync(UNROUTED_DIR)) {
-      mkdirSync(UNROUTED_DIR, { recursive: true, mode: 0o700 });
+    if (!existsSync(CLAUDE_CODE_FAILED_DIR)) {
+      mkdirSync(CLAUDE_CODE_FAILED_DIR, { recursive: true, mode: 0o700 });
     }
-    renameSync(filePath, join(UNROUTED_DIR, fileName));
+    renameSync(filePath, join(CLAUDE_CODE_FAILED_DIR, fileName));
     knownFiles.delete(fileName);
     invalidateCache();
-    logWarn(`Channel: moved ${fileName} to .failed/_unrouted/: ${reason}`);
+    logWarn(`Channel: moved ${fileName} to .failed/${CLAUDE_CODE_TARGET}/: ${reason}`);
   } catch (err) {
     logError(`Channel: failed to quarantine ${fileName}: ${err}`);
+  }
+}
+
+function archiveDeliveredMessage(fileName: string, id: string, reason: string): void {
+  const filePath = join(INBOX_DIR, fileName);
+  try {
+    if (!existsSync(filePath)) {
+      knownFiles.delete(fileName);
+      invalidateCache();
+      return;
+    }
+    if (!existsSync(CLAUDE_CODE_ARCHIVE_DIR)) {
+      mkdirSync(CLAUDE_CODE_ARCHIVE_DIR, { recursive: true, mode: 0o700 });
+    }
+    const stamped = `${new Date().toISOString().replace(/[:.]/g, '-')}_${fileName}`;
+    renameSync(filePath, join(CLAUDE_CODE_ARCHIVE_DIR, stamped));
+    knownFiles.delete(fileName);
+    invalidateCache();
+    logDebug(`Channel: archived delivered message ${id} (${reason})`);
+  } catch (err) {
+    // Delivery has already happened (or was already ledgered), so do not
+    // retry/duplicate the channel notification just because debug archival
+    // failed. Leave the file in place; .delivered prevents re-emission.
+    logWarn(`Channel: failed to archive delivered message ${id} (${fileName}): ${err}`);
   }
 }
 
@@ -360,20 +393,22 @@ function emitChannelNotification(fileName: string): void {
     const raw = readFileSync(filePath, 'utf8');
     const msg = JSON.parse(raw) as BridgeMessage;
     if (!msg.id || !msg.timestamp || typeof msg.content !== 'string') {
-      logWarn(`Channel: skipping malformed message file ${fileName}`);
+      quarantineFailed(fileName, 'missing required fields: id, timestamp, content');
       return;
     }
     if (!msg.target || !isValidTarget(msg.target)) {
-      quarantineUnrouted(fileName, `missing/invalid target ${JSON.stringify(msg.target ?? null)}`);
+      quarantineFailed(fileName, `missing/invalid target ${JSON.stringify(msg.target ?? null)}`);
       return;
     }
     if (msg.target !== CLAUDE_CODE_TARGET) {
-      quarantineUnrouted(fileName, `target ${JSON.stringify(msg.target)} does not match ${CLAUDE_CODE_TARGET}`);
+      quarantineFailed(fileName, `target ${JSON.stringify(msg.target)} does not match ${CLAUDE_CODE_TARGET}`);
       return;
     }
-    // Skip if already delivered in a previous session
+    // Skip if already delivered in a previous session, but archive the stale
+    // inbox file so `inbox/claude-code/` represents only genuinely pending work.
     if (isDelivered(msg.id)) {
       logDebug(`Channel: skipping already-delivered message ${msg.id}`);
+      archiveDeliveredMessage(fileName, msg.id, 'already delivered');
       return;
     }
     logEvent({
@@ -391,12 +426,15 @@ function emitChannelNotification(fileName: string): void {
     Promise.resolve(savedChannelCallback(msg))
       .then(() => {
         markDelivered(msg.id);
+        archiveDeliveredMessage(fileName, msg.id, 'pushed to channel');
       })
       .catch((err) => {
-        logError(`Channel: notification callback failed for ${msg.id}: ${err}`);
+        knownFiles.delete(fileName);
+        invalidateCache();
+        logError(`Channel: notification callback failed for ${msg.id}: ${err}; will retry on next poll`);
       });
   } catch (err) {
-    logError(`Channel: failed to emit notification for ${fileName}: ${err}`);
+    quarantineFailed(fileName, `failed to parse/emit notification: ${err}`);
   }
 }
 
@@ -525,18 +563,24 @@ export async function replayUndeliveredMessages(): Promise<void> {
       try {
         const raw = readFileSync(filePath, 'utf8');
         const msg = JSON.parse(raw) as BridgeMessage;
-        if (!msg.id || !msg.timestamp || typeof msg.content !== 'string') continue;
+        if (!msg.id || !msg.timestamp || typeof msg.content !== 'string') {
+          quarantineFailed(fileName, 'replay missing required fields: id, timestamp, content');
+          continue;
+        }
         if (!msg.target || !isValidTarget(msg.target) || msg.target !== CLAUDE_CODE_TARGET) {
-          quarantineUnrouted(
+          quarantineFailed(
             fileName,
             `replay target ${JSON.stringify(msg.target ?? null)} is not ${CLAUDE_CODE_TARGET}`,
           );
           continue;
         }
-        if (isDelivered(msg.id)) continue;
+        if (isDelivered(msg.id)) {
+          archiveDeliveredMessage(fileName, msg.id, 'already delivered during replay');
+          continue;
+        }
         undelivered.push({ fileName, msg });
-      } catch {
-        // Skip malformed files — the prune pass will handle them
+      } catch (err) {
+        quarantineFailed(fileName, `replay failed to parse message: ${err}`);
       }
     }
 
@@ -558,8 +602,11 @@ export async function replayUndeliveredMessages(): Promise<void> {
       try {
         await channelCallback(msg);
         markDelivered(msg.id);
+        archiveDeliveredMessage(fileName, msg.id, 'replayed to channel');
       } catch (err) {
-        logError(`Replay: failed to push ${fileName}: ${err}`);
+        knownFiles.delete(fileName);
+        invalidateCache();
+        logError(`Replay: failed to push ${fileName}: ${err}; will retry on next poll`);
       }
     }
 

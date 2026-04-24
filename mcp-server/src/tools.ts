@@ -333,7 +333,7 @@ export function registerTools(server: McpServer): void {
     {
       title: 'Receive Messages',
       description:
-        'Manual inbox inspection fallback. In normal Claude Code channel-owner mode, incoming messages are pushed automatically; use this tool mainly for diagnostics, tools-only setups, or explicit manual consumption. Messages are removed from the inbox after reading unless peek=true. Results are chronological, deduplicated, and TTL-expired messages are auto-pruned.',
+        'Manual claude-code inbox inspection fallback. In normal Claude Code channel-owner mode, incoming messages are pushed automatically; use this tool mainly for diagnostics, tools-only setups, or explicit manual consumption. Messages are removed from ~/.agent-bridge/inbox/claude-code/ after reading unless peek=true. Results are chronological, deduplicated, and TTL-expired messages are auto-pruned.',
       inputSchema: {
         peek: z
           .boolean()
@@ -485,7 +485,7 @@ export function registerTools(server: McpServer): void {
     'bridge_clear_inbox',
     {
       title: 'Clear Inbox',
-      description: 'Remove all messages from the local inbox.',
+      description: 'Remove all messages from the local claude-code inbox subdir.',
     },
     async () => {
       const count = clearInbox();
@@ -495,7 +495,7 @@ export function registerTools(server: McpServer): void {
             type: 'text' as const,
             text:
               count > 0
-                ? `Cleared ${count} message(s) from inbox.`
+                ? `Cleared ${count} message(s) from claude-code inbox.`
                 : 'Inbox was already empty.',
           },
         ],
@@ -509,13 +509,13 @@ export function registerTools(server: McpServer): void {
     {
       title: 'Inbox Stats',
       description:
-        'Get inbox statistics: pending message count, oldest message age, total size, watcher health, processed ID count, and failed message count.',
+        'Get claude-code inbox statistics: pending message count, oldest message age, total size, watcher health, processed ID count, and failed/quarantined count.',
     },
     async () => {
       const stats = getInboxStats();
       const lines = [
-        'Inbox Statistics:',
-        `  Pending messages: ${stats.pendingCount}`,
+        'Claude Code Inbox Statistics:',
+        `  Pending claude-code messages: ${stats.pendingCount}`,
         `  Oldest message age: ${stats.oldestMessageAge !== null ? `${stats.oldestMessageAge}s` : 'n/a'}`,
         `  Total inbox size: ${formatBytes(stats.totalSizeBytes)}`,
         `  Watcher backend: ${stats.watcherBackend}`,
