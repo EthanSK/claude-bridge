@@ -106,14 +106,14 @@ async function main(): Promise<void> {
   logEvent({
     event: 'server.starting',
     msg: `agent-bridge MCP server starting on "${localName}"`,
-    context: { machineName: localName, version: '3.4.8', pid: process.pid, nodeVersion: process.version },
+    context: { machineName: localName, version: '3.4.9', pid: process.pid, nodeVersion: process.version },
   });
 
   // Create MCP server with channel capability
   const server = new McpServer(
     {
       name: 'agent-bridge',
-      version: '3.4.8',
+      version: '3.4.9',
     },
     {
       capabilities: {
@@ -377,11 +377,30 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGHUP', () => shutdown('SIGHUP'));
 
-  // stdio lifecycle: when Claude Code disconnects cleanly, stdin gets 'end'.
-  // When the parent dies unexpectedly, stdin gets 'close' (or 'error' with EPIPE).
-  // All three must trigger shutdown — otherwise the process stays up forever as a zombie.
-  process.stdin.on('end', () => shutdown('stdin end'));
-  process.stdin.on('close', () => shutdown('stdin close'));
+  // stdio lifecycle:
+  // Tool-only MCP hosts should shut down when stdio closes. Claude Code channel
+  // owners are different: Claude may close the request side after a turn while
+  // the parent session remains alive and can still receive channel
+  // notifications. If we stop the watcher on that benign stdin end, the
+  // `claude-code` inbox goes dark between turns. Keep channel-owner watchers
+  // alive until the parent PID actually dies or stdout breaks (EPIPE).
+  const keepAliveAfterStdioEnd = watcherStarted && bridgeRole === 'channel-owner';
+  const onStdioEnded = (reason: string) => {
+    if (keepAliveAfterStdioEnd) {
+      logWarn(`${reason} observed for channel-owner watcher; keeping watcher alive until parent death/EPIPE`);
+      logEvent({
+        event: 'stdio.end_ignored_channel_owner',
+        level: 'warn',
+        msg: `${reason} ignored for channel-owner watcher`,
+        context: { pid: process.pid, role: bridgeRole, watcherStarted },
+      });
+      return;
+    }
+    shutdown(reason);
+  };
+
+  process.stdin.on('end', () => onStdioEnded('stdin end'));
+  process.stdin.on('close', () => onStdioEnded('stdin close'));
   process.stdin.on('error', (err) => {
     if (isBrokenPipe(err)) { process.exit(0); }
     shutdown(`stdin error: ${err}`);

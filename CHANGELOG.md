@@ -1,5 +1,12 @@
 # Changelog
 
+## agent-bridge 3.4.9 — 2026-04-24
+
+### Fix: keep Claude Code channel watcher alive between turns
+
+- Claude Code may close the MCP stdin/request side after a turn while the parent channel session remains alive. Previous builds treated that as full parent disconnect and stopped the `claude-code` watcher.
+- Channel-owner watchers now ignore benign stdin `end`/`close` events and stay alive until the parent PID dies or stdout breaks with EPIPE, so `claude-code` inbox delivery remains available between turns.
+
 ## agent-bridge 3.4.8 — 2026-04-24
 
 ### Fix: channel-parent detection regex
