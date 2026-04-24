@@ -373,9 +373,40 @@ async function main(): Promise<void> {
       });
   };
 
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGHUP', () => shutdown('SIGHUP'));
+  const signalParentAlive = () => {
+    try {
+      process.kill(process.ppid, 0);
+      return true;
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      // EPERM still proves the parent exists from our POV. Anything unexpected
+      // is treated conservatively as alive to avoid false-positive shutdown.
+      return code !== 'ESRCH';
+    }
+  };
+
+  const handleSignal = (signal: NodeJS.Signals) => {
+    // Claude Code may send SIGTERM to plugin MCP children after a tool turn even
+    // though the parent channel session remains live. For channel-owner
+    // watchers, treat that like the benign stdin end/close path and keep the
+    // inbox watcher alive until the parent actually dies. SIGINT/SIGHUP remain
+    // explicit shutdown signals.
+    if (signal === 'SIGTERM' && watcherStarted && bridgeRole === 'channel-owner' && signalParentAlive()) {
+      logWarn(`${signal} observed for channel-owner watcher; keeping watcher alive until parent death/EPIPE`);
+      logEvent({
+        event: 'signal.ignored_channel_owner',
+        level: 'warn',
+        msg: `${signal} ignored for channel-owner watcher`,
+        context: { pid: process.pid, role: bridgeRole, watcherStarted, parentPid: process.ppid },
+      });
+      return;
+    }
+    shutdown(signal);
+  };
+
+  process.on('SIGINT', () => handleSignal('SIGINT'));
+  process.on('SIGTERM', () => handleSignal('SIGTERM'));
+  process.on('SIGHUP', () => handleSignal('SIGHUP'));
 
   // stdio lifecycle:
   // Tool-only MCP hosts should shut down when stdio closes. Claude Code channel

@@ -1,5 +1,9 @@
 # Changelog
 
+## agent-bridge 3.4.11 — 2026-04-24
+
+- Fixed the follow-up Claude Code durability gap: Claude can send SIGTERM to plugin MCP children after a tool turn even when the parent channel session stays alive. Channel-owner watchers now ignore that benign SIGTERM while the parent process is alive, relying on the parent watchdog/EPIPE path for real shutdown.
+
 ## agent-bridge 3.4.10 — 2026-04-24
 
 - Fixed the 3.4.9 channel-owner keepalive: ignoring Claude Code stdin end was not enough because all watcher timers were unref'ed, so Node could still exit between turns. Channel-owner MCP servers now keep the parent-liveness watchdog ref'ed after stdio closes, preserving the `claude-code` watcher until parent death/EPIPE.
