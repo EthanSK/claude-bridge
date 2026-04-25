@@ -1,5 +1,15 @@
 # Changelog
 
+## agent-bridge 3.5.4 — 2026-04-25
+
+### Fix: obey Claude Code MCP child lifecycle instead of fighting SIGTERM
+
+Live Mini evidence showed Claude Code closed the MCP stdin transport immediately after channel delivery and then sent SIGTERM two seconds later. The process died before its next 5s lease heartbeat, leaving a stale lock. That timing strongly indicates Claude's plugin host was intentionally reaping/recycling the stdio child and escalating when the child ignored SIGTERM.
+
+3.5.4 removes the previous channel-owner keepalive hack: channel-owner MCP children now treat stdin EOF/close and SIGTERM as host-requested shutdown, mirroring the official Telegram plugin's lifecycle. Shutdown releases the watcher lease and leaves undelivered messages pending for the next live channel-owner/replay instead of trying to outlive Claude's transport and getting hard-killed.
+
+This is the real boundary: a Claude-managed stdio MCP child cannot be a reliable always-on daemon after Claude closes the transport. Reliable always-on delivery needs a separate architecture; this patch makes the current architecture honest and non-stale.
+
 ## agent-bridge 3.5.3 — 2026-04-25
 
 ### Fix: make stdout/EPIPE watcher exits visible and clear stale leases

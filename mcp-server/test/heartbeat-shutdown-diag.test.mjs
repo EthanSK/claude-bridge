@@ -1,5 +1,5 @@
 /**
- * Smoke tests for 3.5.3 diagnostic instrumentation:
+ * Smoke tests for 3.5.4 diagnostic instrumentation:
  *   - server.heartbeat events appear at ~60s intervals
  *   - server.shutdown_diag dumps active handles + requests on shutdown
  *
@@ -77,7 +77,7 @@ test('server.shutdown_diag dumps active handles and request counts on shutdown',
     const events = await readEvents(home);
     const starting = events.find((e) => e.event === 'server.starting');
     assert.ok(starting, 'expected server.starting event');
-    assert.equal(starting.context.version, '3.5.3', 'startup event should report version 3.5.3');
+    assert.equal(starting.context.version, '3.5.4', 'startup event should report version 3.5.4');
 
     const diag = events.find((e) => e.event === 'server.shutdown_diag');
     assert.ok(diag, 'expected server.shutdown_diag event on shutdown');
@@ -145,4 +145,31 @@ test('sibling detection wiring is present in shipped build', async () => {
     indexSrc.includes('SIGKILL'),
     'shutdown SIGKILL backstop must be present',
   );
+});
+
+test('channel-owner treats stdin close as host lifecycle shutdown and releases lease', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'agent-bridge-3-5-4-channel-owner-'));
+  const server = startServer(home, {
+    AGENT_BRIDGE_ROLE: 'channel-owner',
+    AGENT_BRIDGE_ALLOW_NON_CHANNEL_PARENT: '1',
+  });
+  const lockPath = join(home, '.agent-bridge', 'locks', 'claude-code.watcher-lock.json');
+  try {
+    await sleep(800);
+    assert.ok(await readFile(lockPath, 'utf8'), 'channel-owner should acquire watcher lease');
+
+    server.child.stdin.end();
+    await new Promise((resolve) => server.child.once('exit', resolve));
+
+    const events = await readEvents(home);
+    const shutdown = events.find((e) => e.event === 'server.shutdown');
+    assert.ok(shutdown, 'expected clean shutdown event');
+    assert.equal(shutdown.context.reason, 'stdin end');
+    assert.ok(events.find((e) => e.event === 'watcher.lease_released'), 'watcher lease should be released');
+    await assert.rejects(() => readFile(lockPath, 'utf8'), { code: 'ENOENT' });
+  } finally {
+    try { server.child.kill('SIGKILL'); } catch {}
+    await sleep(100);
+    await rm(home, { recursive: true, force: true });
+  }
 });

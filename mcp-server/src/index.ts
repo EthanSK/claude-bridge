@@ -214,14 +214,14 @@ async function main(): Promise<void> {
   logEvent({
     event: 'server.starting',
     msg: `agent-bridge MCP server starting on "${localName}"`,
-    context: { machineName: localName, version: '3.5.3', pid: process.pid, nodeVersion: process.version },
+    context: { machineName: localName, version: '3.5.4', pid: process.pid, nodeVersion: process.version },
   });
 
   // Create MCP server with channel capability
   const server = new McpServer(
     {
       name: 'agent-bridge',
-      version: '3.5.3',
+      version: '3.5.4',
     },
     {
       capabilities: {
@@ -536,21 +536,10 @@ async function main(): Promise<void> {
 
   const handleSignal = (signal: NodeJS.Signals) => {
     syncExitBreadcrumb('signal.received', { signal, watcherStarted, bridgeRole, parent_alive: signalParentAlive() });
-    // Claude Code may send SIGTERM to plugin MCP children after a tool turn even
-    // though the parent channel session remains live. For channel-owner
-    // watchers, treat that like the benign stdin end/close path and keep the
-    // inbox watcher alive until the parent actually dies. SIGINT/SIGHUP remain
-    // explicit shutdown signals.
-    if (signal === 'SIGTERM' && watcherStarted && bridgeRole === 'channel-owner' && signalParentAlive()) {
-      logWarn(`${signal} observed for channel-owner watcher; keeping watcher alive until parent death/EPIPE`);
-      logEvent({
-        event: 'signal.ignored_channel_owner',
-        level: 'warn',
-        msg: `${signal} ignored for channel-owner watcher`,
-        context: { pid: process.pid, role: bridgeRole, watcherStarted, parentPid: process.ppid },
-      });
-      return;
-    }
+    // Claude Code owns the MCP stdio child lifecycle. If it sends SIGTERM,
+    // treating that as a host-requested shutdown is the only reliable option:
+    // ignoring it causes Claude to escalate to SIGKILL, which cannot release
+    // the watcher lease or write diagnostics.
     shutdown(signal);
   };
 
@@ -559,24 +548,12 @@ async function main(): Promise<void> {
   process.on('SIGHUP', () => handleSignal('SIGHUP'));
 
   // stdio lifecycle:
-  // Tool-only MCP hosts should shut down when stdio closes. Claude Code channel
-  // owners are different: Claude may close the request side after a turn while
-  // the parent session remains alive and can still receive channel
-  // notifications. If we stop the watcher on that benign stdin end, the
-  // `claude-code` inbox goes dark between turns. Keep channel-owner watchers
-  // alive until the parent PID actually dies or stdout breaks (EPIPE).
-  const keepAliveAfterStdioEnd = watcherStarted && bridgeRole === 'channel-owner';
+  // Claude Code's plugin host owns MCP child lifetime. EOF/close on stdin means
+  // the host has closed the transport and may SIGTERM/SIGKILL shortly after.
+  // Shut down immediately so the watcher lease is released cleanly and
+  // undelivered messages remain pending for the next live channel-owner/replay.
+  const isChannelOwner = watcherStarted && bridgeRole === 'channel-owner';
   const onStdioEnded = (reason: string) => {
-    if (keepAliveAfterStdioEnd) {
-      logWarn(`${reason} observed for channel-owner watcher; keeping watcher alive until parent death/EPIPE`);
-      logEvent({
-        event: 'stdio.end_ignored_channel_owner',
-        level: 'warn',
-        msg: `${reason} ignored for channel-owner watcher`,
-        context: { pid: process.pid, role: bridgeRole, watcherStarted },
-      });
-      return;
-    }
     shutdown(reason);
   };
 
@@ -741,12 +718,9 @@ async function main(): Promise<void> {
       } catch { /* ignore — best-effort sibling detection */ }
     }, 5000);
     // Tool-only MCP children should not keep Node alive once stdio closes.
-    // Channel-owner watchers are intentionally different: after Claude Code
-    // closes stdin between turns, every watcher/prune timer is unref'ed, so
-    // the process can otherwise exit immediately despite ignoring the stdin
-    // event. Keep the parent watchdog ref'ed for channel owners; it is the
-    // minimal live handle and will still shut us down when the parent dies.
-    if (!keepAliveAfterStdioEnd) {
+    // Channel-owner watchers keep this watchdog ref'ed only while the MCP
+    // transport is open; stdin close/SIGTERM now shuts them down cleanly.
+    if (!isChannelOwner) {
       parentWatchdog.unref();
     }
   }
