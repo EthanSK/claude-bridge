@@ -16,16 +16,50 @@
  */
 
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, existsSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { basename, join } from "node:path";
+import { randomUUID } from "node:crypto";
 
 const AGENT_BRIDGE_HOME = join(homedir(), ".agent-bridge");
 const DEFAULT_OUTBOUND = join(AGENT_BRIDGE_HOME, "outbound");
 const DEFAULT_KEYS_DIR = join(AGENT_BRIDGE_HOME, "keys");
 const DEFAULT_CONFIG = join(AGENT_BRIDGE_HOME, "config");
+const DEFAULT_INBOX = join(AGENT_BRIDGE_HOME, "inbox");
+const DEFAULT_OUTBOX = join(AGENT_BRIDGE_HOME, "outbox");
 const DEFAULT_MACHINE_NAME_FILE = join(AGENT_BRIDGE_HOME, "machine-name");
 const DEFAULT_IDENTITY = join(AGENT_BRIDGE_HOME, ".identity");
+
+/**
+ * Reserved machine-name aliases that always resolve to the local machine.
+ * Mirror of mcp-server/src/config.ts :: LOCAL_MACHINE_ALIASES — keep in sync.
+ *
+ * Same-machine delivery (3.5.1+) lets `deliverReply` write the BridgeMessage
+ * JSON straight to `~/.agent-bridge/inbox/<target>/<id>.json` without any SSH
+ * hop when the target machine resolves to this host. The local machine is
+ * identified by EITHER its real name (matches `localMachineName()`,
+ * case-insensitive) or one of these reserved aliases.
+ */
+export const LOCAL_MACHINE_ALIASES = ["local", "self", "localhost"];
+
+/**
+ * Return true when `name` refers to the local machine — either the real
+ * machine name or a reserved alias like "local" / "self" / "localhost".
+ *
+ * Mirror of mcp-server/src/config.ts :: isLocalMachineName — keep in sync.
+ *
+ * @param {string|undefined|null} name
+ * @param {object} [opts] - same shape as `localMachineName(opts)` for tests
+ * @returns {boolean}
+ */
+export function isLocalMachineName(name, opts = {}) {
+  if (typeof name !== "string") return false;
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  const lower = trimmed.toLowerCase();
+  if (LOCAL_MACHINE_ALIASES.includes(lower)) return true;
+  return lower === localMachineName(opts).toLowerCase();
+}
 
 /**
  * Look up a paired machine in ~/.agent-bridge/config.
@@ -91,7 +125,76 @@ function expandHome(path) {
 }
 
 /**
+ * Deliver a BridgeMessage reply to the local machine — no SSH.
+ *
+ * Same-machine delivery (3.5.1+) writes directly to
+ * `~/.agent-bridge/inbox/<target>/<id>.json` using an atomic temp-file +
+ * rename, mirroring `mcp-server/src/inbox.ts :: sendLocalMessage`. Use this
+ * when the reply target resolves to this host (matches `localMachineName()`
+ * or one of `LOCAL_MACHINE_ALIASES`).
+ *
+ * @param {object} opts
+ * @param {object} opts.message - BridgeMessage envelope (must include `target`)
+ * @param {string} opts.toMachine - the machine name supplied by the caller (logging only)
+ * @param {string} [opts.inboxDir]
+ * @param {string} [opts.outboxDir]
+ * @param {object} [opts.logger]
+ */
+export function deliverReplyLocal(opts) {
+  const log = opts.logger ?? console;
+  const inboxDir = opts.inboxDir ?? DEFAULT_INBOX;
+  const outboxDir = opts.outboxDir ?? DEFAULT_OUTBOX;
+  const msg = opts.message;
+  const toMachine = opts.toMachine;
+  const targetName = msg.target;
+
+  if (!isValidTarget(targetName)) {
+    throw new Error(`BridgeMessage.target is required for agent-bridge delivery and must be explicit. Got: ${JSON.stringify(targetName ?? null)}`);
+  }
+
+  const targetDir = join(inboxDir, targetName);
+  if (!existsSync(targetDir)) {
+    mkdirSync(targetDir, { recursive: true, mode: 0o700 });
+  }
+
+  const finalPath = join(targetDir, `${msg.id}.json`);
+  // Atomic write: temp file in the same directory, then rename. Mirrors
+  // mcp-server's sendLocalMessage so the inbox watcher sees a fully-formed
+  // JSON file appear in a single rename event — never a partial write.
+  const tmpPath = join(targetDir, `.agent-bridge-${randomUUID()}.tmp`);
+  const content = JSON.stringify(msg, null, 2);
+
+  try {
+    writeFileSync(tmpPath, content, { mode: 0o600 });
+    renameSync(tmpPath, finalPath);
+  } catch (err) {
+    try { unlinkSync(tmpPath); } catch { /* ignore */ }
+    throw new Error(`Failed to deliver agent-bridge reply locally: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // Best-effort outbox copy for debugging, mirroring the SSH path.
+  try {
+    if (!existsSync(outboxDir)) {
+      mkdirSync(outboxDir, { recursive: true, mode: 0o700 });
+    }
+    writeFileSync(join(outboxDir, `${msg.id}.json`), content, { mode: 0o600 });
+  } catch (err) {
+    log.debug?.(`outbox copy skipped: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  log.info?.(
+    `agent-bridge reply delivered locally id=${msg.id} to=${toMachine} target=${targetName}`
+    + (msg.replyTo ? ` replyTo=${msg.replyTo}` : ""),
+  );
+}
+
+/**
  * SCP a BridgeMessage to `<remote>:~/.agent-bridge/inbox/<target>/<id>.json`.
+ *
+ * As of 3.5.1 this also handles the same-machine case: when `toMachine`
+ * resolves to the local host (real name or one of `LOCAL_MACHINE_ALIASES`),
+ * the call short-circuits to `deliverReplyLocal` — no SSH, no paired-machine
+ * lookup. Cross-machine delivery is unchanged.
  *
  * @param {object} opts
  * @param {object} opts.message - BridgeMessage envelope
@@ -99,6 +202,9 @@ function expandHome(path) {
  * @param {string} [opts.keysDir]
  * @param {string} [opts.outboundDir]
  * @param {string} [opts.configPath]
+ * @param {string} [opts.inboxDir]
+ * @param {string} [opts.outboxDir]
+ * @param {object} [opts.localNameOpts] - forwarded to `localMachineName` for tests
  * @param {number} [opts.commandTimeoutMs]
  * @param {object} [opts.logger]
  */
@@ -114,6 +220,21 @@ export async function deliverReply(opts) {
 
   if (!isValidTarget(targetName)) {
     throw new Error(`BridgeMessage.target is required for agent-bridge delivery and must be explicit. Got: ${JSON.stringify(targetName ?? null)}`);
+  }
+
+  // Same-machine fast path (3.5.1+): if the reply target is this host, write
+  // straight to the local inbox. Avoids the "paired machine not found" error
+  // when an OpenClaw embedded agent replies to a same-machine sender (e.g.
+  // Mini-Claude on the same box).
+  if (isLocalMachineName(toMachine, opts.localNameOpts)) {
+    deliverReplyLocal({
+      message: msg,
+      toMachine,
+      inboxDir: opts.inboxDir,
+      outboxDir: opts.outboxDir,
+      logger: log,
+    });
+    return;
   }
 
   const target = resolvePairedMachine(toMachine, configPath);

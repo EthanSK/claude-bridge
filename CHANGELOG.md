@@ -1,5 +1,28 @@
 # Changelog
 
+## agent-bridge 3.5.1 — 2026-04-21
+
+### Fix: openclaw-channel outbound now handles same-machine routing without SSH
+
+3.5.0 added first-class same-machine delivery to the **mcp-server** package, but the **openclaw-channel** outbound path (`deliverReply` in `openclaw-channel/src/outbound.js`) still went straight to the paired-machine SSH lookup. When an OpenClaw embedded agent tried to reply over agent-bridge to a same-machine sender (e.g. Mini-Claude → Mini-OpenClaw → reply back to Mini-Claude), the dispatch failed with `paired machine "<local-name>" not found in ~/.agent-bridge/config` because the local machine is never in the SSH-paired config.
+
+3.5.1 brings the openclaw-channel outbound path to parity with `mcp-server`'s `sendLocalMessage`: when the reply target resolves to the local host (matches `localMachineName()` or one of the reserved aliases `local` / `self` / `localhost`), the BridgeMessage JSON is written directly to `~/.agent-bridge/inbox/<target>/<id>.json` using the same atomic temp-file + rename pattern. No SSH hop, no paired-machine lookup, identical wire format.
+
+#### Changes
+
+- `openclaw-channel/src/outbound.js`:
+  - New `LOCAL_MACHINE_ALIASES` export and `isLocalMachineName(name, opts?)` helper, kept as a mirror of `mcp-server/src/config.ts` (documented as "keep in sync").
+  - New `deliverReplyLocal({ message, toMachine, inboxDir?, outboxDir?, logger? })` — performs the inbox write directly on disk with atomic rename, mirroring `sendLocalMessage` semantics including the best-effort outbox copy.
+  - `deliverReply()` now short-circuits to `deliverReplyLocal` when `toMachine` is the local machine. Cross-machine SSH path is untouched.
+- `openclaw-channel/test/outbound-local.test.js`: 11 new cases covering local-name and alias detection, atomic-write cleanup, malformed-target rejection, alias routing through `deliverReply`, the unchanged remote-throw behaviour, and the mixed local-send + paired-remote scenario.
+- Version bumps: `mcp-server/package.json` 3.5.0 → 3.5.1, `mcp-server/.claude-plugin/plugin.json` 3.5.0 → 3.5.1, `mcp-server/src/index.ts` server version + startup log to 3.5.1, `agent-bridge` bash CLI `VERSION` 3.5.0 → 3.5.1, `mcp-server/package-lock.json` to match. `openclaw-channel/package.json` bumped 2.3.4 → 2.3.5 (independent semver track).
+
+#### Compatibility
+
+- Cross-machine SSH delivery is unchanged.
+- Wire format is unchanged. `deliverReplyLocal` produces the identical JSON file layout `sendLocalMessage` produces, so any inbox watcher (Claude Code channel plugin, openclaw-channel, standalone CLI) picks it up the same way.
+- The `isLocalMachineName` helper in openclaw-channel is a documented mirror of the mcp-server version. If the alias list grows in `mcp-server/src/config.ts`, update both.
+
 ## agent-bridge 3.5.0 — 2026-04-25
 
 ### Feature: first-class same-machine delivery (no SSH loopback)
