@@ -1,5 +1,77 @@
 # Changelog
 
+## agent-bridge 3.6.0 — 2026-04-21
+
+### Structural fix: split the channel host into its own Claude Code plugin
+
+The 3.5.x patch series (heartbeat, sibling-MCP step-down, SIGPIPE swallow, watcher lease, broken-pipe diagnostics, "obey Claude MCP lifecycle shutdown", 3-poll orphan watchdog, persistent stderr tee, push-failed decision) all worked around the same root cause: **the channel watcher was living inside an MCP stdio child whose lifetime is governed by Claude Code's plugin host**. Each patch closed one race; the next one opened. 3.6.0 fixes the structural problem rather than adding another patch on top.
+
+#### What's new
+
+- **New plugin: `agent-bridge-channel`** (sourced from `claude-code-channel/`). Long-lived, session-scoped MCP server modeled on the official Telegram plugin's `~/.claude/plugins/cache/.../telegram/0.0.6/server.ts`. Owns the watcher lease, polls `~/.agent-bridge/inbox/claude-code/` at 2 s, and emits `notifications/claude/channel` back into the running Claude Code session. Survives `/reload-plugins`, sibling-MCP spawns, and idle reaping the way the Telegram channel does.
+- **`agent-bridge` plugin (the existing MCP server) is now tools-only by default.** Exposes the same 7 `bridge_*` tools (`bridge_send_message`, `bridge_status`, `bridge_list_machines`, `bridge_run_command`, `bridge_inbox_stats`, `bridge_clear_inbox`, `bridge_receive_messages`). The plugin host can respawn this child between turns without affecting the watcher. `bridge_inbox_stats` reads the shared lease file (`~/.agent-bridge/locks/claude-code.watcher-lock.json`) to report the live channel-owner's PID/role/freshness even though the watcher itself runs in another process. The 3.5.3 lease-read implementation already did this correctly.
+- **Telegram patches A–F adopted verbatim in `claude-code-channel/src/index.ts`.** Persistent stderr tee → `~/.agent-bridge/logs/claude-code-channel-stderr.log` (5 MiB rotation), `shutdownWithReason` funnel, 60 s heartbeat (refed — channel host MUST keep the loop alive), shutdown handle/request dump, 3-poll orphan watchdog (15 s confirmation across `ppid != bootPpid` OR `stdin.destroyed` OR `stdin.readableEnded`), and Patch F (heartbeat-recency guard against parallel subagent spawn — uses the lease file's `updatedAt` instead of an stderr-log mtime, same intent).
+- **Marketplace updated** to expose both plugins side by side. Install both:
+  ```bash
+  claude plugin install agent-bridge@agent-bridge          # tools
+  claude plugin install agent-bridge-channel@agent-bridge  # channel host
+  ```
+
+#### Wire-format compatibility
+
+The on-disk wire format is unchanged. `BridgeMessage` JSON shape, the per-target inbox subdir layout (`inbox/claude-code/`, `inbox/openclaw/<acct>/`), the `.delivered` / `.processed` ledgers, the watcher lease path/format, and the SCP outbound path all match 3.5.x byte-for-byte. A 3.5.x peer (running mcp-server in legacy `channel-owner` mode) and a 3.6.x peer (running `claude-code-channel` plugin) interoperate fully — the lease file mediates ownership when both are present transiently on the same machine. **Per-machine rollout is supported**: upgrade Mac-Mini to 3.6.0 while MBP stays on 3.5.x and messages flow both ways throughout.
+
+#### What's NOT changing
+
+- **Tool surface is identical.** Callers using `bridge_send_message` etc. see no API change.
+- **OpenClaw** is unaffected. `openclaw-channel/` keeps watching `inbox/openclaw/<target>/` and pairs with the tools-only MCP server exactly as before.
+- **Same-machine delivery (3.5.0+)** is unchanged. `bridge_send_message` to the local machine still writes directly to `~/.agent-bridge/inbox/<target>/<id>.json` without going through SSH.
+- **`AGENT_BRIDGE_ROLE=channel-owner`** is retained as a legacy opt-in for non-Claude hosts (Codex, Gemini-CLI, plain MCP experimentation). Most users don't need it.
+
+#### Lifecycle posture
+
+Pre-3.6.0:
+```
+Claude Code session ──spawns──> [single MCP child]
+                                   ├── bridge_* tools (per-turn)
+                                   ├── inbox watcher (long-lived — but child dies between turns)
+                                   └── notifications/claude/channel push
+```
+The child's lifetime was governed by Claude Code's MCP host. When the host reaped or recycled the child between turns, the watcher died with it. Each 3.5.x patch tried to keep the child alive across one more reap path; the structural mismatch never went away.
+
+3.6.0:
+```
+Claude Code session ──spawns──> [agent-bridge-channel plugin]   (session-scoped, REFED)
+                       │           ├── inbox watcher
+                       │           └── notifications/claude/channel push
+                       │
+                       └─spawns──> [agent-bridge MCP child]      (per-turn, free to recycle)
+                                   └── bridge_* tools
+```
+Tools and channel coordinate exclusively via the filesystem. The MCP plugin host can freely respawn the tools child; the watcher in the channel plugin is undisturbed.
+
+#### Tests
+
+- Existing `mcp-server` tests still pass (some had a hardcoded `version: '3.5.5'` assertion that was bumped to `3.6.0`).
+- New `claude-code-channel` test suite verifies plugin lifecycle, watcher lease arbitration, channel-notification push, shutdown_diag emission, and 3-poll watchdog behaviour.
+
+#### Files touched
+
+- `claude-code-channel/` — new package. Replaces the inert 3.6.0 stub. Contains: `package.json`, `package-lock.json`, `tsconfig.json`, `.claude-plugin/plugin.json`, `.mcp.json`, `.gitignore`, `README.md`, `src/index.ts`, `src/config.ts`, `src/log.ts`, `src/inbox.ts`, `src/watcher.ts`, `test/*.test.mjs`, `build/` (committed).
+- `mcp-server/src/index.ts` — `AGENT_BRIDGE_ROLE` defaults to `tools-only`; legacy `channel-owner` opt-in retained; version strings bumped to 3.6.0; clearer startup banner.
+- `mcp-server/.mcp.json` — env block now sets `AGENT_BRIDGE_ROLE=tools-only` (was `channel-owner`).
+- `mcp-server/.claude-plugin/plugin.json`, `mcp-server/package.json`, `mcp-server/package-lock.json` — version 3.6.0.
+- `mcp-server/test/heartbeat-shutdown-diag.test.mjs` — version assertion 3.5.5 → 3.6.0.
+- `agent-bridge` (top-level CLI) — `VERSION="3.6.0"`.
+- `.claude-plugin/marketplace.json` — registers both `agent-bridge` (tools) and `agent-bridge-channel` (channel host).
+- `README.md`, `INSTRUCTIONS.md`, `AGENTS.md` — explain the new architecture.
+- `scripts/update.sh` — also rebuilds `claude-code-channel/`.
+- `CHANGELOG.md` — this entry.
+
+#### Pre-commit codex review
+
+Skipped — Codex CLI auth is broken (`refresh_token_reused 401`). Manual review carried out instead. Per `~/.claude/CLAUDE.md`, the global rule says skip pre-commit-codex-review when codex auth is broken.
+
 ## agent-bridge 3.5.5 — 2026-04-25
 
 ### Telegram-pattern lifecycle polish (diagnostics-only)

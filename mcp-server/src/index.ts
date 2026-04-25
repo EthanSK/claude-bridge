@@ -237,18 +237,27 @@ async function main(): Promise<void> {
   initInbox();
 
   const localName = getLocalMachineName();
-  logInfo(`agent-bridge MCP server starting on "${localName}"`);
+  // 3.6.0: this MCP server is now tools-only by default. The session-scoped
+  // channel watcher lives in the agent-bridge-channel plugin
+  // (`claude-code-channel/`). Set AGENT_BRIDGE_ROLE=channel-owner explicitly
+  // to opt back into the legacy all-in-one behaviour (e.g. for non-Claude
+  // hosts like Codex or Gemini-CLI that don't run the channel plugin).
+  logInfo(
+    `agent-bridge mcp-server starting on "${localName}" `
+    + '(tools-only by default — channel watcher lives in the agent-bridge-channel plugin; '
+    + 'set AGENT_BRIDGE_ROLE=channel-owner to opt into the legacy all-in-one mode)',
+  );
   logEvent({
     event: 'server.starting',
     msg: `agent-bridge MCP server starting on "${localName}"`,
-    context: { machineName: localName, version: '3.5.5', pid: process.pid, nodeVersion: process.version },
+    context: { machineName: localName, version: '3.6.0', pid: process.pid, nodeVersion: process.version },
   });
 
   // Create MCP server with channel capability
   const server = new McpServer(
     {
       name: 'agent-bridge',
-      version: '3.5.5',
+      version: '3.6.0',
     },
     {
       capabilities: {
@@ -307,7 +316,15 @@ async function main(): Promise<void> {
   // server only for outbound bridge_* tools) must disable watching entirely.
   // We now support explicit roles plus a single-owner lease with stale-lock
   // recovery so a crashed/zombie session cannot permanently block the next run.
-  const requestedBridgeRole = process.env.AGENT_BRIDGE_ROLE?.trim() || '';
+  //
+  // 3.6.0 default flip: when AGENT_BRIDGE_ROLE is unset, default to
+  // 'tools-only'. The channel watcher now lives in the claude-code-channel
+  // plugin (a separate Claude Code plugin packaged at ../claude-code-channel/),
+  // whose lifetime matches the Claude Code session rather than the MCP tool
+  // turn. Setting AGENT_BRIDGE_ROLE=channel-owner explicitly remains
+  // supported as a legacy opt-in for non-Claude hosts that want the
+  // all-in-one behaviour.
+  const requestedBridgeRole = process.env.AGENT_BRIDGE_ROLE?.trim() || 'tools-only';
   const parentCommandLine = readParentCommandLine();
   let bridgeRole = requestedBridgeRole;
   if (
@@ -352,15 +369,20 @@ async function main(): Promise<void> {
       },
     });
   } else {
-    if (!bridgeRole) {
+    // 3.6.0: bridgeRole always has a value here (defaults to 'tools-only' at
+    // env parse, can be set to 'channel-owner' as legacy opt-in). The pre-3.6
+    // implicit/auto branch is no longer reachable. We log channel-owner as a
+    // legacy notice so non-Claude hosts that opt in see what's happening.
+    if (bridgeRole === 'channel-owner') {
       logWarn(
-        'Watcher enabled in legacy auto mode. Prefer AGENT_BRIDGE_ROLE=channel-owner '
-        + 'for the real Claude Code plugin and AGENT_BRIDGE_ROLE=tools-only everywhere else.',
+        'Watcher running in legacy channel-owner mode. New Claude Code installs should use the '
+        + 'claude-code-channel plugin instead — this mode is retained for non-Claude hosts that do '
+        + 'not load the channel plugin (Codex, Gemini-CLI, etc).',
       );
       logEvent({
-        event: 'watcher.role_implicit',
+        event: 'watcher.legacy_channel_owner',
         level: 'warn',
-        msg: 'Watcher running with implicit auto role',
+        msg: 'Watcher running in legacy channel-owner mode (claude-code-channel plugin not in use)',
         context: { pid: process.pid },
       });
     }

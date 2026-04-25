@@ -72,7 +72,12 @@ agent-bridge lets running Claude Code and OpenClaw sessions on different machine
  No fixed controller or target.
 ```
 
-The diagram shows the shared transport shape, not one identical host lifecycle. In Claude Code, the watcher that can emit `notifications/claude/channel` lives inside the plugin's MCP stdio child; in OpenClaw, the watcher lives in the separately loaded OpenClaw channel plugin under the gateway.
+The diagram shows the shared transport shape, not one identical host lifecycle. As of 3.6.0, the Claude Code integration uses **two cooperating plugins**:
+
+- **`agent-bridge`** (sourced from [`mcp-server/`](mcp-server/)) — tools-only MCP server. Exposes `bridge_send_message` and friends to the running Claude session. The MCP plugin host is free to respawn this child between turns; it owns no long-lived state.
+- **`agent-bridge-channel`** (sourced from [`claude-code-channel/`](claude-code-channel/)) — long-lived, session-scoped channel plugin. Holds the `~/.agent-bridge/locks/claude-code.watcher-lock.json` lease, polls `~/.agent-bridge/inbox/claude-code/` at 2 s, and pushes incoming messages back to Claude as `notifications/claude/channel`. Mirrors Telegram plugin's lifetime semantics — survives `/reload-plugins` and idle reaping. See [`docs/3.6.0-channel-plugin-migration.md`](docs/3.6.0-channel-plugin-migration.md) for the architectural rationale.
+
+Tools and channel coordinate exclusively via the filesystem (inbox subdir + lease file). They do NOT talk to each other at runtime. OpenClaw still ships its own native channel plugin in [`openclaw-channel/`](openclaw-channel/) — unaffected by the 3.6.0 split.
 
 ---
 
@@ -80,8 +85,8 @@ The diagram shows the shared transport shape, not one identical host lifecycle. 
 
 | Agent Harness | Status | Integration |
 |---------------|--------|-------------|
-| **Claude Code** | ✅ **Tested end-to-end**, both machines confirmed | Local Claude Code plugin runs one MCP stdio server that exposes `bridge_*` tools and the experimental `claude/channel` push path (`notifications/claude/channel`) |
-| OpenClaw | ✅ **Tested end-to-end**, first-class channel | Separate native plugin in [`openclaw-channel/`](openclaw-channel/README.md) registers with OpenClaw via `api.registerChannel()`; the MCP server is used for tools and should run `tools-only` |
+| **Claude Code** | ✅ **Tested end-to-end**, both machines confirmed | Two cooperating plugins as of 3.6.0: the `agent-bridge` plugin (tools-only MCP server in [`mcp-server/`](mcp-server/)) exposes `bridge_*` tools, and the `agent-bridge-channel` plugin (session-scoped channel host in [`claude-code-channel/`](claude-code-channel/)) owns the watcher lease and pushes inbound messages via `notifications/claude/channel` |
+| OpenClaw | ✅ **Tested end-to-end**, first-class channel | Separate native plugin in [`openclaw-channel/`](openclaw-channel/README.md) registers with OpenClaw via `api.registerChannel()`; the MCP server is used for tools and runs `tools-only` |
 | Codex CLI (OpenAI) | 🟡 Scaffolded, not exercised yet | MCP server + skill file at `AGENTS.md`; inbound receive/polling flow still needs harness-specific verification |
 | Gemini CLI | 🟡 Scaffolded, not exercised yet | MCP server + skill file at `GEMINI.md`; inbound receive/polling flow still needs harness-specific verification |
 | Aider / other MCP hosts | 🟡 Scaffolded, not exercised yet | MCP server + generic instructions at `INSTRUCTIONS.md`; inbound receive/polling flow still needs harness-specific verification |
@@ -241,16 +246,17 @@ chmod +x /usr/local/bin/agent-bridge
 
 ## Updating
 
-agent-bridge has three moving parts on each machine:
+agent-bridge has four moving parts on each machine (3.6.0+):
 
-| Part                       | Where                                                                 | How it updates              |
-|----------------------------|-----------------------------------------------------------------------|-----------------------------|
-| `agent-bridge` CLI script  | Either `/usr/local/bin/agent-bridge` (one-line install, re-run it)    | Re-run `install.sh`         |
-|                            | OR a symlink into the checked-out repo (Option B)                     | `git pull` in the repo      |
-| MCP server                 | `<repo>/mcp-server/build/`                                            | `git pull` + rebuild        |
-| OpenClaw channel plugin    | `<repo>/openclaw-channel/` (loaded from the repo path by the gateway) | `git pull` + gateway restart |
+| Part                              | Where                                                                 | How it updates              |
+|-----------------------------------|-----------------------------------------------------------------------|-----------------------------|
+| `agent-bridge` CLI script         | Either `/usr/local/bin/agent-bridge` (one-line install, re-run it)    | Re-run `install.sh`         |
+|                                   | OR a symlink into the checked-out repo (Option B)                     | `git pull` in the repo      |
+| MCP server (tools-only)           | `<repo>/mcp-server/build/`                                            | `git pull` + rebuild        |
+| Claude Code channel plugin        | `<repo>/claude-code-channel/build/`                                   | `git pull` + rebuild        |
+| OpenClaw channel plugin           | `<repo>/openclaw-channel/` (loaded from the repo path by the gateway) | `git pull` + gateway restart |
 
-The MCP server is auto-spawned by the Claude Code channel plugin on `/reload-plugins`, so you **don't need to restart your terminal** to pick up MCP changes — just reload plugins.
+Both the tools-only MCP server and the Claude Code channel plugin are loaded by Claude Code's plugin host. The MCP server respawns per turn; the channel plugin runs for the whole session. `/reload-plugins` rebuilds both — no terminal restart needed.
 
 The OpenClaw channel plugin is loaded once when the gateway starts, so you DO need to restart the gateway to pick up plugin changes.
 
@@ -267,9 +273,10 @@ cd ~/Projects/agent-bridge       # or wherever you cloned it
 
 What it does:
 1. `git fetch origin && git pull --ff-only origin main`
-2. `(cd mcp-server && npm install && npm run build)` to rebuild the MCP server
-3. (Optional) Restart the OpenClaw gateway via `openclaw gateway restart` if the `openclaw` CLI is on `$PATH`. Gated behind a Y/n prompt so you can say no during a live session. Skipped entirely with `--skip-openclaw`
-4. On macOS, attempts to trigger `/reload-plugins` in the running Claude Code terminal via the `self-reload-plugins` skill (only if that skill is installed in `~/.claude/skills/self-reload-plugins/`)
+2. `(cd mcp-server && npm install && npm run build)` to rebuild the tools-only MCP server
+3. `(cd claude-code-channel && npm install && npm run build)` to rebuild the Claude Code channel plugin
+4. (Optional) Restart the OpenClaw gateway via `openclaw gateway restart` if the `openclaw` CLI is on `$PATH`. Gated behind a Y/n prompt so you can say no during a live session. Skipped entirely with `--skip-openclaw`
+5. On macOS, attempts to trigger `/reload-plugins` in the running Claude Code terminal via the `self-reload-plugins` skill (only if that skill is installed in `~/.claude/skills/self-reload-plugins/`)
 
 The script is idempotent — if `mcp-server/build/` is already up-to-date the npm build is a fast no-op, and if no new commits were pulled it exits early without touching the gateway.
 
@@ -281,9 +288,10 @@ If you'd rather do it by hand:
 cd ~/Projects/agent-bridge
 git pull --ff-only origin main
 (cd mcp-server && npm install && npm run build)
+(cd claude-code-channel && npm install && npm run build)
 # then, on the machine running OpenClaw:
 openclaw gateway restart
-# and if you're in Claude Code right now, reload plugins so MCP tools reconnect to the new build:
+# and if you're in Claude Code right now, reload plugins so MCP + channel reconnect to the new build:
 # /reload-plugins
 ```
 

@@ -107,18 +107,24 @@ The MCP server provides the shared `bridge_*` tools for EXISTING running agent s
 | `bridge_clear_inbox` | Clear the local inbox |
 | `bridge_inbox_stats` | Get inbox statistics and watcher health |
 
-### Claude Code channel plugin
+### Claude Code channel plugin (3.6.0+)
 
-When used with Claude Code, the MCP server itself acts as a **channel plugin**: one stdio JSON-RPC child advertises both the `bridge_*` tools and the experimental `claude/channel` capability. Incoming messages are **pushed** into the running session automatically as:
+When used with Claude Code, agent-bridge ships **two cooperating plugins**:
+
+1. **`agent-bridge`** (the MCP server in [`mcp-server/`](mcp-server/)) — tools-only. Exposes `bridge_*` tools to the running session. The plugin host may respawn this stdio child between turns; it owns no long-lived state.
+2. **`agent-bridge-channel`** (the channel host in [`claude-code-channel/`](claude-code-channel/)) — long-lived, session-scoped. Holds the `~/.agent-bridge/locks/claude-code.watcher-lock.json` lease, polls `~/.agent-bridge/inbox/claude-code/` at 2 s, and emits `notifications/claude/channel` back to the running session as:
+
 ```
 <channel source="agent-bridge" from="MachineName" message_id="msg-xxx" ts="2026-01-01T00:00:00Z">
 Message content here
 </channel>
 ```
 
-The agent responds using the `bridge_send_message` tool. No polling needed in the normal channel-owner path.
+The agent responds using the `bridge_send_message` tool from the tools-only MCP server. The two plugins coordinate exclusively via the filesystem (inbox subdir + lease file); they do not talk to each other at runtime.
 
-**Lifecycle caveat:** this watcher is not a standalone daemon. It lives inside Claude Code's plugin MCP child on the same stdio transport used for tools. Current releases keep it alive across benign stdin/stderr/SIGTERM closure and replay undelivered messages on startup, but if Claude fully reaps/restarts the child, delivery waits for the next live channel-owner/replay.
+**Why split?** Pre-3.6.0 the channel watcher lived inside the same MCP child as the tools. Claude Code's plugin host reaps stdio MCP children between tool turns (or on `/reload-plugins`), which kept causing the watcher to die mid-session. The 3.6.0 split moves the long-lived channel concern into its own plugin (modeled on Telegram's `~/.claude/plugins/cache/.../telegram/0.0.6/server.ts`) whose lifetime matches the Claude Code session. See [`docs/3.6.0-channel-plugin-migration.md`](docs/3.6.0-channel-plugin-migration.md) for the full rationale.
+
+**Legacy mode:** non-Claude hosts that don't run the channel plugin (Codex CLI, Gemini CLI, plain MCP experimentation) can still set `AGENT_BRIDGE_ROLE=channel-owner` in the MCP server's `.mcp.json` `env` block to opt back into the all-in-one pre-3.6.0 behaviour. Most setups should leave this alone — `tools-only` is the new default.
 
 ### OpenClaw native channel plugin
 
@@ -130,15 +136,17 @@ OpenClaw push delivery is **not** Claude's `claude/channel` protocol. Keep the M
 
 ### Channel setup
 
-**Claude Code (recommended):** Install as a Claude Code plugin. The repo doubles as a local marketplace — one command registers BOTH the MCP server and the channel:
+**Claude Code (recommended, 3.6.0+):** Install as Claude Code plugins. The repo's local marketplace ships both pieces; install BOTH so the tools and the channel are wired up:
 
 ```bash
 cd ~/Projects/agent-bridge/mcp-server && npm install && npm run build
+cd ~/Projects/agent-bridge/claude-code-channel && npm install && npm run build
 claude plugin marketplace add ~/Projects/agent-bridge
-claude plugin install agent-bridge@agent-bridge
+claude plugin install agent-bridge@agent-bridge          # tools (MCP server)
+claude plugin install agent-bridge-channel@agent-bridge  # channel host (long-lived watcher)
 ```
 
-Verify with `claude plugin list`. The plugin manifest lives at `.claude-plugin/marketplace.json` (repo root) and `mcp-server/.claude-plugin/plugin.json` + `mcp-server/.mcp.json`.
+Verify with `claude plugin list`. The plugin manifests live at `.claude-plugin/marketplace.json` (repo root), `mcp-server/.claude-plugin/plugin.json` + `mcp-server/.mcp.json`, and `claude-code-channel/.claude-plugin/plugin.json` + `claude-code-channel/.mcp.json`.
 
 > ⚠️ **You still need `--dangerously-load-development-channels`.** An earlier version of this doc claimed the plugin install removes that requirement — it does not. Because the marketplace is a **local directory** (`claude plugin marketplace add ~/Projects/agent-bridge`), Claude Code treats it as a dev channel and its built-in allowlist will reject it on launch with:
 >

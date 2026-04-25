@@ -5,3 +5,5 @@
 .claude-bridge/
 node_modules/
 mcp-server/build/
+claude-code-channel/build/
+claude-code-channel/node_modules/
