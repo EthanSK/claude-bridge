@@ -218,7 +218,7 @@ If the agent-bridge MCP server is configured, you have direct access to these to
 | `bridge_list_machines` | List paired machines and their connection details |
 | `bridge_status` | Check if a machine is reachable via SSH |
 | `bridge_send_message` | Send a message to another machine's running agent |
-| `bridge_receive_messages` | Manual inspection/consumption of the local Claude Code-target inbox |
+| `bridge_receive_messages` | Manual inspection/consumption of the local Claude Code-target inbox. Supports long-poll via `wait: true, timeout_seconds: 30` for subagents that need to receive bridge replies (channel push only reaches the parent session). |
 | `bridge_run_command` | Run a shell command on a remote machine |
 | `bridge_clear_inbox` | Clear the local inbox |
 | `bridge_inbox_stats` | Get inbox statistics and watcher health |
@@ -246,7 +246,17 @@ For Claude Code push:
 3. Machine B's `agent-bridge` plugin watcher detects the new file and emits `notifications/claude/channel` into the running Claude session
 4. Machine B responds via `bridge_send_message` back to Machine A with an explicit `target`
 
-For OpenClaw push, the gateway loads `openclaw-channel/`, watches `inbox/openclaw/<target>/`, and injects inbound messages into the matching running OpenClaw/Telegram session. Codex/Gemini/Aider inbound receive/reply loops remain scaffolded until tested end-to-end; `bridge_receive_messages` is only a manual Claude Code-target inbox fallback today.
+For OpenClaw push, the gateway loads `openclaw-channel/`, watches `inbox/openclaw/<target>/`, and injects inbound messages into the matching running OpenClaw/Telegram session. Codex/Gemini/Aider inbound receive/reply loops remain scaffolded until tested end-to-end; `bridge_receive_messages` is the manual Claude Code-target inbox fallback (now with long-poll support, 3.8.0+) — see "Subagent receive (long-poll)" below.
+
+### Subagent receive (long-poll, 3.8.0+)
+
+Channel push (`<channel source="agent-bridge" ...>`) only lands in the parent session. Subagents on either machine that need to receive a bridge reply should call `bridge_receive_messages` with:
+
+```json
+{ "wait": true, "timeout_seconds": 30, "peek": true }
+```
+
+Loop on the response: if `structuredContent.timed_out === true`, re-issue the call; otherwise inspect `structuredContent.messages` for the reply. Use `peek: true` so the parent's channel-push consumer (and any other subagents) still see the same content — `peek: false` consumes destructively and only one caller wins. Server-side timeout is capped at 60 s.
 
 ### MCP server setup
 

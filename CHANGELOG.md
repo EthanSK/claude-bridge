@@ -1,5 +1,69 @@
 # Changelog
 
+## agent-bridge 3.8.0 — 2026-04-26
+
+### Long-poll / blocking receive (`bridge_receive_messages`)
+
+`bridge_receive_messages` now accepts two optional parameters:
+
+- `wait: boolean` (default `false`) — when `true`, the tool blocks until a
+  message arrives or `timeout_seconds` elapses.
+- `timeout_seconds: number` (default `30`, server-capped at `60`) — long-poll
+  duration when `wait=true`.
+
+When `wait=true` and the inbox already contains messages, the tool returns
+immediately. Otherwise it registers a one-shot listener with the watcher's
+in-process arrival registry and races the listener against `setTimeout`. On
+timeout the response carries `timed_out: true` in `structuredContent` plus an
+empty messages array — additive, so pre-3.8.0 callers (or anyone reading the
+text content) are unaffected.
+
+#### Why
+
+Channel pushes (`notifications/claude/channel`) only land in the parent
+session that owns the MCP transport — subagents on the same machine do NOT
+receive them. Pre-3.8.0, a subagent that needed to wait for a bridge reply
+had to busy-poll `bridge_receive_messages` (cost: tokens per poll) or skip
+receive entirely. Long-poll is the subagent escape hatch: one MCP call
+parks for up to 60 s and returns the moment a message lands.
+
+#### Concurrency / broadcast semantics
+
+Multiple concurrent long-pollers (parent session + N subagents) all wake on
+the same arrival — the in-process registry uses **broadcast**, not queue,
+semantics. `bridge_receive_messages` is supposed to be idempotent (it
+returns the inbox as a snapshot), so broadcast keeps the contract intact.
+Whether the file is moved to `.archive/` or stays pending is governed by
+the existing `peek` flag: `peek: true` is the safe fan-out path; `peek:
+false` (consume) is destructive first-come-first-served and only one
+caller will see the message.
+
+For agents that genuinely want one-receiver-only semantics, use a unique
+`from_target` per subagent and route replies to that target so they land
+in a per-subagent inbox subdir — that's a separate facility, NOT
+`bridge_receive_messages`.
+
+#### Implementation
+
+- `mcp-server/src/watcher.ts` — added an `inboxArrivalListeners` Set, a
+  `subscribeToInboxArrival(listener)` export that returns an `unsubscribe`
+  fn, and `inboxArrivalListenerCount()` for tests. The polling pass in
+  `checkForNewFiles` calls `fireInboxArrivalListeners()` after the
+  per-file `emitChannelNotification` calls so the channel-push parent
+  path runs first.
+- `mcp-server/src/tools.ts` — extended the `bridge_receive_messages` Zod
+  inputSchema with `wait` + `timeout_seconds`, factored snapshot-reading
+  into a local `readSnapshot()` helper, and added the long-poll body
+  that races `subscribeToInboxArrival` against a `setTimeout` clamp.
+- `mcp-server/test/long-poll-receive.test.mjs` — new test covering all 6
+  scenarios from the spec.
+
+#### Test count
+
+37 tests pass (was 31 in 3.7.1 — added 6 long-poll cases).
+
+---
+
 ## agent-bridge 3.7.1 — 2026-04-26
 
 ### Patch F race fix (standby+retry) + stale-version peer kill

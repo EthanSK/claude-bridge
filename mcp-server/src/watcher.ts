@@ -126,6 +126,89 @@ const currentBackend: 'polling' = 'polling';
 /** The channel notification callback. */
 let savedChannelCallback: ChannelNotifyCallback | null = null;
 
+// ── 3.8.0 — In-process inbox-arrival subscriber registry ────────────────────
+//
+// `bridge_receive_messages` (with `wait: true`) registers a one-shot listener
+// here so it can long-poll inside the MCP tool handler without burning tokens
+// on a busy re-poll loop. The listener resolves when:
+//   1. A new inbox file arrives (detected by `checkForNewFiles`), OR
+//   2. A channel notification is emitted (also indicates inbox arrival,
+//      covered by `emitChannelNotification` which is invoked inside
+//      `checkForNewFiles`), OR
+//   3. The caller's timeout fires (caller side — not this module's concern).
+//
+// Semantics: BROADCAST. Every subscriber gets fired on every arrival, so
+// multiple concurrent long-pollers (e.g. parent session + N subagents) all
+// wake up. The `bridge_receive_messages` tool is supposed to be idempotent —
+// it returns inbox content as a snapshot. Whether the file moves to
+// .archive/ or stays in inbox/ is governed by the existing `peek` flag, NOT
+// by which subscriber woke first.
+//
+// Why broadcast and not queue: forcing one-subscriber-per-arrival semantics
+// would mean the second long-poller never sees the message even though it
+// is sitting in the inbox. That breaks the existing "snapshot of pending"
+// contract. Broadcast keeps `bridge_receive_messages` semantically the
+// same regardless of how many concurrent callers are waiting.
+type InboxArrivalListener = () => void;
+const inboxArrivalListeners = new Set<InboxArrivalListener>();
+
+/**
+ * Register a one-shot listener that fires on the next inbox arrival.
+ * Returns an `unsubscribe` function the caller MUST invoke on timeout
+ * (otherwise the registry leaks). Calling the listener itself does NOT
+ * auto-unsubscribe — the registry owns lifecycle, not the listener.
+ *
+ * Exported for `tools.ts::bridge_receive_messages` long-poll handler.
+ */
+export function subscribeToInboxArrival(listener: InboxArrivalListener): () => void {
+  inboxArrivalListeners.add(listener);
+  return () => {
+    inboxArrivalListeners.delete(listener);
+  };
+}
+
+/**
+ * Fire all currently-registered inbox-arrival listeners. Listeners are
+ * removed AFTER firing (one-shot semantics), but errors are isolated so a
+ * misbehaving listener can't take out the whole registry. We snapshot the
+ * set first so a listener that re-subscribes during its own callback (rare,
+ * but legal) doesn't get fired twice in the same tick.
+ *
+ * Called from `checkForNewFiles` whenever the polling pass discovers at
+ * least one new file.
+ */
+function fireInboxArrivalListeners(): void {
+  if (inboxArrivalListeners.size === 0) return;
+  const snapshot = Array.from(inboxArrivalListeners);
+  inboxArrivalListeners.clear();
+  for (const fn of snapshot) {
+    try {
+      fn();
+    } catch (err) {
+      logWarn(`Watcher: inbox-arrival listener threw: ${err}`);
+    }
+  }
+}
+
+/**
+ * Test/diagnostic helper: returns the count of currently-registered
+ * inbox-arrival listeners. Not part of the public MCP surface.
+ */
+export function inboxArrivalListenerCount(): number {
+  return inboxArrivalListeners.size;
+}
+
+/**
+ * Test-only: fire all registered inbox-arrival listeners. The production
+ * code path drives this via the polling pass in `checkForNewFiles`; tests
+ * need a synchronous trigger so they can verify wake-up behaviour without
+ * depending on the 2 s poll interval. Underscore prefix marks it as not
+ * a public stable API — used only by `test/long-poll-receive.test.mjs`.
+ */
+export function _fireInboxArrivalListenersForTesting(): void {
+  fireInboxArrivalListeners();
+}
+
 function channelNotifyTimeoutMs(): number {
   const raw = process.env.AGENT_BRIDGE_CHANNEL_NOTIFY_TIMEOUT_MS;
   if (!raw) return DEFAULT_CHANNEL_NOTIFY_TIMEOUT_MS;
@@ -619,6 +702,15 @@ function checkForNewFiles(callback: MessageCallback): void {
       for (const f of newFiles) {
         emitChannelNotification(f);
       }
+
+      // 3.8.0 — wake any in-process long-poll subscribers (broadcast).
+      // Fired AFTER the per-file emitChannelNotification calls so the
+      // channel-push parent path runs first; subagent long-pollers
+      // (which read the inbox via peek/consume after waking) see the
+      // file by the time their handler runs. Errors are isolated by
+      // fireInboxArrivalListeners — a misbehaving subscriber cannot
+      // take down the watcher poll loop.
+      fireInboxArrivalListeners();
 
       callback(newFiles.map(f => join(INBOX_DIR, f)));
     }

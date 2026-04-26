@@ -102,7 +102,7 @@ The MCP server provides the shared `bridge_*` tools for EXISTING running agent s
 | `bridge_list_machines` | List paired machines and connection details |
 | `bridge_status` | Check if a machine is reachable via SSH |
 | `bridge_send_message` | Send a message to another machine's running agent |
-| `bridge_receive_messages` | Manual inspection/consumption of the local Claude Code-target inbox |
+| `bridge_receive_messages` | Manual inspection/consumption of the local Claude Code-target inbox. 3.8.0+ supports long-poll via `wait: true, timeout_seconds: 30` (capped at 60 s) for subagents that can't receive parent-only channel pushes. |
 | `bridge_run_command` | Run a shell command on a remote machine |
 | `bridge_clear_inbox` | Clear the local inbox |
 | `bridge_inbox_stats` | Get inbox statistics and watcher health |
@@ -130,7 +130,19 @@ OpenClaw push delivery is **not** Claude's `claude/channel` protocol. Keep the M
 
 ### Manual/polling fallback (unverified MCP hosts)
 
-`bridge_receive_messages` currently inspects/consumes the local Claude Code-target inbox (`inbox/claude-code/`). Use it for diagnostics, tools-only/manual setups, or future harness-specific polling experiments. Do not assume Codex, Gemini CLI, Aider, or arbitrary MCP hosts have the same push lifecycle as Claude Code or OpenClaw until their target and receive loop are tested end-to-end.
+`bridge_receive_messages` currently inspects/consumes the local Claude Code-target inbox (`inbox/claude-code/`). Use it for diagnostics, tools-only/manual setups, future harness-specific polling experiments, or — most importantly as of 3.8.0 — **subagent receive**.
+
+**Long-poll mode (3.8.0+).** Channel-push notifications (`<channel source="agent-bridge" ...>`) only reach the parent session. A subagent that needs to wait for a bridge reply should call:
+
+```json
+{ "wait": true, "timeout_seconds": 30, "peek": true }
+```
+
+The MCP tool registers a one-shot listener with the watcher's in-process arrival registry and races it against `setTimeout`. If the inbox is already non-empty when called, returns immediately. On arrival within the window, returns the new messages. On timeout, returns `{ count: 0, messages: [], timed_out: true }` in `structuredContent` so the caller can re-poll. Server caps `timeout_seconds` at 60.
+
+Multiple concurrent long-pollers (parent + N subagents) all wake on the same arrival — broadcast semantics. Use `peek: true` so the parent's channel-push consumer (and other subagents) still see the same content. `peek: false` (consume) is destructive first-come-first-served and only one caller will see the message returned. For genuine one-receiver-only fan-out, use unique `from_target` values per subagent so replies route to per-subagent inbox subdirs.
+
+Do not assume Codex, Gemini CLI, Aider, or arbitrary MCP hosts have the same push lifecycle as Claude Code or OpenClaw until their target and receive loop are tested end-to-end.
 
 ### Channel setup
 

@@ -33,8 +33,15 @@ import {
   clearInbox,
   getInboxStats,
 } from './inbox.js';
+import { subscribeToInboxArrival } from './watcher.js';
 import { logInfo, logError } from './logger.js';
 import { logEvent } from './log.js';
+
+// 3.8.0 — long-poll bounds for `bridge_receive_messages`. The default 30 s
+// keeps pollers reasonably tight while the 60 s cap ensures we never park an
+// MCP request beyond the harness's tolerance for an idle JSON-RPC response.
+const LONG_POLL_DEFAULT_TIMEOUT_S = 30;
+const LONG_POLL_MAX_TIMEOUT_S = 60;
 
 /**
  * Register all agent-bridge tools on the MCP server.
@@ -390,12 +397,39 @@ export function registerTools(server: McpServer): void {
   );
 
   // -- bridge_receive_messages -----------------------------------------------
+  //
+  // 3.8.0 — long-poll/blocking receive support.
+  //
+  // Default behaviour (`wait=false`) is unchanged: a single snapshot of the
+  // claude-code inbox, peek or consume per the existing flag.
+  //
+  // When `wait=true`, the tool blocks until either:
+  //   1. The inbox already contains messages at call time (returns
+  //      immediately, no `timed_out` flag), OR
+  //   2. A new file arrives in `~/.agent-bridge/inbox/claude-code/` and
+  //      the watcher fires the in-process arrival listener (returns the
+  //      now-pending messages, no `timed_out` flag), OR
+  //   3. `timeout_seconds` elapses without an arrival (returns `[]` plus
+  //      `timed_out: true` in the structured response so the caller can
+  //      loop and re-poll).
+  //
+  // Concurrency: the in-process arrival registry is BROADCAST. Multiple
+  // concurrent long-pollers (parent session + N subagents on the same
+  // machine) all wake on the same arrival. The shared inbox snapshot
+  // (peek/consume) governs whether the file moves to .archive/ or stays
+  // pending — `peek` is the idempotent path; `consume` is destructive
+  // first-come-first-served and only ONE concurrent caller will see the
+  // message returned (the rest will see an empty inbox after the consume
+  // wins). For subagent fan-out use `peek: true` so every long-poller
+  // sees the same content.
   server.registerTool(
     'bridge_receive_messages',
     {
       title: 'Receive Messages',
       description:
-        'Manual claude-code inbox inspection fallback. In normal Claude Code channel-owner mode, incoming messages are pushed automatically; use this tool mainly for diagnostics, tools-only setups, or explicit manual consumption. Messages are removed from ~/.agent-bridge/inbox/claude-code/ after reading unless peek=true. Results are chronological, deduplicated, and TTL-expired messages are auto-pruned.',
+        'Manual claude-code inbox inspection / long-poll receive. In normal Claude Code channel-owner mode, incoming messages are pushed automatically into the running parent session; channel pushes do NOT reach subagents. Subagents that need to receive a bridge reply should call this tool with `wait: true, timeout_seconds: 30` and loop on `timed_out: true` until the expected message arrives (or use `peek: true` so the parent and other subagents still see the same content). '
+        + 'Messages are removed from ~/.agent-bridge/inbox/claude-code/ after reading unless peek=true. Results are chronological, deduplicated, and TTL-expired messages are auto-pruned. '
+        + 'When `wait: true` and no message is in the inbox, the tool blocks until either an arrival is detected via the in-process watcher hook or `timeout_seconds` elapses. On timeout the response includes `timed_out: true` (additive flag — pre-3.8.0 callers ignoring it still see the empty result). Server-side cap on `timeout_seconds` is 60.',
       inputSchema: {
         peek: z
           .boolean()
@@ -403,65 +437,188 @@ export function registerTools(server: McpServer): void {
           .describe(
             'If true, check messages without consuming them. Default: false (consume).',
           ),
+        wait: z
+          .boolean()
+          .optional()
+          .describe(
+            'If true, block until a message arrives or `timeout_seconds` elapses. Default: false (snapshot the current inbox and return immediately, preserving pre-3.8.0 behaviour).',
+          ),
+        timeout_seconds: z
+          .number()
+          .optional()
+          .describe(
+            `Long-poll duration in seconds when wait=true. Default: ${LONG_POLL_DEFAULT_TIMEOUT_S}. Server caps at ${LONG_POLL_MAX_TIMEOUT_S}.`,
+          ),
       },
     },
-    async ({ peek }) => {
-      if (peek) {
-        const { count, messages } = peekInbox();
-        if (count === 0) {
+    async ({ peek, wait, timeout_seconds }) => {
+      // -- 3.8.0 — long-poll helper ----------------------------------------
+      // Reads the inbox via peek or consume, returns the formatted result
+      // alongside structured metadata. Used both for the immediate-snapshot
+      // path and for the post-wake re-read.
+      const readSnapshot = (): { count: number; output: { content: { type: 'text'; text: string }[]; structuredContent?: Record<string, unknown> } } => {
+        if (peek) {
+          const { count, messages } = peekInbox();
+          if (count === 0) {
+            return {
+              count: 0,
+              output: {
+                content: [{ type: 'text' as const, text: 'No messages in inbox.' }],
+                structuredContent: { count: 0, messages: [], timed_out: false },
+              },
+            };
+          }
+          const lines = [`${count} message(s) in inbox:`, ''];
+          for (const msg of messages) {
+            lines.push(
+              `[${msg.timestamp}] From ${msg.from} (${msg.type}): ${msg.content.substring(0, 200)}${msg.content.length > 200 ? '...' : ''}`,
+            );
+            if (msg.replyTo) lines.push(`  (reply to: ${msg.replyTo})`);
+            lines.push(`  ID: ${msg.id}`);
+            if (msg.ttl !== undefined) lines.push(`  TTL: ${msg.ttl}s`);
+            lines.push('');
+          }
           return {
-            content: [
-              { type: 'text' as const, text: 'No messages in inbox.' },
-            ],
+            count,
+            output: {
+              content: [{ type: 'text' as const, text: lines.join('\n') }],
+              structuredContent: { count, messages, timed_out: false },
+            },
           };
         }
-        const lines = [`${count} message(s) in inbox:`, ''];
+
+        const messages = consumeInbox();
+        if (messages.length === 0) {
+          return {
+            count: 0,
+            output: {
+              content: [{ type: 'text' as const, text: 'No messages in inbox.' }],
+              structuredContent: { count: 0, messages: [], timed_out: false },
+            },
+          };
+        }
+        const lines = [`Received ${messages.length} message(s):`, ''];
         for (const msg of messages) {
-          lines.push(
-            `[${msg.timestamp}] From ${msg.from} (${msg.type}): ${msg.content.substring(0, 200)}${msg.content.length > 200 ? '...' : ''}`,
-          );
-          if (msg.replyTo) {
-            lines.push(`  (reply to: ${msg.replyTo})`);
-          }
-          lines.push(`  ID: ${msg.id}`);
-          if (msg.ttl !== undefined) {
-            lines.push(`  TTL: ${msg.ttl}s`);
-          }
+          lines.push(`--- Message from ${msg.from} ---`);
+          lines.push(`ID: ${msg.id}`);
+          lines.push(`Type: ${msg.type}`);
+          lines.push(`Time: ${msg.timestamp}`);
+          if (msg.replyTo) lines.push(`Reply to: ${msg.replyTo}`);
+          if (msg.ttl !== undefined) lines.push(`TTL: ${msg.ttl}s`);
+          lines.push(`Content: ${msg.content}`);
           lines.push('');
         }
         return {
-          content: [{ type: 'text' as const, text: lines.join('\n') }],
+          count: messages.length,
+          output: {
+            content: [{ type: 'text' as const, text: lines.join('\n') }],
+            structuredContent: { count: messages.length, messages, timed_out: false },
+          },
         };
+      };
+
+      // -- non-wait path: original snapshot semantics, untouched -----------
+      if (!wait) {
+        return readSnapshot().output;
       }
 
-      const messages = consumeInbox();
-      if (messages.length === 0) {
+      // -- wait path: long-poll via watcher.subscribeToInboxArrival --------
+      // 1. If the inbox is already non-empty, return immediately. This
+      //    eliminates a needless 30 s park whenever a caller arrives just
+      //    after delivery. Note we use peekInbox here (not the `peek`
+      //    arg) — the read-without-consume probe is just for fast-path
+      //    detection. The actual return uses readSnapshot which honours
+      //    the caller's peek flag.
+      const initialPeek = peekInbox();
+      if (initialPeek.count > 0) {
+        return readSnapshot().output;
+      }
+
+      // 2. No messages now. Park until arrival or timeout. Cap timeout
+      //    to LONG_POLL_MAX_TIMEOUT_S so a misconfigured caller can't
+      //    pin an MCP request indefinitely.
+      const requestedTimeout = typeof timeout_seconds === 'number' && Number.isFinite(timeout_seconds)
+        ? Math.max(0, timeout_seconds)
+        : LONG_POLL_DEFAULT_TIMEOUT_S;
+      const timeoutSec = Math.min(requestedTimeout, LONG_POLL_MAX_TIMEOUT_S);
+      const timeoutMs = Math.floor(timeoutSec * 1000);
+
+      logEvent({
+        event: 'tool.bridge_receive_messages.long_poll_start',
+        msg: `bridge_receive_messages long-poll waiting up to ${timeoutSec}s`,
+        context: { timeout_s: timeoutSec, peek: peek === true, requested_timeout_s: requestedTimeout },
+      });
+
+      const woken = await new Promise<'arrival' | 'timeout'>((resolve) => {
+        let settled = false;
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        let unsubscribe: (() => void) | null = null;
+
+        const settle = (outcome: 'arrival' | 'timeout') => {
+          if (settled) return;
+          settled = true;
+          if (timer) {
+            try { clearTimeout(timer); } catch { /* ignore */ }
+            timer = null;
+          }
+          if (unsubscribe) {
+            try { unsubscribe(); } catch { /* ignore */ }
+            unsubscribe = null;
+          }
+          resolve(outcome);
+        };
+
+        // Listener fires when watcher detects new file(s). Broadcast — every
+        // long-poller wakes on the same arrival; each then reads the inbox
+        // independently (peek or consume) per its own flag.
+        unsubscribe = subscribeToInboxArrival(() => settle('arrival'));
+
+        // The unsub fn returned by subscribeToInboxArrival is idempotent;
+        // calling it after the listener already fired (and was auto-removed
+        // from the registry) is a no-op.
+
+        if (timeoutMs <= 0) {
+          // Pathological: wait=true, timeout_seconds=0. Behave as a no-wait
+          // snapshot — fire 'timeout' on the next microtask so the listener
+          // is still cleaned up via settle().
+          setImmediate(() => settle('timeout'));
+        } else {
+          timer = setTimeout(() => settle('timeout'), timeoutMs);
+          // Don't ref a long-poll timer in tools-only contexts; we need
+          // Node alive while the parent MCP request is in flight, but the
+          // SDK transport already keeps the loop alive for that duration.
+          // Refing here would be redundant; unref keeps test sandboxes
+          // from hanging on stuck timers.
+          if (typeof timer.unref === 'function') timer.unref();
+        }
+      });
+
+      logEvent({
+        event: 'tool.bridge_receive_messages.long_poll_end',
+        msg: `bridge_receive_messages long-poll ended (${woken})`,
+        context: { outcome: woken, timeout_s: timeoutSec, peek: peek === true },
+      });
+
+      if (woken === 'timeout') {
+        // No message arrived within the window. Return the empty-inbox
+        // text + structured `timed_out: true` so the caller can loop.
         return {
           content: [
-            { type: 'text' as const, text: 'No messages in inbox.' },
+            {
+              type: 'text' as const,
+              text: `No messages in inbox (long-poll timed out after ${timeoutSec}s).`,
+            },
           ],
+          structuredContent: { count: 0, messages: [], timed_out: true, timeout_seconds: timeoutSec },
         };
       }
 
-      const lines = [`Received ${messages.length} message(s):`, ''];
-      for (const msg of messages) {
-        lines.push(`--- Message from ${msg.from} ---`);
-        lines.push(`ID: ${msg.id}`);
-        lines.push(`Type: ${msg.type}`);
-        lines.push(`Time: ${msg.timestamp}`);
-        if (msg.replyTo) {
-          lines.push(`Reply to: ${msg.replyTo}`);
-        }
-        if (msg.ttl !== undefined) {
-          lines.push(`TTL: ${msg.ttl}s`);
-        }
-        lines.push(`Content: ${msg.content}`);
-        lines.push('');
-      }
-
-      return {
-        content: [{ type: 'text' as const, text: lines.join('\n') }],
-      };
+      // Arrival path — re-read the inbox now that the watcher has noticed
+      // new file(s). The watcher already fired emitChannelNotification
+      // before firing the in-process listener, but we still re-read here
+      // because the LIST of pending files may include messages the channel
+      // notification consumer (parent session) doesn't archive instantly.
+      return readSnapshot().output;
     },
   );
 

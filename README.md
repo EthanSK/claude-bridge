@@ -405,6 +405,7 @@ v2 adds an MCP server that enables running AI agent sessions to communicate dire
 | **Claude Code push** | MCP child watches `inbox/claude-code/` and emits `notifications/claude/channel`; messages appear as `<channel source="agent-bridge" ...>` tags. | Claude Code plugin (`claude/channel` over stdio) |
 | **OpenClaw push** | OpenClaw gateway loads [`openclaw-channel/`](openclaw-channel/README.md), watches `inbox/openclaw/<target>/`, and dispatches a real OpenClaw turn via `dispatchInboundReplyWithBase`. | OpenClaw native channel plugin |
 | **Manual/polling fallback** | Agent calls `bridge_receive_messages` to inspect/consume the local Claude Code-target inbox. | Diagnostics and unverified MCP-host scaffolding |
+| **Long-poll (3.8.0+)** | Subagent calls `bridge_receive_messages({ wait: true, timeout_seconds: 30, peek: true })` and the MCP child blocks until a message arrives or the timeout fires (cap 60 s). | Subagents on either machine that can't see channel pushes |
 
 ### MCP tools
 
@@ -413,7 +414,7 @@ v2 adds an MCP server that enables running AI agent sessions to communicate dire
 | `bridge_list_machines` | List paired machines and their connection details |
 | `bridge_status` | Check if a machine is reachable via SSH (single or all) |
 | `bridge_send_message` | Send a message to a running agent on another machine |
-| `bridge_receive_messages` | Manual inspection/consumption of the local Claude Code-target inbox (not needed in normal push mode) |
+| `bridge_receive_messages` | Manual inspection/consumption of the local Claude Code-target inbox (not needed in normal push mode). 3.8.0+ supports long-poll (`wait: true`, `timeout_seconds`) for subagents — see "Push vs polling" above. |
 | `bridge_run_command` | Run a shell command on a remote machine via SSH |
 | `bridge_clear_inbox` | Clear all messages from the local inbox |
 | `bridge_inbox_stats` | Get inbox statistics: pending count, oldest message age, watcher health, etc. |

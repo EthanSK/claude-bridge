@@ -1071,4 +1071,84 @@ The legacy `patch_f.backoff` and `patch_f.backoff_exit` events are gone.
 
 ---
 
+## 3.8.0 — long-poll receive
+
+**Date:** 2026-04-26  ·  **Scope:** new feature, no lifecycle regression risk.
+
+3.8.0 is the first release in the 3.x series that does NOT touch the channel
+plugin's lifecycle posture. All eight lifecycle patches (A–H) and the 3.7.1
+standby+retry / stale-version peer-kill paths are preserved verbatim. The
+release adds **long-poll receive** to `bridge_receive_messages`.
+
+### The problem
+
+Channel-push delivery (`notifications/claude/channel`) is parent-session-only.
+When the agent-bridge MCP plugin pushes an inbound BridgeMessage into Claude
+Code, the notification flows through the stdio JSON-RPC pipe of the **parent
+Claude session** that owns the plugin transport. **Subagents do not see
+channel pushes** — they have their own conversation context, and the SDK
+notification plumbing terminates at the parent.
+
+Pre-3.8.0 workarounds for "subagent needs to receive a bridge reply":
+
+1. **Busy-poll `bridge_receive_messages`** — works, but every poll is one
+   MCP request = several tokens. Five-second polling for 60 s = 12 wasted
+   round-trips.
+2. **Don't receive at all** — subagent fires off a `bridge_send_message`
+   and the parent reports back. Adds a hop and a dependency on the parent
+   reading the channel push and forwarding it.
+3. **Spawn a fresh Claude session** for the subagent — works, but expensive
+   and defeats the in-context advantages of being a subagent.
+
+### The fix
+
+`bridge_receive_messages` now accepts:
+
+- `wait: boolean` (default `false`)
+- `timeout_seconds: number` (default `30`, capped at `60`)
+
+When `wait=true`, the MCP tool handler:
+
+1. Peeks the inbox once. If non-empty, returns immediately (fast path).
+2. Otherwise registers a one-shot listener with the watcher's in-process
+   arrival registry (`subscribeToInboxArrival`).
+3. Races the listener against `setTimeout(timeout_seconds * 1000)`.
+4. On wake (file arrival), re-reads the inbox via peek/consume and returns.
+5. On timeout, returns `[]` plus `timed_out: true` in `structuredContent`.
+
+The listener registry is BROADCAST: every concurrent long-poller wakes on
+every arrival. The peek/consume flag governs whether the file is archived
+after read — broadcast + idempotent peek = parent and N subagents all see
+the same content; broadcast + consume = first caller wins (use unique
+`from_target` per subagent for true one-receiver semantics).
+
+### Relationship to channel-push routing
+
+Channel push is NOT replaced. The parent session still receives `<channel
+source="agent-bridge" ...>` blocks for every inbound message. Long-poll is
+**additive** — a per-call subagent escape hatch that reads the same inbox
+the channel watcher reads. Because both paths go through the same
+`inbox/claude-code/` directory and the same `markDelivered` ledger, you
+cannot lose a message: either the channel-push fires (parent gets it) or
+the long-poll fires (subagent gets it), and both consult the same
+`pendingFiles` cache.
+
+### Why no lifecycle changes were needed
+
+The long-poll listener is a `setTimeout` + a Set entry. Both are tiny and
+have no effect on the MCP plugin host's idle classifier — the host still
+sees `tools/call` traffic from `bridge_receive_messages` itself, which is
+exactly what 3.7.0's "merge channel + tools" design relies on for
+liveness. If anything, 3.8.0 *increases* `tools/call` frequency for
+subagent-heavy workloads (each long-poll is a fresh tool call).
+
+### Test coverage
+
+`mcp-server/test/long-poll-receive.test.mjs` — 6 tests covering: default
+no-wait behaviour, wait+immediate-arrival, wait+arrival-mid-window,
+wait+timeout, wait+two-concurrent-pollers (broadcast), and the
+`timeout_seconds=9999 → 60` cap.
+
+---
+
 *End of lifecycle history.*
