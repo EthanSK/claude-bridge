@@ -38,6 +38,11 @@ function startPlugin(home, env = {}) {
       HOME: home,
       AGENT_BRIDGE_MACHINE_NAME: 'test-claude-code-channel',
       AGENT_BRIDGE_DISABLE_ORPHAN_WATCHDOG: '1', // off by default in tests
+      // Patch G ignores SIGTERM when the parent is alive; in unit tests the
+      // node test runner IS the parent, so SIGTERM would be ignored. Disable
+      // Patch G by default so existing SIGTERM-based shutdown tests still
+      // work. Tests that specifically want to verify Patch G must override.
+      AGENT_BRIDGE_DISABLE_PATCH_G: '1',
       ...env,
     },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -79,7 +84,7 @@ test('plugin starts, acquires lease, emits channel.starting + channel.ready, the
     const events = await readUnifiedEvents(home);
     const starting = events.find((e) => e.event === 'channel.starting');
     assert.ok(starting, 'expected channel.starting event');
-    assert.equal(starting.context.version, '3.6.1', 'startup event should report version 3.6.1');
+    assert.equal(starting.context.version, '3.6.2', 'startup event should report version 3.6.2');
     assert.equal(starting.component, 'claude-code-channel', 'log component should be claude-code-channel');
 
     const ready = events.find((e) => e.event === 'channel.ready');
@@ -203,6 +208,54 @@ test('3.6.1: plugin survives idle stdin (handshake delivered, pipe held open)', 
     const events = await readUnifiedEvents(home);
     const polls = events.filter((e) => e.event === 'channel.orphan_poll');
     assert.equal(polls.length, 0, `no orphan polls expected on healthy idle parent, got: ${JSON.stringify(polls.map((p) => p.context))}`);
+  } finally {
+    try { plugin.child.kill('SIGKILL'); } catch {}
+    await sleep(100);
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('3.6.2: source-level — Patch G channel-owner SIGTERM ignore wired', async () => {
+  const indexSrc = await readFile(indexPath, 'utf8');
+  // Patch G must be present in the built artifact.
+  assert.ok(indexSrc.includes('signal.ignored_channel_owner'), 'Patch G: signal.ignored_channel_owner event wired');
+  assert.ok(indexSrc.includes('AGENT_BRIDGE_DISABLE_PATCH_G'), 'Patch G: env opt-out flag present');
+  assert.ok(/signalParentAlive\s*\(\s*\)/.test(indexSrc), 'Patch G: signalParentAlive helper present');
+  // Per-signal contract: SIGTERM-only ignore; SIGINT and SIGHUP must still
+  // shut down. Verify that the ignore branch is gated on signal === 'SIGTERM'.
+  assert.ok(/signal\s*===\s*['"]SIGTERM['"]/.test(indexSrc), 'Patch G: ignore is SIGTERM-only (SIGINT/SIGHUP still shut down)');
+});
+
+test('3.6.2: SIGTERM is ignored when parent is alive and watcher is healthy (Patch G)', { timeout: 10_000 }, async () => {
+  // The test runner IS the plugin's parent and is alive while we run, so
+  // the Patch G ignore branch should fire. Re-enable Patch G for this test.
+  const home = await mkdtemp(join(tmpdir(), 'claude-code-channel-patch-g-'));
+  const plugin = startPlugin(home, { AGENT_BRIDGE_DISABLE_PATCH_G: '0' });
+  try {
+    await sleep(1500);
+    // Send SIGTERM — Patch G must absorb it. Plugin must keep running.
+    plugin.child.kill('SIGTERM');
+    const exited = await Promise.race([
+      new Promise((resolve) => plugin.child.once('exit', (code, signal) => resolve({ code, signal }))),
+      sleep(3_500).then(() => null),
+    ]);
+    assert.equal(
+      exited,
+      null,
+      `plugin must NOT exit on SIGTERM with healthy parent (Patch G) — got ${JSON.stringify(exited)}`,
+    );
+
+    const events = await readUnifiedEvents(home);
+    const ignored = events.find((e) => e.event === 'signal.ignored_channel_owner');
+    assert.ok(ignored, 'expected signal.ignored_channel_owner event when SIGTERM is absorbed by Patch G');
+    assert.equal(ignored.context.parentPid, process.pid, 'parentPid in ignore event should match the test runner pid');
+
+    // Now confirm SIGINT still shuts down (Patch G is SIGTERM-only).
+    plugin.child.kill('SIGINT');
+    await new Promise((resolve) => plugin.child.once('exit', resolve));
+    const post = await readUnifiedEvents(home);
+    const shutdown = post.find((e) => e.event === 'channel.shutdown' && /SIGINT/.test(e.context?.reason ?? ''));
+    assert.ok(shutdown, 'SIGINT must still trigger channel.shutdown (Patch G ignores SIGTERM only)');
   } finally {
     try { plugin.child.kill('SIGKILL'); } catch {}
     await sleep(100);

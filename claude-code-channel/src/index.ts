@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * agent-bridge — claude-code-channel plugin (3.6.1).
+ * agent-bridge — claude-code-channel plugin (3.6.2).
  *
  * Long-lived, session-scoped MCP server. Owns:
  *   1. The watcher lease for `~/.agent-bridge/inbox/claude-code/`.
@@ -27,6 +27,17 @@
  *   - Patch F  — heartbeat-recency guard against parallel subagent spawns
  *                murdering the parent poller (we use the watcher lease's
  *                `updatedAt` instead of an stderr-log mtime; same intent)
+ *   - Patch G  — channel-owner SIGTERM ignore (3.6.2). Claude Code's plugin
+ *                host periodically SIGTERMs idle MCP children. The Telegram
+ *                plugin survives because it registers tools that keep it
+ *                "live" in the host's view. We register only a channel
+ *                capability (no tools), so the host treats us as reapable.
+ *                Mirror the pre-3.5.4 mcp-server posture: when SIGTERM lands
+ *                and the parent (Claude Code session) is still alive AND
+ *                the watcher is healthy, IGNORE the signal. The orphan
+ *                watchdog (Patch A) and the stdout/stdin EPIPE handlers
+ *                still terminate us when the parent actually dies.
+ *                SIGINT/SIGHUP remain explicit shutdown signals.
  *
  * IMPORTANT: stdout is the JSON-RPC transport for this MCP server's own
  * face — never `console.log`. Use stderr (teed by Patch B) for diagnostics.
@@ -64,7 +75,7 @@ import {
 } from './watcher.js';
 import { logEvent } from './log.js';
 
-const VERSION = '3.6.1';
+const VERSION = '3.6.2';
 const SERVER_NAME = 'agent-bridge-channel';
 
 // ─── Patch B — persistent stderr tee ────────────────────────────────────────
@@ -509,9 +520,91 @@ async function main(): Promise<void> {
     stdinErrored = { reason: `stdin error: ${err}` };
   });
 
-  process.on('SIGINT', () => shutdownWithReason('SIGINT'));
-  process.on('SIGTERM', () => shutdownWithReason('SIGTERM'));
-  process.on('SIGHUP', () => shutdownWithReason('SIGHUP'));
+  // bootPpid is captured here so both the SIGTERM-ignore handler (Patch G)
+  // and the orphan watchdog (Patch A) reference the same authoritative
+  // boot-time parent pid.
+  const bootPpid = process.ppid;
+
+  // Patch G (3.6.2) — channel-owner SIGTERM ignore.
+  //
+  // Claude Code's plugin host periodically SIGTERMs MCP children that look
+  // idle from its tool-activity heuristic. The Telegram channel plugin avoids
+  // this because it registers tools (`reply`, `react`, `download_attachment`,
+  // `edit_message`) and is therefore always considered live. Our channel
+  // plugin registers only the `claude/channel` capability with zero tools, so
+  // the host's idle reaper sweeps it. Once SIGTERM'd, Claude Code does NOT
+  // respawn the channel plugin within the same session — it's only spawned at
+  // session startup — and inbound messages stop being delivered until the
+  // user manually triggers /reload-plugins or restarts.
+  //
+  // Resolution: when SIGTERM arrives, only honor it if the parent is actually
+  // gone OR the watcher never started. If the parent (Claude Code session) is
+  // still alive AND we're a healthy channel-owner, IGNORE the signal — the
+  // session genuinely needs us alive. The orphan watchdog (Patch A) still
+  // catches true reparenting within ~15 s, and the stdin/stdout EPIPE
+  // handlers still terminate us if the actual transport breaks. SIGINT and
+  // SIGHUP remain explicit shutdown signals so users can still kill us with
+  // Ctrl-C or terminal hangup.
+  //
+  // This mirrors the 3.4.11 mcp-server `signal.ignored_channel_owner` pattern
+  // (commit 7611bfeb), which was adopted then later reverted from mcp-server
+  // when channel-owner duties moved to this dedicated plugin in 3.6.0. The
+  // 3.6.0 split forgot to bring the SIGTERM-ignore with it. 3.6.2 fixes that.
+  function signalParentAlive(): boolean {
+    try {
+      process.kill(process.ppid, 0);
+      return true;
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      // EPERM still proves the parent exists from our POV. Anything else
+      // unexpected is treated conservatively as alive to avoid false-positive
+      // shutdown.
+      return code !== 'ESRCH';
+    }
+  }
+
+  function handleSignal(signal: NodeJS.Signals): void {
+    const parentAlive = signalParentAlive();
+    syncExitBreadcrumb('signal.received', {
+      signal,
+      watcherStarted,
+      parent_alive: parentAlive,
+      bootPpid,
+      ppid: process.ppid,
+    });
+    if (
+      signal === 'SIGTERM'
+      && watcherStarted
+      && parentAlive
+      && process.env.AGENT_BRIDGE_DISABLE_PATCH_G !== '1'
+    ) {
+      try {
+        process.stderr.write(
+          `claude-code-channel: ${signal} ignored (channel-owner watcher healthy, parent ppid=${process.ppid} alive)\n`,
+        );
+      } catch { /* best-effort */ }
+      try {
+        logEvent({
+          event: 'signal.ignored_channel_owner',
+          level: 'warn',
+          msg: `${signal} ignored for channel-owner watcher`,
+          context: {
+            pid: process.pid,
+            parentPid: process.ppid,
+            bootPpid,
+            watcherStarted,
+            uptime_s: Math.floor(process.uptime()),
+          },
+        });
+      } catch { /* never let logging break a signal handler */ }
+      return;
+    }
+    shutdownWithReason(signal);
+  }
+
+  process.on('SIGINT', () => handleSignal('SIGINT'));
+  process.on('SIGTERM', () => handleSignal('SIGTERM'));
+  process.on('SIGHUP', () => handleSignal('SIGHUP'));
 
   // Patch D — 60 s heartbeat. REFED: we are the long-lived channel-owner,
   // we WANT the loop alive between bursts.
@@ -553,7 +646,8 @@ async function main(): Promise<void> {
   // (`destroyed`) or actually-errored stdin is. `ppid_changed` still catches
   // true reparenting (the original Claude session dying).
   const ORPHAN_CONFIRMATION_POLLS = 3;
-  const bootPpid = process.ppid;
+  // bootPpid declared earlier (next to Patch G) so the SIGTERM-ignore handler
+  // can compare against the same authoritative boot-time parent pid.
   let orphanedPolls = 0;
   let lastOrphanReason = '';
   const orphanWatchdogDisabled = process.env.AGENT_BRIDGE_DISABLE_ORPHAN_WATCHDOG === '1';

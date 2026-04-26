@@ -1,5 +1,92 @@
 # Changelog
 
+## agent-bridge 3.6.2 — 2026-04-26
+
+### Fix channel plugin not respawning after Claude Code SIGTERMs it
+
+3.6.0 split the channel-owner watcher into a dedicated `agent-bridge-channel`
+plugin modeled on the official Telegram plugin. 3.6.1 fixed the orphan
+watchdog killing it within 15 s of every spawn. Production usage on Mac Mini
+then revealed a deeper, longer-cycle problem: after ~10 hours of healthy
+operation Claude Code's plugin host SIGTERMs the channel plugin, the plugin
+shuts down cleanly via `shutdownWithReason('SIGTERM')` — and Claude Code
+**does not respawn it within the same session**. Inbound channel messages
+stop being delivered until the user manually `/reload-plugins` or restarts.
+
+#### Empirical evidence (Mac Mini, 2026-04-25 23:46:31 BST)
+
+- `claude-code-channel` pid 40537 had 35,875 s (~9.95 h) of clean uptime,
+  60 s heartbeats, no errors.
+- Single SIGTERM landed; plugin honored it, dumped shutdown diagnostics,
+  released the watcher lease.
+- No subsequent `channel.starting` event in the unified log. 13 messages
+  piled up undelivered in `~/.agent-bridge/inbox/claude-code/`.
+- The Telegram plugin (pid 36753, same parent ppid=36734, started in the
+  same session) had been running 21h+ at the same point — never SIGTERM'd.
+
+#### Root cause
+
+Claude Code's plugin host periodically reaps MCP children that look idle
+from its tool-activity heuristic. The Telegram plugin survives because it
+registers four tools (`reply`, `react`, `download_attachment`,
+`edit_message`) — every tool call counts as activity. Our channel plugin
+registers only the `experimental.claude/channel` capability with **zero
+tools** (deliberately — outbound bridge tools live in the separate
+`agent-bridge` mcp-server plugin so the tools host can be respawned freely
+between turns). With nothing to mark us "active", the host's idle reaper
+sweeps us and does not restart channel-only plugins within a session.
+
+The pre-3.5.4 `mcp-server` had a `signal.ignored_channel_owner` SIGTERM
+handler (commit `7611bfeb`, 2026-04-24) that addressed exactly this. When
+the channel-owner role moved out of `mcp-server` in 3.6.0 the SIGTERM
+ignore did not move with it.
+
+#### Fix (Patch G)
+
+`claude-code-channel/src/index.ts` now installs a `handleSignal` wrapper
+that ignores `SIGTERM` IFF the watcher started successfully AND the parent
+(Claude Code session) pid is still alive. The orphan watchdog (Patch A)
+still terminates us within ~15 s on true reparenting, the
+stdout/stdin EPIPE handlers still terminate us on broken transport, and
+SIGINT/SIGHUP remain explicit shutdown signals. So the only thing
+suppressed is Claude's idle reaper killing a healthy long-lived watcher.
+
+The handler logs `signal.ignored_channel_owner` (level: warn) to the
+unified log every time it absorbs a SIGTERM, so we can see post-mortem
+how often the host attempts to reap us. `AGENT_BRIDGE_DISABLE_PATCH_G=1`
+disables Patch G (used by tests so SIGTERM can still terminate the test
+plugin — the test runner is the parent and is alive).
+
+#### Tests
+
+- New `3.6.2: source-level — Patch G channel-owner SIGTERM ignore wired`
+  asserts the build artifact contains the `signal.ignored_channel_owner`
+  event and `signalParentAlive` helper, and that the ignore is gated on
+  `signal === 'SIGTERM'` (SIGINT/SIGHUP must still shut down).
+- New `3.6.2: SIGTERM is ignored when parent is alive and watcher is
+  healthy (Patch G)` boots the plugin, sends SIGTERM with Patch G enabled,
+  asserts the plugin is still alive after 3.5 s and that
+  `signal.ignored_channel_owner` was emitted with `parentPid === test
+  runner pid`. Then sends SIGINT and asserts the plugin shuts down
+  cleanly — proving Patch G is SIGTERM-only.
+- Existing SIGTERM-shutdown tests still pass because the test harness now
+  sets `AGENT_BRIDGE_DISABLE_PATCH_G=1` by default.
+
+#### Files touched
+
+- `claude-code-channel/src/index.ts` — Patch G handler, `bootPpid`
+  hoisted to enclosing scope, header comment + VERSION bump.
+- `claude-code-channel/package.json` + `package-lock.json` — 3.6.2.
+- `claude-code-channel/.claude-plugin/plugin.json` — 3.6.2.
+- `claude-code-channel/test/lifecycle.test.mjs` — Patch G regression
+  tests, harness opt-out env var, version assertion bump.
+- `mcp-server/package.json` + `package-lock.json` — 3.6.2 (lockstep
+  bump, no behaviour change).
+- `mcp-server/.claude-plugin/plugin.json` — 3.6.2.
+- `mcp-server/src/index.ts` — version-string bump in startup event.
+- `mcp-server/test/heartbeat-shutdown-diag.test.mjs` — version assertion.
+- `agent-bridge` (CLI) — `VERSION="3.6.2"`.
+
 ## agent-bridge 3.6.1 — 2026-04-21
 
 ### Fix orphan-watchdog killing channel plugin within 15s of spawn
