@@ -22,6 +22,18 @@ agent-bridge unpair <machine>                   # Remove a pairing
 2. Share the pairing screen with the other machine's agent (e.g., photograph it and send the photo). The agent reads the image, extracts the details, and runs the pair command.
 3. For bidirectional access, run pair on both machines with each other's details.
 
+### Windows pairing (Win 10/11)
+
+Windows is a supported pairing target but doesn't ship with OpenSSH Server enabled and has several non-obvious defaults. The pairing-side `agent-bridge` CLI is unchanged — what you do differently is on the Windows host:
+
+- Install OpenSSH Server: `Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0; Start-Service sshd; Set-Service sshd -StartupType Automatic` (elevated PowerShell).
+- Make sure the network profile is `Private` and the firewall rule is enabled on it: `Set-NetConnectionProfile -InterfaceAlias "Wi-Fi" -NetworkCategory Private; Set-NetFirewallRule -Name OpenSSH-Server-In-TCP -Enabled True -Profile Private`. With a `Public` profile, port 22 listens but is firewalled — the symptom is `Connection refused` from the LAN despite `Get-Service sshd` showing `Running`.
+- **Admin-user gotcha:** if the Windows account is in the `Administrators` group, OpenSSH ignores `C:\Users\<user>\.ssh\authorized_keys` and reads `C:\ProgramData\ssh\administrators_authorized_keys` instead. Always install the pairing pubkey there for admin users, and lock the ACL to `Administrators` + `SYSTEM` only with `icacls $path /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F"`. OpenSSH refuses to read keys from a file with looser permissions and fails silently as `Permission denied (publickey)`.
+- Optional: enable ICMP echo for ping diagnostics: `Get-NetFirewallRule -Name FPS-ICMP4-ERQ-In,CoreNet-Diag-ICMP4-EchoRequest-In -ErrorAction SilentlyContinue | Set-NetFirewallRule -Enabled True -Profile Private`.
+- Off-LAN access: install Tailscale via `winget install --id Tailscale.Tailscale -e --accept-source-agreements --accept-package-agreements`, then `tailscale up` and authenticate. Use the resulting `100.x.y.z` tailnet IP as `internet_host` when pairing.
+
+The full consolidated setup script lives in `README.md` under the `Windows setup` section. After the Windows side is reachable on `user@<ip>:22`, run the standard `agent-bridge pair` from the macOS/Linux peer. The Windows machine itself doesn't need the `agent-bridge` CLI — it only needs to be an SSH endpoint with the pairing pubkey installed.
+
 ## Pairing from a photo
 
 When given a photo of a pairing screen, extract these fields:

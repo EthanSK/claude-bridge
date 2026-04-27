@@ -27,6 +27,7 @@ plugin. Do everything automatically -- don't ask me questions.
 **Prereqs (once per machine):**
 - **macOS:** System Settings > General > Sharing > toggle **Remote Login** ON > click **(i)** > set **"Allow access for"** to **All users**. Optionally toggle **"Allow full disk access for remote users"**.
 - **Linux:** `sudo systemctl enable --now sshd`
+- **Windows 10/11:** OpenSSH Server is an optional feature, not on by default. See the [Windows setup](#windows-setup) section below for the consolidated install + firewall + admin-key script.
 
 Then photograph the pairing screen on one machine and send it to the Claude Code session on the other. That's the pair step; the agents handle the rest.
 
@@ -341,6 +342,82 @@ agent-bridge pair
 agent-bridge status MacBook-Pro
 agent-bridge run MacBook-Pro "uname -a"
 ```
+
+---
+
+## Windows setup
+
+Pairing into a Windows 10/11 machine works fine over `agent-bridge`'s standard SSH transport, but Windows ships with several non-obvious defaults that silently break the pairing flow. Hit them once, save yourself an hour next time.
+
+### Gotchas (and the one-line fix for each)
+
+1. **OpenSSH Server isn't installed by default** (only the client is).
+   - Fix: `Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0; Start-Service sshd; Set-Service sshd -StartupType Automatic`
+2. **The OpenSSH firewall rule only opens port 22 on the `Private` profile.** If your Wi-Fi is classified as `Public`, sshd listens but is firewalled.
+   - Fix: `Set-NetConnectionProfile -InterfaceAlias "Wi-Fi" -NetworkCategory Private; Set-NetFirewallRule -Name OpenSSH-Server-In-TCP -Enabled True -Profile Private`
+3. **ICMP echo (ping) is blocked by default**, which makes diagnostics misleading.
+   - Fix: `Get-NetFirewallRule -Name FPS-ICMP4-ERQ-In,CoreNet-Diag-ICMP4-EchoRequest-In -ErrorAction SilentlyContinue | Set-NetFirewallRule -Enabled True -Profile Private`
+4. **Admins use a different `authorized_keys` file.** For any user in the `Administrators` group, OpenSSH ignores `C:\Users\<user>\.ssh\authorized_keys` and reads `C:\ProgramData\ssh\administrators_authorized_keys` instead. Putting the pairing pubkey in the user's home directory fails silently with `Permission denied (publickey)`.
+   - Fix: append the pubkey to `C:\ProgramData\ssh\administrators_authorized_keys` and lock its ACL: `icacls $path /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F"` (OpenSSH refuses to read the file if its ACL is broader than that).
+5. **Off-LAN reachability needs Tailscale.** Standard residential NAT won't give you a stable WAN IP. Tailscale provides a `100.x.y.z` tailnet IP usable as `internet_host`.
+   - Fix: `winget install --id Tailscale.Tailscale -e --accept-source-agreements --accept-package-agreements`, then `tailscale up` and authenticate in the browser.
+
+### Consolidated PowerShell setup script
+
+Run this in an **elevated PowerShell** (Run as Administrator). It performs the full happy-path setup and prints what to send to the pairing agent. Replace the `$PairingPubKey` value with the public key from the *other* machine's `agent-bridge setup` screen before running.
+
+```powershell
+# agent-bridge: Windows pairing setup (run as Administrator)
+$ErrorActionPreference = 'Stop'
+
+# --- 1. Pubkey from the OTHER machine's `agent-bridge setup` screen ---
+$PairingPubKey = 'ssh-ed25519 AAAA...REPLACE_ME bridge:OtherMachine'
+
+# --- 2. Install + start OpenSSH Server ---
+Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 | Out-Null
+Start-Service sshd
+Set-Service  sshd -StartupType Automatic
+
+# --- 3. Set Wi-Fi profile to Private + enable firewall rule on Private ---
+Get-NetConnectionProfile | Where-Object { $_.NetworkCategory -eq 'Public' } |
+    ForEach-Object { Set-NetConnectionProfile -InterfaceAlias $_.InterfaceAlias -NetworkCategory Private }
+Set-NetFirewallRule -Name OpenSSH-Server-In-TCP -Enabled True -Profile Private
+
+# --- 4. Enable ICMP echo for diagnostics ---
+Get-NetFirewallRule -Name FPS-ICMP4-ERQ-In,CoreNet-Diag-ICMP4-EchoRequest-In,CoreNet-Diag-ICMP4-EchoRequest-In-NoScope -ErrorAction SilentlyContinue |
+    Set-NetFirewallRule -Enabled True -Profile Private
+
+# --- 5. Install pairing pubkey to the ADMIN authorized_keys file ---
+$AdminKeys = 'C:\ProgramData\ssh\administrators_authorized_keys'
+if (-not (Test-Path $AdminKeys)) { New-Item -ItemType File -Path $AdminKeys -Force | Out-Null }
+if (-not (Select-String -Path $AdminKeys -SimpleMatch $PairingPubKey -Quiet)) {
+    Add-Content -Path $AdminKeys -Value $PairingPubKey
+}
+icacls $AdminKeys /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F" | Out-Null
+
+# --- 6. Tailscale (off-LAN access) ---
+if (-not (Get-Command tailscale -ErrorAction SilentlyContinue)) {
+    winget install --id Tailscale.Tailscale -e --accept-source-agreements --accept-package-agreements
+}
+# After install: run `tailscale up` in a fresh shell and complete browser auth.
+
+# --- 7. Report ---
+$LanIP = (Get-NetIPAddress -AddressFamily IPv4 |
+          Where-Object { $_.PrefixOrigin -eq 'Dhcp' -or $_.PrefixOrigin -eq 'Manual' } |
+          Where-Object { $_.IPAddress -notlike '169.*' } |
+          Select-Object -First 1).IPAddress
+Write-Host ""
+Write-Host "=== agent-bridge Windows setup complete ==="
+Write-Host "User:    $env:USERNAME"
+Write-Host "LAN IP:  $LanIP"
+Write-Host "Port:    22"
+Write-Host "Send these (plus the pairing token from the other machine) back to the pairing agent."
+Write-Host "If using Tailscale, also share your tailnet IP after `tailscale up`: tailscale ip -4"
+```
+
+After this completes, share `user@LAN_IP:22` (or `user@TAILSCALE_IP:22`) with the agent on the other machine and let it run `agent-bridge pair --name "<windows-machine-name>" --host <ip> --port 22 --user <user> --token <token-from-other-side> --pubkey "<windows-side-pubkey>"`.
+
+The Windows side currently doesn't run the `agent-bridge` CLI itself — it only needs to be a reachable SSH endpoint. Pairing/messaging is driven from the macOS or Linux peer.
 
 ---
 

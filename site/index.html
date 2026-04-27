@@ -169,6 +169,7 @@
               <strong>Prereqs (once per machine).</strong>
               <span class="os"><strong>macOS:</strong> System Settings &gt; General &gt; Sharing &gt; toggle <strong>Remote Login</strong> ON &gt; click <strong>(i)</strong> &gt; set <strong>&ldquo;Allow access for&rdquo;</strong> to <strong>All users</strong>. Optionally toggle <strong>&ldquo;Allow full disk access for remote users&rdquo;</strong>.</span>
               <span class="os"><strong>Linux:</strong> <code>sudo systemctl enable --now sshd</code></span>
+              <span class="os"><strong>Windows 10/11:</strong> OpenSSH Server is an optional feature; admin users need keys at <code>C:\ProgramData\ssh\administrators_authorized_keys</code>, not the user&rsquo;s home dir. See the <a href="https://github.com/EthanSK/agent-bridge#windows-setup">Windows setup</a> section in the README for the consolidated PowerShell script.</span>
             </div>
           </div>
 
