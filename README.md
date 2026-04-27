@@ -1475,7 +1475,7 @@ agent-bridge/
 ├── mcp-server/          # MCP server / channel plugin (TypeScript)
 │   ├── src/
 │   │   ├── index.ts     # Server entry point, channel notification wiring
-│   │   ├── tools.ts     # MCP tool definitions (7 tools)
+│   │   ├── tools.ts     # MCP tool definitions (8 tools — 7 user-facing + claude_code_channel_status diagnostic)
 │   │   ├── config.ts    # Config loader (INI parser, directory paths)
 │   │   ├── inbox.ts     # Message inbox/outbox management, pruning, dedup
 │   │   ├── watcher.ts   # File watcher (2s polling, no external deps)
