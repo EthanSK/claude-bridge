@@ -258,6 +258,29 @@ type PendingEntry = {
 
 const pendingDeliveries = new Map<string, PendingEntry>();
 
+/**
+ * 3.9.1 [CONSUME-RACE] — Persist re-inject retry counts ACROSS the
+ * stage→reinject→re-stage cycle.
+ *
+ * Bug in 3.9.0: when `reinjectPending` moves a file back to inbox/, it
+ * calls `pendingDeliveries.delete(entry.id)`. The watcher's next poll
+ * sees the file as "new" and `emitChannelNotification` calls
+ * `stagePendingAck(fileName, msg.id, 0)` — passing the literal `0` for
+ * retries. The fresh entry forgets it has already been re-injected. Each
+ * 60s tick computes `newRetries = 0 + 1 = 1`, never exceeds the cap of 3,
+ * and the message ping-pongs forever between inbox/ and .pending-ack/.
+ *
+ * Fix: keep a separate map keyed by msg id whose value persists across
+ * the delete()→stagePendingAck() boundary. `stagePendingAck` consults
+ * this map first when a re-stage of the same id occurs; `finalizePending`
+ * and the exhausted-path branch of `reinjectPending` GC the entry.
+ *
+ * Process restart resets this map, but that's fine — restart implies
+ * the watcher has new state and the safety-net replay window resets too.
+ * Bounded by handover replay regardless.
+ */
+const retriesByMsgId = new Map<string, number>();
+
 /** 3.9.0 [CONSUME-RACE] — windows for the hybrid AC tick. */
 const PENDING_EARLY_DEFER_MS = 5_000;
 const PENDING_REINJECT_MS = 60_000;
@@ -377,6 +400,10 @@ export function _resetChannelDeadStateForTesting(): void {
  */
 export function _resetPendingDeliveriesForTesting(): void {
   pendingDeliveries.clear();
+  // 3.9.1 [CONSUME-RACE] — also clear cross-reinject retry map so tests
+  // start each scenario from a clean slate (otherwise a prior scenario's
+  // retry count could leak into a later scenario reusing the same id).
+  retriesByMsgId.clear();
   _resetChannelDeadStateForTesting();
 }
 
@@ -857,13 +884,20 @@ function stagePendingAck(
   const pendingPath = join(CLAUDE_CODE_PENDING_ACK_DIR, fileName);
   const metaPath = join(CLAUDE_CODE_PENDING_ACK_DIR, `${id}.meta.json`);
   const pushedAt = Date.now();
+  // 3.9.1 [CONSUME-RACE] — if this id has already gone through a
+  // reinject cycle, restore the persisted retry count so the cap of
+  // PENDING_REINJECT_MAX_RETRIES actually fires. Without this the caller
+  // path (emitChannelNotification → stagePendingAck(..., 0)) would reset
+  // retries to 0 every time the watcher re-detected the re-injected file.
+  const persistedRetries = retriesByMsgId.get(id);
+  const effectiveRetries = persistedRetries ?? retries;
   const entry: PendingEntry = {
     id,
     fileName,
     pendingPath,
     metaPath,
     pushedAt,
-    retries,
+    retries: effectiveRetries,
     target: CLAUDE_CODE_TARGET,
     listenersAtPushTime: inboxArrivalListenerCount(),
     toolCallsAtPushTime: aliveSignals.getToolCallsReceivedCount(),
@@ -881,7 +915,7 @@ function stagePendingAck(
       id,
       fileName,
       pushedAt,
-      retries,
+      retries: effectiveRetries,
       target: CLAUDE_CODE_TARGET,
       listenersAtPushTime: entry.listenersAtPushTime,
       toolCallsAtPushTime: entry.toolCallsAtPushTime,
@@ -910,6 +944,8 @@ function finalizePending(entry: PendingEntry, reason: string): void {
     if (existsSync(entry.metaPath)) unlinkSync(entry.metaPath);
   } catch { /* best-effort */ }
   pendingDeliveries.delete(entry.id);
+  // 3.9.1 [CONSUME-RACE] — GC retry-persistence map on successful finalize.
+  retriesByMsgId.delete(entry.id);
   logEvent({
     event: 'channel.pending_finalized',
     msg: `Pending-ack finalized for ${entry.id} (${reason})`,
@@ -942,6 +978,8 @@ function reinjectPending(entry: PendingEntry, reason: string): void {
       if (existsSync(entry.metaPath)) unlinkSync(entry.metaPath);
     } catch { /* best-effort */ }
     pendingDeliveries.delete(entry.id);
+    // 3.9.1 [CONSUME-RACE] — GC retry-persistence map on terminal exhaustion.
+    retriesByMsgId.delete(entry.id);
     logError(
       `Channel: pending-ack RETRY-EXHAUSTED for ${entry.id} after `
       + `${PENDING_REINJECT_MAX_RETRIES} re-injections (${reason}); moved to .failed/.exhausted/`,
@@ -972,6 +1010,12 @@ function reinjectPending(entry: PendingEntry, reason: string): void {
   try {
     if (existsSync(entry.metaPath)) unlinkSync(entry.metaPath);
   } catch { /* best-effort */ }
+  // 3.9.1 [CONSUME-RACE] — persist newRetries BEFORE dropping from the
+  // map so the next stagePendingAck (driven by the watcher re-picking
+  // up the file from inbox/) restores the count instead of resetting
+  // to 0. Without this, the cap of PENDING_REINJECT_MAX_RETRIES never
+  // fires and the file ping-pongs forever.
+  retriesByMsgId.set(entry.id, newRetries);
   pendingDeliveries.delete(entry.id);
   // Force a re-emit on the next poll: drop from knownFiles so the
   // checkForNewFiles diff includes it again.

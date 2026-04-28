@@ -450,3 +450,87 @@ test('F. escape-hatch: 5 pushes in 30s without alive evidence flips channel dead
   // Reset for any subsequent tests.
   watcher._resetPendingDeliveriesForTesting();
 });
+
+// ── Case G: 3.9.1 retry-persistence — reinject loop terminates at cap ───────
+test('G. retry-persistence: re-inject → re-stage 4 times lands the file in .failed/.exhausted/', { timeout: 40_000 }, async () => {
+  watcher._resetPendingDeliveriesForTesting();
+  for (const f of readdirSync(inboxDir)) try { rmSync(join(inboxDir, f)); } catch {}
+  if (existsSync(pendingAckDir)) for (const f of readdirSync(pendingAckDir)) try { rmSync(join(pendingAckDir, f)); } catch {}
+  if (existsSync(exhaustedDir)) for (const f of readdirSync(exhaustedDir)) try { rmSync(join(exhaustedDir, f)); } catch {}
+
+  // Frozen alive signals — the 60s safety-net path will fire.
+  watcher.registerAliveSignals({
+    getToolCallsReceivedCount: () => 0,
+    getChannelCallbackRegisteredAt: () => 0,
+  });
+
+  const startedOk = await watcher.startWatcher(
+    () => {},
+    configureCallback({ resolve: true }),
+    { role: 'channel-owner' },
+  );
+  assert.ok(startedOk);
+  const msg = dropMessage('case G — retry-persistence regression');
+
+  // Helper: wait for stage into .pending-ack/.
+  async function waitForStage(id) {
+    for (let i = 0; i < 8; i += 1) {
+      await new Promise((r) => setTimeout(r, 750));
+      if (listAck().includes(`${id}.json`)) return true;
+    }
+    return false;
+  }
+
+  // Helper: doctor pushedAt to fire the safety-net path on the next tick.
+  function expirePushedAt(id) {
+    const e = watcher._getPendingDeliveriesForTesting().find((p) => p.id === id);
+    assert.ok(e, `expected pending entry for ${id}`);
+    e.pushedAt = Date.now() - 61_000;
+    return e;
+  }
+
+  // Initial stage.
+  assert.ok(await waitForStage(msg.id), 'initial stage should succeed');
+
+  // Cycle 1: retries 0 → 1 (re-injected).
+  expirePushedAt(msg.id);
+  watcher._processPendingDeliveriesForTesting();
+  assert.ok(readdirSync(inboxDir).includes(`${msg.id}.json`), 'cycle 1: should be re-injected to inbox/');
+
+  // Cycle 2: watcher polls inbox → re-stages with retries restored to 1 → fires
+  // safety-net → retries 1 → 2 (re-injected again). The bug pre-3.9.1 was that
+  // the retry count reset to 0 on every restage, never reaching the cap.
+  assert.ok(await waitForStage(msg.id), 'cycle 2: file should be re-staged from inbox');
+  let entry = watcher._getPendingDeliveriesForTesting().find((p) => p.id === msg.id);
+  assert.equal(entry.retries, 1, 'cycle 2: retries must be restored to 1, not reset to 0');
+  expirePushedAt(msg.id);
+  watcher._processPendingDeliveriesForTesting();
+  assert.ok(readdirSync(inboxDir).includes(`${msg.id}.json`), 'cycle 2: should be re-injected');
+
+  // Cycle 3: retries 2 → 3 (re-injected).
+  assert.ok(await waitForStage(msg.id), 'cycle 3: file should be re-staged');
+  entry = watcher._getPendingDeliveriesForTesting().find((p) => p.id === msg.id);
+  assert.equal(entry.retries, 2, 'cycle 3: retries should now be 2');
+  expirePushedAt(msg.id);
+  watcher._processPendingDeliveriesForTesting();
+  assert.ok(readdirSync(inboxDir).includes(`${msg.id}.json`), 'cycle 3: should be re-injected');
+
+  // Cycle 4: retries 3 → 4 → exceeds cap → exhausted.
+  assert.ok(await waitForStage(msg.id), 'cycle 4: file should be re-staged');
+  entry = watcher._getPendingDeliveriesForTesting().find((p) => p.id === msg.id);
+  assert.equal(entry.retries, 3, 'cycle 4: retries should now be 3 (the cap)');
+  expirePushedAt(msg.id);
+  watcher._processPendingDeliveriesForTesting();
+
+  assert.ok(
+    exhaustedContains(msg.id),
+    `cycle 4: expected file in .failed/.exhausted/, got: ${JSON.stringify(listExhausted())}`,
+  );
+  assert.ok(!listAck().includes(`${msg.id}.json`), '.pending-ack/ should be empty after exhaust');
+  assert.ok(!readdirSync(inboxDir).includes(`${msg.id}.json`), 'inbox/ should be empty after exhaust');
+  assert.equal(deliveredLedgerHas(msg.id), false, 'exhausted retry must not mark delivered');
+
+  watcher.stopWatcher();
+  for (const f of readdirSync(inboxDir)) try { rmSync(join(inboxDir, f)); } catch {}
+  watcher._resetPendingDeliveriesForTesting();
+});

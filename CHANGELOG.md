@@ -1,5 +1,36 @@
 # Changelog
 
+## agent-bridge 3.9.1 — 2026-04-28
+
+### [CONSUME-RACE] Fix — re-inject retry counter never incremented past 1
+
+The 3.9.0 hybrid-AC path had a critical bug: `reinjectPending` deleted
+the entry from `pendingDeliveries` after moving the file back to
+`inbox/`. The watcher's next poll detected the file as "new" and
+`emitChannelNotification` called `stagePendingAck(fileName, msg.id, 0)`
+— passing literal `0` for retries. The fresh entry forgot it had
+already been re-injected. Each 60s safety-net tick computed
+`newRetries = 0 + 1 = 1`, never exceeded the cap of 3, and the file
+ping-ponged forever between `inbox/` and `.pending-ack/`.
+
+Real-world impact: Mac Mini observed the same channel push 5+ times
+because `.failed/.exhausted/` was never reached. Logs verbatim showed
+"retry 1/3" on every cycle, indefinitely.
+
+**Fix.** Added an in-memory `retriesByMsgId` map in `watcher.ts` that
+persists ACROSS the `pendingDeliveries.delete()` →
+`stagePendingAck()` boundary. `stagePendingAck` consults the map first
+and uses the persisted count instead of the param when present.
+`finalizePending` and the exhausted-path branch of `reinjectPending`
+GC the entry. Process restart resets the map, but that's fine — the
+safety-net replay window resets too, and handover replay bounds it.
+
+### Test coverage
+
+- `consume-race.test.mjs` adds case G: drives reinject 4 times in a row
+  with `_processPendingDeliveriesForTesting` and asserts the file lands
+  in `.failed/.exhausted/` after retries=3 (cap exceeded).
+
 ## agent-bridge 3.9.0 — 2026-04-28
 
 ### [CONSUME-RACE] Hybrid AC pending-ack delivery — fixes silent message drops
