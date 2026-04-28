@@ -435,6 +435,162 @@ agent-bridge setup
 
 The installer drops the bash `agent-bridge` script and an `agent-bridge.cmd` shim (which invokes Git Bash) into `%LOCALAPPDATA%\agent-bridge\bin\` and adds that directory to the user PATH. After install, `agent-bridge` works from PowerShell, Command Prompt, or Git Bash itself.
 
+> **Important:** the PATH update is written to the **User** environment scope. New shells pick it up automatically; the shell you ran `install.ps1` from will *not* see it until you close and reopen it. If `agent-bridge` is "not found" right after install, this is almost always why.
+
+### Stricter ACL on the admin keys file
+
+The earlier gotcha lists `icacls $path /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F"` as the fix. That is the **only** acceptable ACL — sshd silently rejects keys if anything else has rights. To verify a known-good state:
+
+```powershell
+$acl = Get-Acl C:\ProgramData\ssh\administrators_authorized_keys
+$acl.AreAccessRulesProtected   # must be True (inheritance disabled)
+$acl.Access | Format-Table IdentityReference, FileSystemRights, AccessControlType
+# Expect EXACTLY two entries, both Allow + FullControl:
+#   NT AUTHORITY\SYSTEM
+#   BUILTIN\Administrators
+```
+
+If anything else appears (e.g. `BUILTIN\Users`, `Authenticated Users`, the local user's own SID, or any inherited entry), re-run `icacls` to reset.
+
+### Pubkey rotation — explicitly REMOVE before append
+
+When the peer regenerates its keypair (e.g. after `agent-bridge unpair` + `agent-bridge pair` on the *other* side, or a clean reinstall), the new line must be added to `administrators_authorized_keys` **and the old line must be deleted**. sshd happily reads the file top-to-bottom; a stale matching line just means the old, no-longer-trusted key would still authenticate if the corresponding private key ever leaked. Worse, when debugging, two lines with the same `agent-bridge:<peer-name>` comment make it ambiguous which one actually matched.
+
+A regex-based rewrite via `(Get-Content ... | Where-Object ...)` has a subtle pipeline bug: if the file is *empty* after filtering, `Set-Content` writes nothing and the next `Add-Content` still appends — but Ethan has hit cases where the regex didn't match the line he expected (whitespace, trailing comment differences) and the stale line survived. Use a literal `-Contains` check on the trimmed lines instead:
+
+```powershell
+$AdminKeys = 'C:\ProgramData\ssh\administrators_authorized_keys'
+$NewKey    = 'ssh-ed25519 AAAA...NEW... agent-bridge:OtherMachine'
+$OldKey    = 'ssh-ed25519 AAAA...OLD... agent-bridge:OtherMachine'   # exact line to remove
+
+# 1. Read existing lines, drop the OLD key (literal match, not regex).
+$lines = @()
+if (Test-Path $AdminKeys) {
+    $lines = Get-Content $AdminKeys | Where-Object { $_.Trim() -ne $OldKey.Trim() }
+}
+
+# 2. Add the new key only if it's not already present.
+if (-not ($lines -contains $NewKey)) {
+    $lines += $NewKey
+}
+
+# 3. Atomic rewrite (no Add-Content, which can append CRLF surprises).
+Set-Content -Path $AdminKeys -Value $lines -Encoding ascii
+
+# 4. Reassert the strict ACL — Set-Content can flip inheritance back on.
+icacls $AdminKeys /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F" | Out-Null
+
+# 5. Restart sshd so it re-reads the file (it re-reads on every connection
+#    in modern OpenSSH, but a bounce removes any doubt during debugging).
+Restart-Service sshd
+```
+
+### VPN address gotcha
+
+If a VPN client like Surfshark, Mullvad, or NordVPN is active, `ipconfig`, `Test-NetConnection -InformationLevel Detailed`, and naive "what's my IP" probes can return a tunnel-side address (Surfshark uses `10.x.x.x`). Pairing peers across the LAN need the **physical interface's** IP, not the tunnel's.
+
+```powershell
+# Show all profiles and their categories (each NIC, including VPN, is its own profile).
+Get-NetConnectionProfile | Format-List Name, InterfaceAlias, NetworkCategory, IPv4Connectivity
+
+# Read the LAN address explicitly off the Wi-Fi (or Ethernet) NIC.
+Get-NetIPConfiguration -InterfaceAlias 'Wi-Fi' | Format-List InterfaceAlias, IPv4Address, IPv4DefaultGateway
+```
+
+The `NetworkCategory` of the **VPN** profile being `Public` is fine and expected; what matters is that the LAN NIC profile is `Private`. Profile-scoped firewall rules (including `OpenSSH-Server-In-TCP`) only apply on the matching profile.
+
+### Pending-token persistence
+
+`~/.agent-bridge/.pending-token` is created the first time `agent-bridge setup` runs and survives across sessions and reboots. `agent-bridge setup` is idempotent — running it again on an already-configured machine reuses the existing keypair and token rather than rotating them. If you want a fresh token, delete `.pending-token` before re-running setup, or use `agent-bridge unpair` to fully tear down.
+
+### Quick test commands
+
+```powershell
+# Is sshd actually listening on 22 (both IPv4 and IPv6)?
+Get-NetTCPConnection -LocalPort 22 -State Listen | Format-Table LocalAddress, LocalPort, State, OwningProcess
+
+# Reach the Windows host from itself (sanity) or from another LAN machine (real test).
+Test-NetConnection 192.168.1.133 -Port 22
+
+# Verify the firewall rule is enabled on the right profile.
+Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' | Format-List Name, Enabled, Profile, Direction, Action
+
+# Confirm the admin keys file content matches expectations.
+Get-Content C:\ProgramData\ssh\administrators_authorized_keys
+```
+
+### Persistence checklist (post-setup audit)
+
+After running the consolidated setup script, verify each of these is reboot-safe. The whole stack should be persistent: services, firewall rules, ACLs, and keys all live in registry/disk that survives across boots. The one item that can silently break is the **DHCP-assigned LAN IP** — see below.
+
+| # | Item | Verify command | Expected |
+|---|------|----------------|----------|
+| 1 | sshd service auto-start | `Get-Service sshd \| Format-List Name, Status, StartType` | `Running` + `Automatic` |
+| 2 | OpenSSH.Server capability installed | `Get-WindowsCapability -Online -Name OpenSSH.Server*` | `State : Installed` |
+| 3 | Firewall rule TCP 22 inbound | `Get-NetFirewallRule -Name OpenSSH-Server-In-TCP \| Format-List Enabled, Profile, Action` | `Enabled : True`, `Profile : Private`, `Action : Allow` |
+| 4 | ICMPv4 echo allow on Private | `Get-NetFirewallRule -DisplayName '*ICMPv4*' \| Where-Object {$_.Direction -eq 'Inbound' -and $_.Enabled -eq 'True'}` | At least one of `FPS-ICMP4-ERQ-In`, `CoreNet-Diag-ICMP4-EchoRequest-In`, `CoreNet-Diag-ICMP4-EchoRequest-In-NoScope` enabled on Private |
+| 5 | `administrators_authorized_keys` ACL strict | `(Get-Acl C:\ProgramData\ssh\administrators_authorized_keys).Access` | Exactly `NT AUTHORITY\SYSTEM` + `BUILTIN\Administrators` Allow FullControl, no inherited entries (`AreAccessRulesProtected = True`) |
+| 6 | Admin keys file content | `Get-Content C:\ProgramData\ssh\administrators_authorized_keys` | One line per peer, no duplicates, no stale rotated keys |
+| 7 | Agent-bridge config + keys | `ls ~/.agent-bridge`, `ls ~/.agent-bridge/keys` | `config` (or `.identity`/`machine-name`/`.pending-token`), `agent-bridge_<host>` + `.pub` |
+| 8 | Network profile is Private | `Get-NetConnectionProfile` | LAN NIC `NetworkCategory : Private` |
+| 9 | LAN IP is static or DHCP-reserved | `Get-NetIPInterface -InterfaceAlias 'Wi-Fi' -AddressFamily IPv4` → `Dhcp` field | If `Dhcp : Enabled`, set a DHCP reservation on the router for this MAC, or convert to a static config — otherwise lease renewal can change the IP and break paired peers' `host` field |
+
+For item 9, if the IP changes, fix it on the **other** machine: `agent-bridge config <windows-machine-name> --host <new-ip>` (or unpair + repair). The Windows side itself doesn't store its own IP anywhere agent-bridge cares about.
+
+### When pairing breaks after a Windows update
+
+Windows feature updates (e.g. 23H2 → 24H2) occasionally:
+- Reset the `OpenSSH-Server-In-TCP` rule's profile binding.
+- Reclassify the network as `Public` (especially if the SSID was forgotten).
+- Reset `administrators_authorized_keys` ACL to defaults.
+
+If `agent-bridge status <windows-machine>` starts failing after an update, re-run the consolidated setup script — it's idempotent and will only fix what's actually broken.
+
+### MCP server registration (Claude Code plugin)
+
+`install.ps1` (and `install.sh` on macOS/Linux) **automatically registers the Claude Code plugin** in `~/.claude/settings.json` when it detects a local clone of this repo. After install + a Claude Code restart, the `bridge_send_message` MCP tool plus the inbound `<channel source="agent-bridge" ...>` push are loaded for every session — no manual settings edit required.
+
+The auto-register step is idempotent (re-running the installer is safe), and silently skips if `~/.claude/` does not exist (non-Claude-Code users) or if no local clone with `.claude-plugin/marketplace.json` is reachable (e.g. installed via the `irm | iex` one-liner — clone the repo and re-run to enable it).
+
+#### Manual registration (if you skipped install.ps1)
+
+Both Mac and Windows use a **directory-source plugin marketplace** rather than a raw `mcpServers` entry, because the same flow exposes both the outbound `bridge_*` tools AND the inbound Claude Code channel push from a single MCP child. Add to `~/.claude/settings.json`:
+
+```jsonc
+{
+  "extraKnownMarketplaces": {
+    "agent-bridge": {
+      "source": {
+        "source": "directory",
+        "path": "C:\\Users\\<you>\\path\\to\\agent-bridge"   // or "/Users/<you>/Projects/agent-bridge" on Mac
+      }
+    }
+  },
+  "enabledPlugins": {
+    "agent-bridge@agent-bridge": true
+  }
+}
+```
+
+Restart Claude Code (full exit + relaunch — `/reload-plugins` alone may not respawn the MCP child holding the in-memory module). On next session start the plugin loader reads the marketplace's `.claude-plugin/marketplace.json`, resolves the `mcp-server/.claude-plugin/plugin.json`, and spawns `node mcp-server/build/index.js` over stdio.
+
+#### Fallback: raw `mcpServers` entry
+
+If you don't want the plugin marketplace machinery — e.g. on a non-Claude-Code MCP host — register the server directly:
+
+```jsonc
+{
+  "mcpServers": {
+    "agent-bridge": {
+      "command": "node",
+      "args": ["C:\\Users\\<you>\\path\\to\\agent-bridge\\mcp-server\\build\\index.js"]
+    }
+  }
+}
+```
+
+Note: this exposes the `bridge_*` tools but does **not** wire up the Claude Code channel push (the `claude/channel` capability is only emitted when the same process is loaded as a plugin in a Claude Code session). For agent-to-agent push semantics, prefer the plugin route.
+
 ---
 
 ## CLI reference

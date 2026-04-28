@@ -25,7 +25,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { parseBridgeMessage } from "./envelope.js";
 
@@ -371,7 +371,7 @@ function archiveFile(filePath, targetName, archiveRoot, log) {
   try {
     const archiveDir = join(archiveRoot, targetName);
     mkdirSync(archiveDir, { recursive: true });
-    const base = filePath.split("/").pop();
+    const base = basename(filePath);
     // Prefix with timestamp so multiple processings of the same id never
     // collide (e.g. after a ledger reset) and to make chronological tailing
     // trivial.
@@ -479,7 +479,7 @@ function quarantine(filePath, targetName, failedRoot) {
   try {
     const failedDir = join(failedRoot, `${OPENCLAW_HARNESS_PREFIX}__${targetName}`);
     mkdirSync(failedDir, { recursive: true });
-    const base = filePath.split("/").pop();
+    const base = basename(filePath);
     renameSync(filePath, join(failedDir, base));
   } catch {
     // last-resort rename-in-place

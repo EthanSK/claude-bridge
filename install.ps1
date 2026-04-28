@@ -47,6 +47,92 @@ if (-not ($userPath -split ';' -contains $InstallDir)) {
 Write-Host ''
 Write-Host "  [ok] agent-bridge installed to $ShimPath" -ForegroundColor Green
 Write-Host ''
+
+# --------------------------------------------------------------------------
+# Optional: register the agent-bridge MCP server / Claude plugin in
+# ~/.claude/settings.json so Claude Code auto-loads bridge_send_message
+# and the inbound channel watcher on next session start.
+#
+# We mirror the Mac side, which uses a directory-source plugin marketplace
+# (extraKnownMarketplaces["agent-bridge"]) plus enabledPlugins entry. This
+# is preferred over a raw mcpServers entry because the same flow exposes
+# both the MCP tools and the Claude Code channel push.
+#
+# Idempotent: if either entry already exists, leaves it alone. Skips
+# silently if ~/.claude does not exist (non-Claude-Code users).
+# --------------------------------------------------------------------------
+$ClaudeDir      = Join-Path $env:USERPROFILE '.claude'
+$SettingsPath   = Join-Path $ClaudeDir 'settings.json'
+
+if (Test-Path $ClaudeDir) {
+    # Locate the plugin source: prefer the local clone the user has, fall
+    # back to the directory next to this install.ps1 if we were invoked
+    # via `irm | iex` (no local clone) — in that case skip plugin
+    # registration entirely; the user can re-run after cloning.
+    $PluginSource = $null
+    $CandidateLocal = Join-Path $env:USERPROFILE '.openclaw\workspace\agent-bridge'
+    $ScriptDirCandidate = $null
+    if ($PSCommandPath) { $ScriptDirCandidate = Split-Path -Parent $PSCommandPath }
+
+    if ($ScriptDirCandidate -and (Test-Path (Join-Path $ScriptDirCandidate '.claude-plugin\marketplace.json'))) {
+        $PluginSource = $ScriptDirCandidate
+    } elseif (Test-Path (Join-Path $CandidateLocal '.claude-plugin\marketplace.json')) {
+        $PluginSource = $CandidateLocal
+    }
+
+    if (-not $PluginSource) {
+        Write-Host '  [skip] No local agent-bridge clone with .claude-plugin/marketplace.json found —' -ForegroundColor DarkGray
+        Write-Host '         skipping Claude Code plugin registration. Clone the repo and re-run' -ForegroundColor DarkGray
+        Write-Host '         install.ps1 to enable bridge_send_message in Claude Code.' -ForegroundColor DarkGray
+    } else {
+        try {
+            if (Test-Path $SettingsPath) {
+                $raw  = Get-Content -Raw -Path $SettingsPath -Encoding UTF8
+                $json = $raw | ConvertFrom-Json
+            } else {
+                $json = [pscustomobject]@{}
+            }
+
+            # Ensure containers exist as ordered hashtables we can mutate.
+            if (-not $json.PSObject.Properties.Match('extraKnownMarketplaces').Count) {
+                $json | Add-Member -NotePropertyName 'extraKnownMarketplaces' -NotePropertyValue ([pscustomobject]@{})
+            }
+            if (-not $json.PSObject.Properties.Match('enabledPlugins').Count) {
+                $json | Add-Member -NotePropertyName 'enabledPlugins' -NotePropertyValue ([pscustomobject]@{})
+            }
+
+            $changed = $false
+            if (-not $json.extraKnownMarketplaces.PSObject.Properties.Match('agent-bridge').Count) {
+                $marketplaceEntry = [pscustomobject]@{
+                    source = [pscustomobject]@{
+                        source = 'directory'
+                        path   = $PluginSource
+                    }
+                }
+                $json.extraKnownMarketplaces | Add-Member -NotePropertyName 'agent-bridge' -NotePropertyValue $marketplaceEntry
+                $changed = $true
+            }
+            if (-not $json.enabledPlugins.PSObject.Properties.Match('agent-bridge@agent-bridge').Count) {
+                $json.enabledPlugins | Add-Member -NotePropertyName 'agent-bridge@agent-bridge' -NotePropertyValue $true
+                $changed = $true
+            }
+
+            if ($changed) {
+                $out = $json | ConvertTo-Json -Depth 32
+                Set-Content -Path $SettingsPath -Value $out -Encoding UTF8
+                Write-Host "  [ok] Registered agent-bridge plugin in $SettingsPath" -ForegroundColor Green
+                Write-Host '       Restart Claude Code to load bridge_send_message.' -ForegroundColor Green
+            } else {
+                Write-Host '  [ok] agent-bridge plugin already registered in settings.json' -ForegroundColor DarkGray
+            }
+        } catch {
+            Write-Host "  [warn] Could not auto-register Claude Code plugin: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host '         You can add the entry manually — see README, "MCP server registration".' -ForegroundColor Yellow
+        }
+    }
+}
+
+Write-Host ''
 Write-Host '  Get started:'
 Write-Host '    agent-bridge setup'
 Write-Host '    agent-bridge help'

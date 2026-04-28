@@ -54,6 +54,81 @@ fi
 printf '\n'
 printf "${GREEN}${BOLD}  [ok] agent-bridge installed to %s/%s${RESET}\n" "$INSTALL_DIR" "$BIN_NAME"
 printf '\n'
+
+# --------------------------------------------------------------------------
+# Optional: register the agent-bridge plugin in ~/.claude/settings.json so
+# Claude Code auto-loads bridge_send_message + the inbound channel watcher
+# on next session start.
+#
+# Mirrors the Windows install.ps1 logic: directory-source plugin
+# marketplace + enabledPlugins entry. Idempotent. Skips silently if the
+# user is not a Claude Code user (no ~/.claude/) or if a local clone with
+# .claude-plugin/marketplace.json cannot be located.
+# --------------------------------------------------------------------------
+CLAUDE_DIR="$HOME/.claude"
+SETTINGS_PATH="$CLAUDE_DIR/settings.json"
+
+if [ -d "$CLAUDE_DIR" ]; then
+  PLUGIN_SOURCE=""
+  # Try the directory containing this install.sh (cloned repo case).
+  SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" || SCRIPT_DIR=""
+  if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/.claude-plugin/marketplace.json" ]; then
+    PLUGIN_SOURCE="$SCRIPT_DIR"
+  elif [ -f "$HOME/Projects/agent-bridge/.claude-plugin/marketplace.json" ]; then
+    PLUGIN_SOURCE="$HOME/Projects/agent-bridge"
+  fi
+
+  if [ -z "$PLUGIN_SOURCE" ]; then
+    printf "${DIM}  [skip] No local agent-bridge clone with .claude-plugin/marketplace.json found —${RESET}\n"
+    printf "${DIM}         skipping Claude Code plugin registration. Clone the repo and re-run${RESET}\n"
+    printf "${DIM}         install.sh to enable bridge_send_message in Claude Code.${RESET}\n"
+  else
+    PYBIN=""
+    if command -v python3 >/dev/null 2>&1; then PYBIN=python3
+    elif command -v python  >/dev/null 2>&1; then PYBIN=python
+    fi
+
+    if [ -z "$PYBIN" ]; then
+      printf "${DIM}  [skip] python3 not found — cannot edit settings.json safely. See README, \"MCP server registration\", for the manual JSON snippet.${RESET}\n"
+    else
+      PLUGIN_SOURCE="$PLUGIN_SOURCE" SETTINGS_PATH="$SETTINGS_PATH" "$PYBIN" - <<'PYEOF'
+import json, os, pathlib, sys
+p = pathlib.Path(os.environ["SETTINGS_PATH"])
+src = os.environ["PLUGIN_SOURCE"]
+if p.exists():
+    data = json.loads(p.read_text(encoding="utf-8"))
+else:
+    data = {}
+data.setdefault("extraKnownMarketplaces", {})
+data.setdefault("enabledPlugins", {})
+changed = False
+if "agent-bridge" not in data["extraKnownMarketplaces"]:
+    data["extraKnownMarketplaces"]["agent-bridge"] = {
+        "source": {"source": "directory", "path": src}
+    }
+    changed = True
+if not data["enabledPlugins"].get("agent-bridge@agent-bridge"):
+    data["enabledPlugins"]["agent-bridge@agent-bridge"] = True
+    changed = True
+if changed:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    print("registered")
+else:
+    print("already")
+PYEOF
+      RC=$?
+      if [ $RC -eq 0 ]; then
+        printf "${GREEN}  [ok] Registered agent-bridge plugin in %s${RESET}\n" "$SETTINGS_PATH"
+        printf "${GREEN}       Restart Claude Code to load bridge_send_message.${RESET}\n"
+      else
+        printf "${DIM}  [warn] Could not auto-register Claude Code plugin (rc=%s). See README.${RESET}\n" "$RC"
+      fi
+    fi
+  fi
+fi
+
+printf '\n'
 printf "  Get started:\n"
 printf "${DIM}    agent-bridge setup${RESET}\n"
 printf "${DIM}    agent-bridge help${RESET}\n"
