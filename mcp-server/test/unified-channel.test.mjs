@@ -44,6 +44,7 @@ function startServer(home, env = {}) {
     env: {
       ...process.env,
       HOME: home,
+      USERPROFILE: home,
       AGENT_BRIDGE_MACHINE_NAME: 'test-unified',
       AGENT_BRIDGE_DISABLE_ORPHAN_WATCHDOG: '1',
       // Default to channel-owner role with parent-channel-capability check
@@ -345,6 +346,7 @@ test('Patch H: tools/list reports claude_code_channel_status; tools/call returns
     env: {
       ...process.env,
       HOME: home,
+      USERPROFILE: home,
       AGENT_BRIDGE_MACHINE_NAME: 'test-patch-h',
       AGENT_BRIDGE_DISABLE_ORPHAN_WATCHDOG: '1',
       AGENT_BRIDGE_DISABLE_PATCH_G: '1',

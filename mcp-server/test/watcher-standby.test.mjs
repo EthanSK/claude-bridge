@@ -40,6 +40,7 @@ function startWorker(home, label) {
     env: {
       ...process.env,
       HOME: home,
+      USERPROFILE: home,
       AGENT_BRIDGE_MACHINE_NAME: `test-${label}`,
     },
     stdio: ['ignore', 'pipe', 'pipe'],

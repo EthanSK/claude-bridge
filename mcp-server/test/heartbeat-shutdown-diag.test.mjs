@@ -34,6 +34,7 @@ function startServer(home, env = {}) {
     env: {
       ...process.env,
       HOME: home,
+      USERPROFILE: home,
       AGENT_BRIDGE_MACHINE_NAME: 'test-3-5-2',
       AGENT_BRIDGE_DISABLE_PARENT_CHECK: '1',
       AGENT_BRIDGE_ROLE: 'tools-only',

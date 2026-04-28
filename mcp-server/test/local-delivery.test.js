@@ -18,6 +18,7 @@ import { join } from 'node:path';
 const sandbox = mkdtempSync(join(tmpdir(), 'ab-test-'));
 mkdirSync(join(sandbox, '.agent-bridge'), { recursive: true });
 process.env.HOME = sandbox;
+process.env.USERPROFILE = sandbox; // Node's os.homedir() reads USERPROFILE on Windows, not HOME
 process.env.AGENT_BRIDGE_MACHINE_NAME = 'TestMachine';
 
 // Dynamic imports so the env vars above take effect before the modules cache

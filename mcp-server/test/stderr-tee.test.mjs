@@ -28,6 +28,7 @@ test('stderr tee creates a durable file with at least the startup banner', { tim
     env: {
       ...process.env,
       HOME: home,
+      USERPROFILE: home,
       AGENT_BRIDGE_MACHINE_NAME: 'test-3-5-5-stderr',
       AGENT_BRIDGE_DISABLE_PARENT_CHECK: '1',
       AGENT_BRIDGE_DISABLE_ORPHAN_WATCHDOG: '1',
