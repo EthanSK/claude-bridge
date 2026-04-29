@@ -421,12 +421,10 @@ export function normalizeSftpPath(remotePath: string): string {
 function sftpLines(lines: string[]): string {
   // [SFTP-CD-TILDE-FIX 2026-04-29] Do NOT prepend `cd ~` — SFTP starts in the
   // connecting user's home dir by default, and `cd ~` is server-implementation-
-  // dependent: it works on some macOS sftp builds but fails on others (saw a
-  // confirmed reproducer where `cd ~` returned "stat remote: No such file or
-  // directory" against MBP while succeeding against Mac mini, blocking every
-  // bridge_send_message and bridge_run_command from Windows-Claude to MBP).
-  // Relative paths from CWD (= home) work consistently across all supported
-  // OpenSSH-sftp-server implementations.
+  // dependent: on some macOS sftp builds it creates a literal "~" directory
+  // instead of expanding to $HOME, causing messages to land in ~/~/.agent-bridge/
+  // instead of ~/.agent-bridge/. Relative paths from CWD (= home) work
+  // consistently across all supported OpenSSH-sftp-server implementations.
   return [...lines, 'bye'].join('\n') + '\n';
 }
 
