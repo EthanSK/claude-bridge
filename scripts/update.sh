@@ -248,7 +248,18 @@ archive_stale_plugin_caches() {
   done < <(find "$cache_root" -mindepth 1 -maxdepth 1 -type d -print0)
 
   if (( ${#archived[@]} || ${#kept[@]} )); then
-    log_archive_result "$(json_array "${archived[@]}")" "$(json_array "${kept[@]}")"
+    # macOS still ships bash 3.2, where expanding an empty array with
+    # `set -u` as a function argument (`"${empty[@]}"`) raises "unbound
+    # variable". Build the JSON strings only when the arrays are non-empty.
+    local archived_json="[]"
+    local kept_json="[]"
+    if (( ${#archived[@]} )); then
+      archived_json="$(json_array "${archived[@]}")"
+    fi
+    if (( ${#kept[@]} )); then
+      kept_json="$(json_array "${kept[@]}")"
+    fi
+    log_archive_result "$archived_json" "$kept_json"
   fi
 
   if (( ${#archived[@]} )); then
@@ -370,11 +381,41 @@ if [[ -d "claude-code-channel" ]]; then
   say "    found legacy claude-code-channel/ dir — this was deleted in 3.7.0; ignoring"
 fi
 
+copy_dir_clean() {
+  local src="$1"
+  local dst="$2"
+
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete "$src/" "$dst/"
+    return
+  fi
+
+  local node_bin
+  node_bin="$(command -v node 2>/dev/null || true)"
+  if [[ -z "$node_bin" ]]; then
+    warn "rsync and node are both unavailable; cannot sync $src to $dst."
+    return 1
+  fi
+
+  SRC_DIR="$src" DST_DIR="$dst" "$node_bin" <<'NODE'
+const fs = require('fs');
+
+const src = process.env.SRC_DIR;
+const dst = process.env.DST_DIR;
+if (!src || !dst) {
+  throw new Error('SRC_DIR and DST_DIR are required');
+}
+fs.rmSync(dst, { recursive: true, force: true });
+fs.mkdirSync(dst, { recursive: true });
+fs.cpSync(src, dst, { recursive: true, force: true });
+NODE
+}
+
 sync_cache_dir() {
   local cache_dir="$1"
   mkdir -p "$cache_dir/build" "$cache_dir/src" "$cache_dir/.claude-plugin"
-  rsync -a --delete "$REPO_ROOT/mcp-server/build/" "$cache_dir/build/"
-  rsync -a --delete "$REPO_ROOT/mcp-server/src/" "$cache_dir/src/"
+  copy_dir_clean "$REPO_ROOT/mcp-server/build" "$cache_dir/build"
+  copy_dir_clean "$REPO_ROOT/mcp-server/src" "$cache_dir/src"
   cp "$REPO_ROOT/mcp-server/package.json" "$cache_dir/package.json"
   cp "$REPO_ROOT/mcp-server/package-lock.json" "$cache_dir/package-lock.json"
   cp "$REPO_ROOT/mcp-server/tsconfig.json" "$cache_dir/tsconfig.json"
