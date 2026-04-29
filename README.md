@@ -295,6 +295,41 @@ openclaw gateway restart
 
 Do this on **both** paired machines so they stay in sync — the SFTP-delivered BridgeMessage envelope format occasionally changes between minor versions.
 
+### Stale plugin caches
+
+A separate gotcha when long-running Claude Code/Desktop sessions are involved: the live MCP plugin path is whatever your Claude session was launched with. If your session was launched with a stale `--plugin-dir ~/.claude/plugins/cache/agent-bridge/agent-bridge/X.Y.Z/` flag (older marketplace fetch), `/reload-plugins` reconnects to that *cached* version, not the latest repo build. Symptoms: `claude mcp list` shows ✓ Connected but features from the latest version aren't there, `bridge_*` tools intermittently disappear, version mismatch between `mcp-server/build/` and the running plugin process.
+
+**Diagnose:**
+```bash
+# What plugin path is the live MCP server running?
+claude mcp list | grep agent-bridge
+# Should be ~/Projects/agent-bridge/mcp-server/build/index.js, NOT ~/.claude/plugins/cache/agent-bridge/agent-bridge/X.Y.Z/build/index.js
+
+# What plugin cache versions are on disk?
+ls -1 ~/.claude/plugins/cache/agent-bridge/agent-bridge/
+
+# Are any node processes still bound to old cache versions?
+pgrep -fl 'agent-bridge/[0-9].*build/index.js' | grep -v grep
+```
+
+**Clean up:**
+```bash
+# Kill any stale node MCP children (safe — they just respawn from the active plugin path on next tool call):
+pkill -f 'agent-bridge/3\.[0-8]\.'   # adjust the regex to your old versions
+
+# Archive (don't delete; recoverable) old cache dirs:
+mkdir -p ~/.claude/plugins/cache/agent-bridge/agent-bridge/.archive
+mv ~/.claude/plugins/cache/agent-bridge/agent-bridge/3.7.1 \
+   ~/.claude/plugins/cache/agent-bridge/agent-bridge/.archive/
+# repeat per stale version
+
+# In your live Claude session: /reload-plugins (or use the self-reload-plugins skill)
+```
+
+**Why does this happen?** Claude Desktop sessions cache the plugin path in their launch args at startup. If your machine fetched the marketplace plugin at version 3.7.1 first, every Desktop session started from that point on uses 3.7.1's path until the marketplace serves a newer version AND the session restarts. `/reload-plugins` reloads the BUILD at that path, but doesn't change which path is loaded. To pick up the latest cache version, quit and reopen Claude Desktop. To pick up the latest **repo** version, keep using the symlinked `~/Projects/agent-bridge/mcp-server/build/` path that `agent-bridge install`/`setup` configures (that's what `~/.claude/.mcp.json` will point at if you used Option B / setup).
+
+A future v3.10 release may add a post-update step to `scripts/update.sh` that auto-archives dormant cache dirs older than the marketplace-current version.
+
 ---
 
 ## Setup guide
