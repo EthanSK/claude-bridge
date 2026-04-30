@@ -1482,9 +1482,9 @@ the load-bearing defenses.
 
 ---
 
-## 3.9.3 — Deferred: relax alive-heuristic to count cross-channel evidence
+## 3.9.3 → 3.10.1 — Relax alive-heuristic to count cross-channel evidence
 
-### Status: open issue, not yet implemented
+### Status: implemented in 3.10.1
 
 The 3.9.0 alive-heuristic in `isHarnessAliveSincePush` returns TRUE on
 three signals:
@@ -1519,20 +1519,20 @@ This is option (b) from the original design discussion (the others were
 require explicit ack tools the harness must call back through). Option (b)
 needs no harness cooperation — it's pure server-side bookkeeping.
 
-### Why deferred
+### Implementation (3.10.1)
 
-3.9.2 stopped the bleeding for the most common case (the env-leak that
-killed channel-owner entirely on Mac Mini). The remaining duplicate-push
-case is a UX papercut, not a correctness failure: messages still get
-delivered, they just get delivered twice. Implementing option (b) needs:
+3.10.1 implements option (b) with a monotonic `successfulChannelPushCount`
+rather than a timestamp alone. Each pending entry snapshots the counter at
+stage time, after its own channel callback has resolved, so a message never
+acks itself. If a later channel notification resolves successfully, the
+watcher sees `successfulChannelPushCount > pending.successfulPushesAtStageTime`
+and treats that as positive alive-evidence. The normal 5 s early-defer and
+60 s safety-net windows remain unchanged.
 
-- A `lastSuccessfulPushAt: number | null` field on the watcher.
-- An update path from `emitChannelNotification`'s resolve branch.
-- `isHarnessAliveSincePush` checks `lastSuccessfulPushAt > pending.pushedAt`.
-- Tests that drive two pushes back-to-back and assert the first finalizes
-  on the second's resolve, not on its own 60 s safety-net.
-
-Tracked in the project's TODO. No commits yet.
+`consume-race.test.mjs` case H covers the no-tool path: two bridge messages
+are pushed with frozen tool-call and reload signals; the later successful
+push finalizes the older pending entry while the newer entry remains pending
+until it receives its own later evidence.
 
 ---
 

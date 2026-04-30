@@ -539,3 +539,65 @@ test('G. retry-persistence: re-inject → re-stage 4 times lands the file in .fa
   for (const f of readdirSync(inboxDir)) try { rmSync(join(inboxDir, f)); } catch {}
   watcher._resetPendingDeliveriesForTesting();
 });
+
+// ── Case H: later successful push is alive-evidence for no-tool replies ─────
+test('H. later successful channel push finalizes older pending entry without tool-call evidence', { timeout: 40_000 }, async () => {
+  watcher._resetPendingDeliveriesForTesting();
+  for (const f of readdirSync(inboxDir)) try { rmSync(join(inboxDir, f)); } catch {}
+  if (existsSync(pendingAckDir)) for (const f of readdirSync(pendingAckDir)) try { rmSync(join(pendingAckDir, f)); } catch {}
+
+  // Frozen tool/reload signals: the only alive-evidence should be the later
+  // successful channel notification callback.
+  watcher.registerAliveSignals({
+    getToolCallsReceivedCount: () => 0,
+    getChannelCallbackRegisteredAt: () => 0,
+  });
+
+  const startedOk = await watcher.startWatcher(
+    () => {},
+    configureCallback({ resolve: true }),
+    { role: 'channel-owner' },
+  );
+  assert.ok(startedOk);
+
+  async function waitForStage(id) {
+    for (let i = 0; i < 8; i += 1) {
+      await new Promise((r) => setTimeout(r, 750));
+      if (listAck().includes(`${id}.json`)) return true;
+    }
+    return false;
+  }
+
+  const first = dropMessage('case H — first no-tool message');
+  assert.ok(await waitForStage(first.id), 'first message should stage into pending-ack/');
+  const firstEntryBefore = watcher._getPendingDeliveriesForTesting().find((p) => p.id === first.id);
+  assert.ok(firstEntryBefore, 'first pending entry should exist');
+
+  const second = dropMessage('case H — later channel push');
+  assert.ok(await waitForStage(second.id), 'second message should stage into pending-ack/');
+
+  const firstEntry = watcher._getPendingDeliveriesForTesting().find((p) => p.id === first.id);
+  assert.ok(firstEntry, 'first pending entry should still exist before processing');
+  assert.ok(
+    firstEntry.successfulPushesAtStageTime >= 1,
+    'first entry should snapshot the successful-push counter at its own stage time',
+  );
+  firstEntry.pushedAt = Date.now() - 5_500;
+
+  watcher._processPendingDeliveriesForTesting();
+
+  assert.ok(
+    archiveContains(first.id),
+    'later successful channel push should count as alive-evidence and archive the older entry',
+  );
+  assert.ok(deliveredLedgerHas(first.id), 'older entry should be marked delivered after later-push evidence');
+  assert.ok(
+    listAck().includes(`${second.id}.json`),
+    'newer entry should remain pending because no still-later alive-evidence exists for it yet',
+  );
+  assert.equal(deliveredLedgerHas(second.id), false, 'newer entry should not be marked delivered by its own push');
+
+  watcher.stopWatcher();
+  for (const f of readdirSync(inboxDir)) try { rmSync(join(inboxDir, f)); } catch {}
+  watcher._resetPendingDeliveriesForTesting();
+});

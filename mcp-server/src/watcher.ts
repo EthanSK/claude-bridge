@@ -246,6 +246,7 @@ type PendingEntry = {
   target: string;
   listenersAtPushTime: number;
   toolCallsAtPushTime: number;
+  successfulPushesAtStageTime: number;
   hadError: boolean;
   /**
    * 3.9.0 [CONSUME-RACE] — set TRUE when the entry was staged during the
@@ -281,6 +282,15 @@ const pendingDeliveries = new Map<string, PendingEntry>();
  */
 const retriesByMsgId = new Map<string, number>();
 
+/**
+ * 3.10.1 [CONSUME-RACE] — Count channel notifications whose callback
+ * resolved successfully. A later successful push is useful alive-evidence for
+ * older pending entries even when Claude replies without invoking any
+ * agent-bridge tool: it proves the MCP notification pipe continued accepting
+ * channel traffic after the older push was staged.
+ */
+let successfulChannelPushCount = 0;
+
 /** 3.9.0 [CONSUME-RACE] — windows for the hybrid AC tick. */
 const PENDING_EARLY_DEFER_MS = 5_000;
 const PENDING_REINJECT_MS = 60_000;
@@ -310,6 +320,9 @@ let channelMarkedDeadAt = 0;
 //   (c) the channel callback itself was registered AFTER pushedAt
 //       (a plugin reload happened — likely the harness is restarting and
 //       will pick up replays).
+//   (d) a later channel notification callback resolved successfully after
+//       this entry was staged (the JSON-RPC channel is still moving traffic,
+//       even if Claude's reply does not call any agent-bridge tool).
 //
 // `index.ts` owns `toolCallsReceivedCount` and the channel-callback
 // registration timestamp. It pushes them in via the setter below.
@@ -341,6 +354,8 @@ function isHarnessAliveSincePush(pending: PendingEntry): boolean {
   // (c) channel-callback freshness: was it registered AFTER pushedAt?
   const regAt = aliveSignals.getChannelCallbackRegisteredAt();
   if (regAt > pending.pushedAt) return true;
+  // (d) has any later channel notification resolved successfully?
+  if (successfulChannelPushCount > pending.successfulPushesAtStageTime) return true;
   return false;
 }
 
@@ -421,6 +436,7 @@ export function _resetPendingDeliveriesForTesting(): void {
   // start each scenario from a clean slate (otherwise a prior scenario's
   // retry count could leak into a later scenario reusing the same id).
   retriesByMsgId.clear();
+  successfulChannelPushCount = 0;
   _resetChannelDeadStateForTesting();
 }
 
@@ -919,6 +935,7 @@ function stagePendingAck(
     target: CLAUDE_CODE_TARGET,
     listenersAtPushTime: inboxArrivalListenerCount(),
     toolCallsAtPushTime: aliveSignals.getToolCallsReceivedCount(),
+    successfulPushesAtStageTime: successfulChannelPushCount,
     hadError: false,
     escapeHatch,
   };
@@ -937,6 +954,7 @@ function stagePendingAck(
       target: CLAUDE_CODE_TARGET,
       listenersAtPushTime: entry.listenersAtPushTime,
       toolCallsAtPushTime: entry.toolCallsAtPushTime,
+      successfulPushesAtStageTime: entry.successfulPushesAtStageTime,
       mcpServerVersion: MCP_SERVER_VERSION,
     }, null, 2), { mode: 0o600 });
   } catch (err) {
@@ -1074,6 +1092,7 @@ function reinjectPending(entry: PendingEntry, reason: string): void {
       target: entry.target,
       listenersAtPushTime: entry.listenersAtPushTime,
       toolCallsAtPushTime: entry.toolCallsAtPushTime,
+      successfulPushesAtStageTime: entry.successfulPushesAtStageTime,
       mcpServerVersion: MCP_SERVER_VERSION,
     }, null, 2), { mode: 0o600 });
   } catch (err) {
@@ -1233,6 +1252,7 @@ function emitChannelNotification(fileName: string): void {
 
     withChannelNotifyTimeout(Promise.resolve(savedChannelCallback(msg)), msg.id)
       .then(() => {
+        successfulChannelPushCount += 1;
         // 3.9.0 [CONSUME-RACE] — DO NOT markDelivered + archive optimistically.
         // The promise resolved when the JSON-RPC notification was written to
         // stdout; that is NOT proof the receiving Claude harness rendered it.

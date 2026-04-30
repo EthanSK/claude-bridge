@@ -1,5 +1,19 @@
 # Changelog
 
+## agent-bridge 3.10.1 — 2026-04-30
+
+### [CONSUME-RACE] Follow-up: no-tool reply alive evidence
+
+Agent Bridge now treats a later successfully-resolved channel notification as alive evidence for older pending-ack entries. This covers the no-tool reply path where Claude receives and answers a bridge message but does not call any Agent Bridge MCP tool before the 60 s safety-net window. Older entries can now finalize after the early-defer window once later channel traffic proves the notification pipe is still moving, instead of being re-injected and duplicated.
+
+- Added `successfulChannelPushCount` bookkeeping in `mcp-server/src/watcher.ts`.
+- Pending entries snapshot the successful-push counter when staged, so their own push does not ack itself.
+- Added consume-race case H to prove a later push finalizes the older entry without tool-call or reload evidence.
+
+### OpenClaw plugin manifest metadata
+
+The OpenClaw channel plugin manifest now declares `channelConfigs.agent-bridge` with a permissive schema for `channels.agent-bridge`, including the existing nested `config` object. This removes the cold-path manifest warning while preserving current user config compatibility.
+
 ## agent-bridge 3.10.0 — 2026-04-29
 
 ### Auto-update notifications
