@@ -75,7 +75,7 @@ import { CLAUDE_CODE_TARGET, LOCKS_DIR, LOGS_DIR, MCP_SERVER_VERSION, ensureDire
 import { initInbox, shutdownInbox } from './inbox.js';
 import type { BridgeMessage } from './inbox.js';
 import { registerTools } from './tools.js';
-import { startWatcher, stopWatcher, replayUndeliveredMessages, registerAliveSignals } from './watcher.js';
+import { startWatcher, stopWatcher, replayUndeliveredMessages, registerAliveSignals, subscribeToPromotion } from './watcher.js';
 import { logInfo, logError, logWarn } from './logger.js';
 import { logEvent } from './log.js';
 
@@ -839,115 +839,202 @@ async function main(): Promise<void> {
     void replayUndeliveredMessages();
   }
 
-  // [AUTO-UPDATE-CHECK 2026-04-29] — Fire-and-forget background probe of
-  // origin/main. The script (`scripts/check-update.sh` in the source
-  // checkout) is silent unless origin is strictly ahead of the local
-  // checkout AND the same SHA hasn't already triggered a notification
-  // (sentinel at ~/.agent-bridge/.last-update-notified-head). When it does
-  // notify, it drops a [BRIDGE-UPDATE-AVAILABLE] message into the local
-  // claude-code inbox (and any other harness inbox subdirs), which the
-  // channel watcher above pushes into the running session — exactly the
-  // delivery path Ethan asked for in voice 327.
+  // [AUTO-UPDATE-CHECK 2026-04-29] / [AUTO-UPDATE-RE-PROBE 2026-04-30] —
+  // Fire-and-forget background probe of origin/main. The script
+  // (`scripts/check-update.sh` in the source checkout) is silent unless
+  // origin is strictly ahead of the local checkout AND the same SHA
+  // hasn't already triggered a notification (sentinel at
+  // ~/.agent-bridge/.last-update-notified-head). When it does notify, it
+  // drops a [BRIDGE-UPDATE-AVAILABLE] message into the local claude-code
+  // inbox (and any other harness inbox subdirs), which the channel
+  // watcher above pushes into the running session — exactly the delivery
+  // path Ethan asked for in voice 327.
+  //
+  // 3.11.0 — the probe now runs PERIODICALLY (every 3 h) on top of the
+  // initial 30 s post-boot probe. The previous one-shot timer left
+  // long-lived channel-owner children stuck on a stale checkout if the
+  // user didn't `/reload-plugins` between an upstream push and the
+  // 30 s window. Voice 5736 spec: re-probe every 3 hours. Standby
+  // children that get promoted to channel-owner via the watcher's
+  // standby-retry path also (re)arm the probe + interval at promotion
+  // time (see `subscribeToPromotion` below) so a process that booted as
+  // standby and only later took over the lease still runs the probe.
   //
   // ON by default. Disable with AGENT_BRIDGE_AUTO_UPDATE_CHECK=0
-  // (or false / off / no). Only the channel-owner runs the probe so a
-  // single host with multiple bridge MCP children doesn't multi-notify.
-  if (watcherStarted && bridgeRole === 'channel-owner') {
+  // (or false / off / no / disabled). Only the channel-owner runs the
+  // probe so a single host with multiple bridge MCP children doesn't
+  // multi-notify.
+  const AUTO_UPDATE_PROBE_INITIAL_DELAY_MS = 30_000;
+  const AUTO_UPDATE_PROBE_INTERVAL_MS = 3 * 60 * 60 * 1000; // 3 hours
+
+  let autoUpdateInitialTimer: NodeJS.Timeout | null = null;
+  let autoUpdateIntervalTimer: NodeJS.Timeout | null = null;
+  let autoUpdateProbeArmed = false;
+
+  const isAutoUpdateDisabled = (): boolean => {
     const killSwitch = (process.env.AGENT_BRIDGE_AUTO_UPDATE_CHECK ?? '1').trim().toLowerCase();
-    if (!['0', 'false', 'off', 'no', 'disabled'].includes(killSwitch)) {
-      // The MCP child usually runs from the plugin cache (no .git), so the
-      // probe script lives in the source checkout. Caller can pin via
-      // AGENT_BRIDGE_SOURCE_DIR; otherwise probe a small list of common
-      // locations relative to $HOME. If none exist, skip silently.
-      const candidates: string[] = [];
-      if (process.env.AGENT_BRIDGE_SOURCE_DIR) {
-        candidates.push(process.env.AGENT_BRIDGE_SOURCE_DIR);
+    return ['0', 'false', 'off', 'no', 'disabled'].includes(killSwitch);
+  };
+
+  const resolveAutoUpdateScript = (): { scriptPath: string | null; candidates: string[] } => {
+    const candidates: string[] = [];
+    if (process.env.AGENT_BRIDGE_SOURCE_DIR) {
+      candidates.push(process.env.AGENT_BRIDGE_SOURCE_DIR);
+    }
+    const home = homedir();
+    candidates.push(
+      join(home, '.openclaw', 'workspace', 'agent-bridge'),
+      join(home, 'Projects', 'agent-bridge'),
+      join(home, 'projects', 'agent-bridge'),
+      join(home, 'agent-bridge'),
+      join(home, 'src', 'agent-bridge'),
+    );
+    for (const dir of candidates) {
+      const probe = join(dir, 'scripts', 'check-update.sh');
+      if (existsSync(probe) && existsSync(join(dir, '.git'))) {
+        return { scriptPath: probe, candidates };
       }
-      const home = homedir();
-      candidates.push(
-        join(home, '.openclaw', 'workspace', 'agent-bridge'),
-        join(home, 'Projects', 'agent-bridge'),
-        join(home, 'projects', 'agent-bridge'),
-        join(home, 'agent-bridge'),
-        join(home, 'src', 'agent-bridge'),
-      );
-      let scriptPath: string | null = null;
-      for (const dir of candidates) {
-        const probe = join(dir, 'scripts', 'check-update.sh');
-        if (existsSync(probe) && existsSync(join(dir, '.git'))) {
-          scriptPath = probe;
-          break;
-        }
-      }
-      if (scriptPath) {
-        // Stagger the probe ~30 s after boot so we don't slow startup or
-        // race with `replayUndeliveredMessages`. The unref() lets Node exit
-        // cleanly even if the timer hasn't fired yet (e.g. parent dies in
-        // the first 30 s).
-        const probeTimer = setTimeout(() => {
-          try {
-            const child = spawn('bash', [scriptPath as string], {
-              stdio: 'ignore',
-              detached: false,
-              env: process.env,
-            });
-            child.on('error', (err) => {
-              try {
-                logEvent({
-                  event: 'auto_update_check.spawn_error',
-                  level: 'warn',
-                  msg: 'auto-update-check script spawn failed',
-                  context: { error: String(err), script: scriptPath },
-                });
-              } catch { /* best-effort */ }
-            });
-            child.on('exit', (code) => {
-              try {
-                logEvent({
-                  event: 'auto_update_check.exit',
-                  msg: `auto-update-check exited code=${code}`,
-                  context: { code, script: scriptPath },
-                });
-              } catch { /* best-effort */ }
-            });
-            child.unref();
-          } catch (err) {
-            try {
-              logEvent({
-                event: 'auto_update_check.spawn_threw',
-                level: 'warn',
-                msg: 'auto-update-check spawn threw',
-                context: { error: String(err) },
-              });
-            } catch { /* best-effort */ }
-          }
-        }, 30_000);
-        probeTimer.unref();
+    }
+    return { scriptPath: null, candidates };
+  };
+
+  const runAutoUpdateProbe = (scriptPath: string, trigger: string): void => {
+    // Re-check the kill switch on every fire — operator can flip it via env
+    // without restarting the MCP server (interval keeps running but spawns
+    // become no-ops when disabled).
+    if (isAutoUpdateDisabled()) {
+      try {
+        logEvent({
+          event: 'auto_update_check.skipped_disabled_at_fire',
+          msg: 'auto-update-check skipped on fire: disabled via env',
+          context: { trigger, value: process.env.AGENT_BRIDGE_AUTO_UPDATE_CHECK },
+        });
+      } catch { /* best-effort */ }
+      return;
+    }
+    try {
+      const child = spawn('bash', [scriptPath], {
+        stdio: 'ignore',
+        detached: false,
+        env: process.env,
+      });
+      child.on('error', (err) => {
         try {
           logEvent({
-            event: 'auto_update_check.scheduled',
-            msg: 'auto-update-check scheduled (will run in 30s)',
-            context: { script: scriptPath },
+            event: 'auto_update_check.spawn_error',
+            level: 'warn',
+            msg: 'auto-update-check script spawn failed',
+            context: { error: String(err), script: scriptPath, trigger },
           });
         } catch { /* best-effort */ }
-      } else {
+      });
+      child.on('exit', (code) => {
         try {
           logEvent({
-            event: 'auto_update_check.no_source_dir',
-            msg: 'auto-update-check skipped: no agent-bridge source checkout found (set AGENT_BRIDGE_SOURCE_DIR to override)',
-            context: { candidates_probed: candidates },
+            event: 'auto_update_check.exit',
+            msg: `auto-update-check exited code=${code}`,
+            context: { code, script: scriptPath, trigger },
           });
         } catch { /* best-effort */ }
-      }
-    } else {
+      });
+      child.unref();
+    } catch (err) {
+      try {
+        logEvent({
+          event: 'auto_update_check.spawn_threw',
+          level: 'warn',
+          msg: 'auto-update-check spawn threw',
+          context: { error: String(err), trigger },
+        });
+      } catch { /* best-effort */ }
+    }
+  };
+
+  const armAutoUpdateProbe = (trigger: string): void => {
+    if (autoUpdateProbeArmed) return;
+    if (isAutoUpdateDisabled()) {
       try {
         logEvent({
           event: 'auto_update_check.disabled',
           msg: 'auto-update-check disabled via AGENT_BRIDGE_AUTO_UPDATE_CHECK env var',
-          context: { value: killSwitch },
+          context: { value: process.env.AGENT_BRIDGE_AUTO_UPDATE_CHECK, trigger },
         });
       } catch { /* best-effort */ }
+      return;
     }
+    const { scriptPath, candidates } = resolveAutoUpdateScript();
+    if (!scriptPath) {
+      try {
+        logEvent({
+          event: 'auto_update_check.no_source_dir',
+          msg: 'auto-update-check skipped: no agent-bridge source checkout found (set AGENT_BRIDGE_SOURCE_DIR to override)',
+          context: { candidates_probed: candidates, trigger },
+        });
+      } catch { /* best-effort */ }
+      return;
+    }
+    autoUpdateProbeArmed = true;
+    // Stagger the first probe ~30 s after boot/promotion so we don't slow
+    // startup or race with `replayUndeliveredMessages`. unref() lets Node
+    // exit cleanly even if the timer hasn't fired yet.
+    autoUpdateInitialTimer = setTimeout(() => {
+      autoUpdateInitialTimer = null;
+      runAutoUpdateProbe(scriptPath, `${trigger}_initial`);
+    }, AUTO_UPDATE_PROBE_INITIAL_DELAY_MS);
+    autoUpdateInitialTimer.unref?.();
+    // Then re-probe every 3 h so a long-lived channel-owner that never
+    // gets a /reload-plugins between upstream pushes still notices.
+    autoUpdateIntervalTimer = setInterval(() => {
+      runAutoUpdateProbe(scriptPath, `${trigger}_interval`);
+    }, AUTO_UPDATE_PROBE_INTERVAL_MS);
+    autoUpdateIntervalTimer.unref?.();
+    try {
+      logEvent({
+        event: 'auto_update_check.scheduled',
+        msg: `auto-update-check scheduled (initial in 30s, then every ${AUTO_UPDATE_PROBE_INTERVAL_MS / 3_600_000}h)`,
+        context: {
+          script: scriptPath,
+          initial_delay_ms: AUTO_UPDATE_PROBE_INITIAL_DELAY_MS,
+          interval_ms: AUTO_UPDATE_PROBE_INTERVAL_MS,
+          trigger,
+        },
+      });
+    } catch { /* best-effort */ }
+  };
+
+  const stopAutoUpdateProbe = (): void => {
+    if (autoUpdateInitialTimer) {
+      try { clearTimeout(autoUpdateInitialTimer); } catch { /* best-effort */ }
+      autoUpdateInitialTimer = null;
+    }
+    if (autoUpdateIntervalTimer) {
+      try { clearInterval(autoUpdateIntervalTimer); } catch { /* best-effort */ }
+      autoUpdateIntervalTimer = null;
+    }
+    autoUpdateProbeArmed = false;
+  };
+
+  if (watcherStarted && bridgeRole === 'channel-owner') {
+    armAutoUpdateProbe('boot');
+  }
+
+  // 3.11.0 [AUTO-UPDATE-RE-PROBE 2026-04-30] — if this child started as a
+  // standby (Patch F: peer held the lease) and later steals the lease
+  // because the peer died, fire an immediate probe and arm the 3 h
+  // interval. Without this hook the auto-update timer would never run on
+  // a standby-promoted process.
+  if (bridgeRole === 'channel-owner') {
+    subscribeToPromotion(() => {
+      if (autoUpdateProbeArmed) return; // already running
+      const { scriptPath } = resolveAutoUpdateScript();
+      if (scriptPath && !isAutoUpdateDisabled()) {
+        // Immediate probe on promotion — channel-owner just changed, so
+        // we want a fresh check right now in case origin has moved while
+        // the previous owner was wedged. Don't wait the 30 s.
+        runAutoUpdateProbe(scriptPath, 'promotion_immediate');
+      }
+      armAutoUpdateProbe('promotion');
+    });
   }
 
   // Clean shutdown. Triggered by:
@@ -1029,6 +1116,12 @@ async function main(): Promise<void> {
 
     // 1. Stop the file watcher (kills fswatch/inotifywait/polling)
     try { stopWatcher(); } catch (err) { try { logError(`stopWatcher error: ${err}`); } catch {} }
+
+    // 1b. Stop the auto-update re-probe timers (3.11.0). The unref() means
+    // they can't keep Node alive on their own, but clearing them releases
+    // the event-loop handles immediately so the shutdown_diag dump is
+    // accurate.
+    try { stopAutoUpdateProbe(); } catch (err) { try { logError(`stopAutoUpdateProbe error: ${err}`); } catch {} }
 
     // 2. Stop the prune timer and inbox system
     try { shutdownInbox(); } catch (err) { try { logError(`shutdownInbox error: ${err}`); } catch {} }

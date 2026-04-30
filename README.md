@@ -305,9 +305,11 @@ To run the updater automatically when Claude Code starts or resumes, paste one h
 
 Claude Code's current hook schema uses an outer matcher group and an inner `hooks` array. `timeout` is in seconds.
 
-### Auto-update notifications (3.10.0+)
+### Auto-update notifications (3.10.0+, periodic re-probe in 3.11.0+)
 
-agent-bridge can also tell the running harness when its source checkout has fallen behind `origin/main`, so the agent itself sees a `[BRIDGE-UPDATE-AVAILABLE]` channel message instead of silently drifting. The notification is **on by default** — the MCP server fires `scripts/check-update.sh` ~30 seconds after `server.connect()` (channel-owner only). The script runs `git fetch --quiet`, compares `HEAD` to `origin/main`, and — if origin is strictly ahead — drops a `BridgeMessage` JSON file into `~/.agent-bridge/inbox/<target>/`. The existing channel watcher pushes it into the live session via `notifications/claude/channel`, just like a remote message. Idempotent: the last-notified `origin/main` SHA is recorded at `~/.agent-bridge/.last-update-notified-head`, so the same SHA does not re-notify.
+agent-bridge can also tell the running harness when its source checkout has fallen behind `origin/main`, so the agent itself sees a `[BRIDGE-UPDATE-AVAILABLE]` channel message instead of silently drifting. The notification is **on by default** — the MCP server fires `scripts/check-update.sh` ~30 seconds after `server.connect()` (channel-owner only) **and then re-probes every 3 hours** (3.11.0+, addresses the bug where long-lived channel-owner children booted before an upstream push never noticed the new commit). The script runs `git fetch --quiet`, compares `HEAD` to `origin/main`, and — if origin is strictly ahead — drops a `BridgeMessage` JSON file into `~/.agent-bridge/inbox/<target>/`. The existing channel watcher pushes it into the live session via `notifications/claude/channel`, just like a remote message. Idempotent: the last-notified `origin/main` SHA is recorded at `~/.agent-bridge/.last-update-notified-head`, so the same SHA does not re-notify.
+
+If a child boots as standby (Patch F: another peer holds the watcher lease) and is later promoted to channel-owner because the lease holder died, the auto-update probe is (re)armed at promotion time — fresh probe immediately, plus the 3-hour interval starting then — so a process that only became channel-owner mid-session still runs the check.
 
 ```bash
 # Manual probe (safe to run anywhere, anytime):
@@ -348,6 +350,35 @@ To **disable** auto-update notifications, set `AGENT_BRIDGE_AUTO_UPDATE_CHECK=0`
 ```
 
 You can also wire `scripts/check-update.sh` to cron / launchd / Task Scheduler / a SessionStart hook for periodic re-checks; the same kill switch applies because the script honours `AGENT_BRIDGE_AUTO_UPDATE_CHECK` directly. Applying the update is still an explicit decision: when the harness sees `[BRIDGE-UPDATE-AVAILABLE]` it can decide whether to run `scripts/update.sh`, ask the operator, or ignore.
+
+### Auto-update receiver behavior
+
+When a `[BRIDGE-UPDATE-AVAILABLE]` channel message lands in a Claude Code or OpenClaw session, the receiving agent **should not pull-and-rebuild directly in its main thread**. Doing the pull, `npm install`, and `npm run build` synchronously in the main thread:
+
+- Blocks the user's session for tens of seconds while npm churns.
+- Forces conflict resolution to happen inside whatever the agent was doing (mid-Telegram-thread, mid-debug, etc.) instead of in an isolated context.
+- Loses the natural "report back commit hash and any conflicts" handoff a subagent provides.
+
+The recommended pattern is **dispatch a subagent to do the upgrade**, then surface its result back to the user:
+
+1. Receiver sees the `[BRIDGE-UPDATE-AVAILABLE]` channel block.
+2. Receiver dispatches a subagent (see harness-specific guidance below) with instructions to:
+   - `cd <agent-bridge source checkout>`
+   - `git fetch origin main`
+   - `git pull --ff-only origin main` (fall back to `git pull --rebase origin main` if FF fails — the script's behavior is non-FF on developer state, treat that as the manual escape hatch and surface to the user)
+   - `cd mcp-server && npm install && npm run build`
+   - Trigger the harness's plugin reload — for Claude Code this is `/reload-plugins` (the `self-reload-plugins` skill); for OpenClaw it's the equivalent gateway-restart path (see harness docs).
+   - Report back: final commit hash, list of incoming subjects, and any conflicts / non-FF / build errors.
+3. Main agent surfaces the subagent's report to the user. If the subagent reports a non-FF condition, the main agent asks the user what to do rather than auto-rebasing through unknown developer state.
+
+**Claude Code specifics.** Use the built-in subagent dispatch (the `Agent` tool with `subagent_type: "general-purpose"`). `run_in_background: true` is appropriate here so the user's session remains responsive during the npm install/build; the subagent posts back asynchronously. The receiver agent should announce "dispatching a subagent to apply the agent-bridge update" so the user knows what's happening, and then send a follow-up Telegram (or whichever channel) message when the subagent finishes. The `self-reload-plugins` skill is the right post-build trigger.
+
+**OpenClaw specifics.** OpenClaw's subagent-dispatch convention is harness-version-specific and currently **TBD** — at the time of this writing, no documented `subagent_type` analogue is exposed by OpenClaw's tooling. Until that is resolved, OpenClaw receivers should:
+
+- Print the `[BRIDGE-UPDATE-AVAILABLE]` notice to the operator and stop.
+- Let the operator manually run `scripts/update.sh` (or the recommended commands above) and `openclaw gateway restart`.
+
+A research item is pinned to discover OpenClaw's analogue (likely a `claw spawn` or workspace-skill pattern under `~/.openclaw/workspace/skills/`); when that lands, this section will document the equivalent receiver behavior. Cross-machine update-propagation is unaffected: the bridge_send_message machinery already lets a Claude Code peer instruct an OpenClaw peer to perform a manual update step.
 
 ### Manual update path
 

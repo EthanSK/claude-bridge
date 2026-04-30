@@ -106,6 +106,43 @@ let standbyRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let savedMessageCallback: MessageCallback | null = null;
 let savedWatcherRole = 'auto';
 
+/**
+ * 3.11.0 [AUTO-UPDATE-RE-PROBE 2026-04-30] — Promotion listeners.
+ *
+ * Fires when a standby watcher successfully steals the lease from a dead
+ * peer (`scheduleStandbyRetry` → `tryAcquireWatcherLease === 'acquired'`).
+ * Used by index.ts to (re)arm the auto-update probe + 3h interval the
+ * moment this child becomes channel-owner — without that hook, a process
+ * that booted as standby and only later took over the lease would never
+ * run the probe at all.
+ */
+type PromotionListener = () => void;
+const promotionListeners = new Set<PromotionListener>();
+
+/**
+ * Register a callback to fire when this process is promoted from standby
+ * to channel-owner (i.e. it acquires the watcher lease after originally
+ * starting in standby). Returns an unsubscribe function. The callback is
+ * called synchronously inside the standby retry loop; it MUST be cheap
+ * and must not throw.
+ */
+export function subscribeToPromotion(listener: PromotionListener): () => void {
+  promotionListeners.add(listener);
+  return () => { promotionListeners.delete(listener); };
+}
+
+function firePromotionListeners(): void {
+  for (const listener of promotionListeners) {
+    try {
+      listener();
+    } catch (err) {
+      try {
+        logWarn(`promotion listener threw: ${err}`);
+      } catch { /* best-effort */ }
+    }
+  }
+}
+
 /** Maximum entries in knownFiles before evicting oldest (insertion-order). */
 const KNOWN_FILES_MAX = 2000;
 const WATCHER_LEASE_STALE_MS = 15_000;
@@ -814,6 +851,10 @@ function scheduleStandbyRetry(callback: MessageCallback, role: string): void {
       });
       activateWatcher(callback);
       void replayUndeliveredMessages();
+      // 3.11.0 [AUTO-UPDATE-RE-PROBE 2026-04-30] — notify subscribers that
+      // this process just became the channel-owner. index.ts uses this to
+      // (re)arm the auto-update probe + 3h interval.
+      firePromotionListeners();
       return;
     }
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## agent-bridge 3.11.0 — 2026-04-30
+
+### [AUTO-UPDATE-RE-PROBE 2026-04-30] Periodic re-probe + standby-promotion probe
+
+The auto-update probe added in 3.10.0 was a one-shot timer fired ~30 s after MCP server boot, only on `watcherStarted && bridgeRole === 'channel-owner'`. That meant a long-lived channel-owner child outliving the gap between an upstream push and the user's next `/reload-plugins` would never re-probe — it'd sit on a stale checkout indefinitely. Standby children skipped the probe entirely, so a process that booted as standby and only later took over the lease never ran the check at all.
+
+3.11.0 fixes both:
+
+- **Periodic 3-hour re-probe.** The single 30 s `setTimeout` in `mcp-server/src/index.ts` is replaced with an initial 30 s timer plus a `setInterval(probe, 3 * 60 * 60 * 1000)`. Both timers are `unref()`'d so they don't hold the process alive on shutdown, and both are explicitly cleared via the new `stopAutoUpdateProbe()` call wired into the existing shutdown teardown next to `stopWatcher()`. The kill switch (`AGENT_BRIDGE_AUTO_UPDATE_CHECK=0/false/off/no/disabled`) is honoured both at arm time AND on every fire — flipping the env var on a running server makes subsequent fires no-op without restarting.
+- **Standby → channel-owner promotion probe.** New `subscribeToPromotion()` hook in `mcp-server/src/watcher.ts` — fires inside the existing `scheduleStandbyRetry()` success path when this child steals the lease from a dead peer. `index.ts` registers a listener that runs an immediate probe (no 30 s wait — the old owner was probably wedged) and arms the 3 h interval at promotion time. So a process that booted as standby, watched its peer die 5 minutes later, and got promoted now correctly enters the auto-update cadence.
+- **README documents the receiver subagent-dispatch convention.** New "Auto-update receiver behavior" section in README.md tells receiving agents (Claude Code or OpenClaw) NOT to pull-and-rebuild directly in their main thread — instead dispatch a subagent that does `git fetch && git pull --ff-only` (with `--rebase` fallback), `cd mcp-server && npm install && npm run build`, then `/reload-plugins` (Claude Code) or the OpenClaw equivalent. Claude Code dispatch path is documented (`Agent` tool with `subagent_type: "general-purpose"`, `run_in_background: true`); OpenClaw is marked TBD pending discovery of the equivalent dispatch mechanism.
+
+`scripts/check-update.sh` is unchanged — it still drops a `[BRIDGE-UPDATE-AVAILABLE]` BridgeMessage and writes the sentinel; the pull/build is the receiver's job, exactly as before.
+
+Files touched: `mcp-server/src/index.ts`, `mcp-server/src/watcher.ts`, `README.md`, version bumps in `mcp-server/package.json`, `mcp-server/package-lock.json`, `mcp-server/src/config.ts`, `mcp-server/.claude-plugin/plugin.json`, `agent-bridge` (bash CLI VERSION), `mcp-server/test/heartbeat-shutdown-diag.test.mjs`, `mcp-server/test/unified-channel.test.mjs`.
+
 ## agent-bridge 3.10.1 — 2026-04-30
 
 ### [CONSUME-RACE] Follow-up: no-tool reply alive evidence
