@@ -27,9 +27,9 @@
 #   scripts/auto-update-coord.sh status --source-dir "$PWD" --cycle <origin-sha>
 #
 # Environment overrides:
-#   AGENT_BRIDGE_AUTO_UPDATE_STALE_AFTER_SEC   default 1800 (30 minutes)
-#   AGENT_BRIDGE_AUTO_UPDATE_MIN_INTERVAL_SEC  default 300  (5 minutes)
-#   AGENT_BRIDGE_LOCK_DIR                      default ~/.agent-bridge/locks
+#   AGENT_BRIDGE_AUTO_UPDATE_STALE_LOCK_MS   default 1800000 (30 minutes)
+#   AGENT_BRIDGE_AUTO_UPDATE_MIN_RETRY_MS    default 300000  (5 minutes)
+#   AGENT_BRIDGE_LOCK_DIR                    default ~/.agent-bridge/locks
 #
 # Exit codes:
 #   0  acquired / released / command succeeded
@@ -69,8 +69,18 @@ TOKEN_ARG=""
 EXIT_CODE_ARG=""
 PLAIN=0
 VERBOSE=0
-MIN_INTERVAL="${AGENT_BRIDGE_AUTO_UPDATE_MIN_INTERVAL_SEC:-300}"
-STALE_AFTER="${AGENT_BRIDGE_AUTO_UPDATE_STALE_AFTER_SEC:-1800}"
+# Preferred env names are millisecond-based to match
+# AGENT_BRIDGE_AUTO_UPDATE_INTERVAL_MS from the probe timer. The older *_SEC
+# names remain accepted as compatibility aliases, but the *_MS values win when
+# both are present.
+MIN_RETRY_MS="${AGENT_BRIDGE_AUTO_UPDATE_MIN_RETRY_MS:-}"
+STALE_LOCK_MS="${AGENT_BRIDGE_AUTO_UPDATE_STALE_LOCK_MS:-}"
+MIN_INTERVAL_SEC="${AGENT_BRIDGE_AUTO_UPDATE_MIN_INTERVAL_SEC:-}"
+STALE_AFTER_SEC="${AGENT_BRIDGE_AUTO_UPDATE_STALE_AFTER_SEC:-}"
+MIN_INTERVAL=""
+STALE_AFTER=""
+MIN_RETRY_MS_EFFECTIVE=""
+STALE_LOCK_MS_EFFECTIVE=""
 LOCK_ROOT="${AGENT_BRIDGE_LOCK_DIR:-$HOME/.agent-bridge/locks}"
 RUN_ARGS=()
 
@@ -82,14 +92,31 @@ is_uint() {
   [[ "${1:-}" =~ ^[0-9]+$ ]]
 }
 
-sanitize_seconds() {
-  local value="$1"
-  local fallback="$2"
-  if is_uint "$value"; then
-    printf '%s' "$value"
-  else
-    printf '%s' "$fallback"
+ms_to_seconds_ceil() {
+  local ms="$1"
+  if ! is_uint "$ms"; then
+    return 1
   fi
+  if (( ms <= 0 )); then
+    printf '0'
+  else
+    printf '%s' $(((ms + 999) / 1000))
+  fi
+}
+
+resolve_duration_seconds() {
+  local ms_value="$1"
+  local sec_value="$2"
+  local default_ms="$3"
+  if is_uint "$ms_value"; then
+    ms_to_seconds_ceil "$ms_value"
+    return 0
+  fi
+  if is_uint "$sec_value"; then
+    printf '%s' "$sec_value"
+    return 0
+  fi
+  ms_to_seconds_ceil "$default_ms"
 }
 
 now_epoch() { date +%s; }
@@ -97,6 +124,84 @@ now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 warn() { echo "auto-update-coord: $*" >&2; }
 verbose() { if (( VERBOSE )); then warn "$*"; fi; }
+
+
+json_escape() {
+  local value="${1:-}"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\r'/ }"
+  value="${value//$'\n'/ }"
+  value="${value//$'\t'/ }"
+  printf '%s' "$value"
+}
+
+json_string_field() {
+  local key="$1"
+  local value="${2:-}"
+  printf '"%s":"%s"' "$key" "$(json_escape "$value")"
+}
+
+json_number_field() {
+  local key="$1"
+  local value="${2:-0}"
+  if is_uint "$value"; then
+    printf '"%s":%s' "$key" "$value"
+  else
+    json_string_field "$key" "$value"
+  fi
+}
+
+coord_context_json() {
+  local extra="${1:-}"
+  printf '{'
+  json_string_field source_dir "${SOURCE_DIR:-}"
+  printf ','
+  json_string_field cycle "${CYCLE:-}"
+  printf ','
+  json_string_field lock_path "${LOCK_PATH:-}"
+  printf ','
+  json_string_field state_path "${STATE_PATH:-}"
+  printf ','
+  json_number_field pid "$$"
+  printf ','
+  json_number_field stale_lock_ms "${STALE_LOCK_MS_EFFECTIVE:-0}"
+  printf ','
+  json_number_field min_retry_ms "${MIN_RETRY_MS_EFFECTIVE:-0}"
+  if [[ -n "$extra" ]]; then
+    printf ',%s' "$extra"
+  fi
+  printf '}'
+}
+
+log_coord_event() {
+  local event="$1"
+  local level="$2"
+  local msg="$3"
+  local extra="${4:-}"
+
+  local logs_dir="$HOME/.agent-bridge/logs"
+  mkdir -p "$logs_dir" 2>/dev/null || return 0
+  chmod 700 "$logs_dir" 2>/dev/null || true
+
+  local log_file="$logs_dir/agent-bridge.log"
+  if [[ -f "$log_file" ]]; then
+    local size
+    size="$(stat -f%z "$log_file" 2>/dev/null || stat -c%s "$log_file" 2>/dev/null || printf 0)"
+    if is_uint "$size" && (( size > 50 * 1024 * 1024 )); then
+      mv "$log_file" "$log_file.1" 2>/dev/null || true
+    fi
+  fi
+
+  local ts host context
+  ts="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+  host="$(hostname 2>/dev/null | sed 's/\.local$//' || printf unknown)"
+  context="$(coord_context_json "$extra")"
+
+  printf '{"ts":"%s","component":"auto-update-coord","machine":"%s","event":"%s","level":"%s","msg":"%s","context":%s}\n' \
+    "$ts" "$(json_escape "$host")" "$(json_escape "$event")" "$(json_escape "$level")" "$(json_escape "$msg")" "$context" \
+    >> "$log_file" 2>/dev/null || true
+}
 
 canonical_dir() {
   local dir="$1"
@@ -165,8 +270,10 @@ load_state_defaults() {
 }
 
 init_paths() {
-  MIN_INTERVAL="$(sanitize_seconds "$MIN_INTERVAL" 300)"
-  STALE_AFTER="$(sanitize_seconds "$STALE_AFTER" 1800)"
+  MIN_INTERVAL="$(resolve_duration_seconds "$MIN_RETRY_MS" "$MIN_INTERVAL_SEC" 300000)"
+  STALE_AFTER="$(resolve_duration_seconds "$STALE_LOCK_MS" "$STALE_AFTER_SEC" 1800000)"
+  MIN_RETRY_MS_EFFECTIVE=$((MIN_INTERVAL * 1000))
+  STALE_LOCK_MS_EFFECTIVE=$((STALE_AFTER * 1000))
 
   if [[ -z "$SOURCE_DIR" ]]; then
     SOURCE_DIR="$DEFAULT_SOURCE_DIR"
@@ -218,7 +325,12 @@ reclaim_stale_lock_if_needed() {
     age="$(lock_age_seconds)"
     if (( age > STALE_AFTER )); then
       local stale_path="$LOCK_PATH.stale.$(now_epoch).$RANDOM"
+      local old_token old_started old_cycle
+      old_token="$(kv_get "$LOCK_PATH" token)"
+      old_started="$(kv_get "$LOCK_PATH" started_iso)"
+      old_cycle="$(kv_get "$LOCK_PATH" cycle)"
       mv -f "$LOCK_PATH" "$stale_path" 2>/dev/null || rm -f "$LOCK_PATH" 2>/dev/null || true
+      log_coord_event "auto_update_coord.reclaimed_stale" "warn" "reclaimed stale auto-update coord lock" "$(json_number_field lock_age_sec "$age"),$(json_string_field stale_path "$stale_path"),$(json_string_field holder_token "$old_token"),$(json_string_field holder_started_iso "$old_started"),$(json_string_field holder_cycle "$old_cycle")"
       verbose "reclaimed stale lock older than ${STALE_AFTER}s: $LOCK_PATH"
     fi
   fi
@@ -255,6 +367,7 @@ min_interval_gate_allows() {
   fi
 
   remaining=$((MIN_INTERVAL - age))
+  log_coord_event "auto_update_coord.skipped_retry_gate" "warn" "minimum retry interval active for auto-update coord" "$(json_number_field elapsed_sec "$age"),$(json_number_field remaining_sec "$remaining"),$(json_string_field last_attempt_iso "$STATE_LAST_ATTEMPT_ISO"),$(json_string_field last_attempt_cycle "$STATE_LAST_ATTEMPT_CYCLE")"
   warn "minimum retry interval active for cycle '${CYCLE:-<none>}' (${age}s elapsed, ${remaining}s remaining, min=${MIN_INTERVAL}s). state=$STATE_PATH"
   return "$EX_MIN_INTERVAL"
 }
@@ -317,6 +430,7 @@ acquire_lock() {
     started="$(kv_get "$LOCK_PATH" started_iso)"
     cycle="$(kv_get "$LOCK_PATH" cycle)"
     age="$(lock_age_seconds)"
+    log_coord_event "auto_update_coord.skipped_locked" "warn" "another local receiver holds the auto-update coord lock" "$(json_string_field reason "held"),$(json_number_field lock_age_sec "$age"),$(json_string_field holder_token "$token"),$(json_string_field holder_started_iso "$started"),$(json_string_field holder_cycle "$cycle")"
     warn "another local receiver holds the auto-update lock (age=${age}s, started=${started:-unknown}, cycle=${cycle:-<none>}, token=${token:-unknown}). lock=$LOCK_PATH"
     return "$EX_LOCKED"
   }
@@ -332,6 +446,7 @@ acquire_lock() {
       return "$EX_INTERNAL"
     fi
     ACQUIRED_TOKEN="$token"
+    log_coord_event "auto_update_coord.acquired" "info" "acquired auto-update coord lock" "$(json_string_field token "$token")"
     return 0
   fi
 
@@ -340,6 +455,7 @@ acquire_lock() {
   started="$(kv_get "$LOCK_PATH" started_iso)"
   cycle="$(kv_get "$LOCK_PATH" cycle)"
   held_token="$(kv_get "$LOCK_PATH" token)"
+  log_coord_event "auto_update_coord.skipped_locked" "warn" "another local receiver won the auto-update coord lock" "$(json_string_field reason "race"),$(json_number_field lock_age_sec "$age"),$(json_string_field holder_token "$held_token"),$(json_string_field holder_started_iso "$started"),$(json_string_field holder_cycle "$cycle")"
   warn "another local receiver won the auto-update lock (age=${age}s, started=${started:-unknown}, cycle=${cycle:-<none>}, token=${held_token:-unknown}). lock=$LOCK_PATH"
   return "$EX_LOCKED"
 }
@@ -370,11 +486,14 @@ release_lock() {
     return "$EX_NOT_OWNER"
   fi
 
+  local age
+  age="$(lock_age_seconds)"
   record_release_state "$exit_code" || true
   rm -f "$LOCK_PATH" 2>/dev/null || {
     warn "failed to remove lock: $LOCK_PATH"
     return "$EX_INTERNAL"
   }
+  log_coord_event "auto_update_coord.released" "info" "released auto-update coord lock" "$(json_string_field token "$token"),$(json_number_field exit_code "$exit_code"),$(json_number_field held_sec "$age")"
   return 0
 }
 
@@ -408,6 +527,8 @@ status_report() {
     printf 'lock_token=%s\n' "$held_token"
     printf 'lock_started_iso=%s\n' "$started"
     printf 'lock_cycle=%s\n' "$lock_cycle"
+    printf 'stale_lock_ms=%s\n' "$STALE_LOCK_MS_EFFECTIVE"
+    printf 'min_retry_ms=%s\n' "$MIN_RETRY_MS_EFFECTIVE"
     printf 'last_attempt_epoch=%s\n' "$STATE_LAST_ATTEMPT_EPOCH"
     printf 'last_attempt_iso=%s\n' "$STATE_LAST_ATTEMPT_ISO"
     printf 'last_attempt_cycle=%s\n' "$STATE_LAST_ATTEMPT_CYCLE"
@@ -423,6 +544,8 @@ lock state:       $lock_state
 lock age:         ${age:-n/a}s
 lock started:     ${started:-n/a}
 lock cycle:       ${lock_cycle:-n/a}
+stale lock:       ${STALE_LOCK_MS_EFFECTIVE}ms
+min retry:        ${MIN_RETRY_MS_EFFECTIVE}ms
 last attempt:     ${STATE_LAST_ATTEMPT_ISO:-n/a} (${STATE_LAST_ATTEMPT_CYCLE:-no-cycle})
 last success:     ${STATE_LAST_SUCCESS_ISO:-n/a} (${STATE_LAST_SUCCESS_CYCLE:-no-cycle})
 last failure:     ${STATE_LAST_FAILURE_ISO:-n/a} (${STATE_LAST_FAILURE_CYCLE:-no-cycle})
@@ -442,10 +565,14 @@ parse_common_args() {
       --token) TOKEN_ARG="${2:-}"; shift 2 ;;
       --exit-code=*) EXIT_CODE_ARG="${1#--exit-code=}"; shift ;;
       --exit-code) EXIT_CODE_ARG="${2:-}"; shift 2 ;;
-      --min-interval-sec=*) MIN_INTERVAL="${1#--min-interval-sec=}"; shift ;;
-      --min-interval-sec) MIN_INTERVAL="${2:-}"; shift 2 ;;
-      --stale-after-sec=*) STALE_AFTER="${1#--stale-after-sec=}"; shift ;;
-      --stale-after-sec) STALE_AFTER="${2:-}"; shift 2 ;;
+      --min-retry-ms=*|--min-interval-ms=*) MIN_RETRY_MS="${1#*=}"; shift ;;
+      --min-retry-ms|--min-interval-ms) MIN_RETRY_MS="${2:-}"; shift 2 ;;
+      --stale-lock-ms=*|--stale-after-ms=*) STALE_LOCK_MS="${1#*=}"; shift ;;
+      --stale-lock-ms|--stale-after-ms) STALE_LOCK_MS="${2:-}"; shift 2 ;;
+      --min-interval-sec=*) MIN_INTERVAL_SEC="${1#--min-interval-sec=}"; shift ;;
+      --min-interval-sec) MIN_INTERVAL_SEC="${2:-}"; shift 2 ;;
+      --stale-after-sec=*) STALE_AFTER_SEC="${1#--stale-after-sec=}"; shift ;;
+      --stale-after-sec) STALE_AFTER_SEC="${2:-}"; shift 2 ;;
       --plain) PLAIN=1; shift ;;
       -v|--verbose) VERBOSE=1; shift ;;
       --)

@@ -398,9 +398,13 @@ That means `~/Projects/agent-bridge` and `~/.openclaw/workspace/agent-bridge` co
 
 Defaults are deliberately conservative:
 
-- Stale lock: **1800 seconds / 30 minutes** (`AGENT_BRIDGE_AUTO_UPDATE_STALE_AFTER_SEC`). If a lock is older than this, the next receiver may reclaim it because the holder likely died.
-- Minimum retry interval: **300 seconds / 5 minutes** for the same `--cycle` (`AGENT_BRIDGE_AUTO_UPDATE_MIN_INTERVAL_SEC`). This prevents tight receiver loops if a lock is released quickly or repeatedly reclaimed. A newer origin SHA is a new cycle and may proceed immediately.
+- Stale lock: **1800000 ms / 30 minutes** (`AGENT_BRIDGE_AUTO_UPDATE_STALE_LOCK_MS`). If a lock is older than this, the next receiver may reclaim it because the holder likely died.
+- Minimum retry interval: **300000 ms / 5 minutes** for the same `--cycle` (`AGENT_BRIDGE_AUTO_UPDATE_MIN_RETRY_MS`). This prevents tight receiver loops if a lock is released quickly or repeatedly reclaimed. A newer origin SHA is a new cycle and may proceed immediately.
 - Lock dir: `~/.agent-bridge/locks` (`AGENT_BRIDGE_LOCK_DIR`).
+
+For live tests, shorten the two millisecond env vars above just like `AGENT_BRIDGE_AUTO_UPDATE_INTERVAL_MS` (for example `AGENT_BRIDGE_AUTO_UPDATE_STALE_LOCK_MS=5000` and `AGENT_BRIDGE_AUTO_UPDATE_MIN_RETRY_MS=5000`). The helper also accepts CLI equivalents (`--stale-lock-ms`, `--min-retry-ms`) and legacy second-based aliases (`AGENT_BRIDGE_AUTO_UPDATE_STALE_AFTER_SEC`, `AGENT_BRIDGE_AUTO_UPDATE_MIN_INTERVAL_SEC`) for compatibility, but the millisecond env vars are the documented contract.
+
+The helper writes unified log breadcrumbs to `~/.agent-bridge/logs/agent-bridge.log`: `auto_update_coord.acquired`, `auto_update_coord.released`, `auto_update_coord.skipped_locked`, `auto_update_coord.skipped_retry_gate`, and `auto_update_coord.reclaimed_stale`. Those events include the checkout path, cycle SHA, lock/state paths, effective stale/min-retry values, and relevant holder/exit metadata so future debugs can answer "did it run?" without scraping subagent transcripts.
 
 **Claude Code specifics.** Use the built-in subagent dispatch (the `Agent` tool with `subagent_type: "general-purpose"`). `run_in_background: true` is appropriate here so the user's session remains responsive during the npm install/build; the subagent posts back asynchronously. The receiver agent should announce "dispatching a subagent to apply the agent-bridge update" so the user knows what's happening, and then send a follow-up Telegram (or whichever channel) message when the subagent finishes. The `self-reload-plugins` skill is the right post-build trigger; `scripts/update.sh --auto` already invokes it when available.
 
