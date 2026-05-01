@@ -256,7 +256,7 @@ agent-bridge has three moving parts on each machine (3.7.0+):
 | Unified MCP server (tools + channel) | `<repo>/mcp-server/build/`                                         | `git pull` + rebuild        |
 | OpenClaw channel plugin           | `<repo>/openclaw-channel/` (loaded from the repo path by the gateway) | `git pull` + gateway restart |
 
-The unified MCP server is loaded by Claude Code's plugin host as a single plugin. It hosts both the `bridge_*` tools and the long-lived inbox watcher in one process; frequent tool calls keep it alive across the whole session (same lifetime model as Telegram). `/reload-plugins` reconnects to the new build — no terminal restart needed.
+The unified MCP server is loaded by Claude Code's plugin host as a single plugin. It hosts both the `bridge_*` tools and the long-lived inbox watcher in one process; frequent tool calls keep it alive across the whole session (same lifetime model as Telegram). `/reload-plugins` re-reads plugin **descriptors / skills / hooks** but does **not** reliably kill and respawn the long-running MCP child when a healthy channel-owner exists (Patch F's lease coordination demotes the new spawn to standby). To deterministically load new MCP child code, do a **full Claude Code session restart**. See [Rule 2 in the Setup guide](#document-the-staleness-rules-in-your-harness-claudemd--agentsmd) and the [Auto-update receiver behavior](#auto-update-receiver-behavior) section for the long version.
 
 The OpenClaw channel plugin is loaded once when the gateway starts, so you DO need to restart the gateway to pick up plugin changes.
 
@@ -269,6 +269,7 @@ cd ~/Projects/agent-bridge       # or wherever you cloned it
 ./scripts/update.sh              # safe mode — prompts before anything risky
 ./scripts/update.sh --yes        # unattended (still warns, but no prompts)
 ./scripts/update.sh --skip-openclaw   # skip the gateway-restart step
+./scripts/update.sh --skip-reload     # skip the /reload-plugins automation step (descriptor-only refresh)
 ./scripts/update.sh --auto       # SessionStart-safe: quiet no-op, no prompts, skips OpenClaw restart
 ```
 
@@ -436,12 +437,14 @@ The override accepts an integer millisecond value, bounded **30000 (30 s)** ≤ 
 
    Alternatively, wrap the plugin spawn in a small shell shim that exports the env var before launching `node build/index.js`. (For OpenClaw, set the env var in the gateway's launchd plist or however you launch the workspace.)
 
-2. **Reload plugins** so the new MCP child picks up the env. In Claude Code: `/reload-plugins` (or invoke the `self-reload-plugins` skill). Confirm the override took effect by checking the unified log for an `auto_update_check.armed` event with `source: "env"` and `intervalMs: 60000`:
+2. **Reload plugins so a NEW MCP child is spawned with the override.** `/reload-plugins` or `self-reload-plugins` is **not enough on its own** if a healthy channel-owner is already running — Patch F's lease coordination keeps the existing child alive and demotes the freshly-spawned one to standby, so the env-var override never takes effect on the active probe. To guarantee a brand-new MCP child reads the new env, do a **full Claude Code restart** (or kill the existing `agent-bridge` MCP child and let `/reload-plugins` re-spawn it). Confirm the override took effect by checking the MCP server log for an `auto_update_check.armed` event with `source: "env"` and `intervalMs: 60000`:
 
    ```bash
-   grep '"event":"auto_update_check.armed"' ~/.agent-bridge/logs/skills.log* 2>/dev/null \
-     | tail -3 | jq '.context'
+   grep 'auto_update_check.armed' ~/.agent-bridge/logs/mcp-server.log \
+     | tail -3
    ```
+
+   The `auto_update_check.armed` event is written by the MCP server to `~/.agent-bridge/logs/mcp-server.log` (not `skills.log`). The `auto-update-coord.sh` helper writes its `auto_update_coord.*` events to a separate `~/.agent-bridge/logs/agent-bridge.log` file.
 
 3. **From any other peer**, push a small benign commit to `EthanSK/agent-bridge` `main` — a CHANGELOG nudge, a docs typo fix, anything that bumps `origin/main` past the test peer's `HEAD`. Note the new SHA.
 
@@ -934,13 +937,15 @@ Pre-3.9.0, the watcher archived every inbound message the moment `notifications/
 | `~/.agent-bridge/inbox/<target>/<id>.json` | Inbound, not yet pushed. |
 | `~/.agent-bridge/inbox/.pending-ack/<target>/<id>.json` | Pushed to stdout, awaiting render confirmation. Sidecar `<id>.meta.json` carries `pushedAt`, retry count, listener-count snapshot. |
 | `~/.agent-bridge/inbox/.archive/<target>/<id>.json` | Confirmed delivered (alive-evidence + ≥ 5 s elapsed). |
-| `~/.agent-bridge/inbox/.failed/.exhausted/<id>.json` | Retry cap (3) exceeded — channel is presumed dead. |
+| `~/.agent-bridge/inbox/.failed/.exhausted/<id>.json` | Retry cap (1, 3.12.1+) exceeded — channel is presumed dead. |
 
 A poll-cycle tick (~2 s cadence) decides between three actions per pending entry:
 
-- **Finalize** if `pushedAt > 5 s` ago AND alive-evidence is present (a tool call landed after `pushedAt`, OR a `bridge_receive_messages` long-poll listener is currently parked, OR the channel-callback was re-registered post-push). Move file to `.archive/`.
-- **Re-inject** if `pushedAt > 60 s` ago AND no alive-evidence. Move file back to `inbox/<target>/` for another push attempt; increment retries.
-- **Exhaust** if retries hit 3. Move file to `.failed/.exhausted/` and emit `channel.pending_exhausted`.
+- **Finalize** if `pushedAt > 5 s` ago AND alive-evidence is present (a tool call landed after `pushedAt`, OR a `bridge_receive_messages` long-poll listener is currently parked, OR the channel-callback was re-registered post-push, OR a **later successfully-rendered channel push** for some other message proves the JSON-RPC pipe is still moving — added in 3.10.1 to cover no-tool replies). Move file to `.archive/`.
+- **Re-inject** if `pushedAt > 180 s` ago (3.12.1; was 60 s in 3.9.0–3.12.0) AND no alive-evidence. Move file back to `inbox/<target>/` for another push attempt; increment retries.
+- **Exhaust** if retries hit 1 (3.12.1; was 3 in 3.9.0–3.12.0). Move file to `.failed/.exhausted/` and emit `channel.pending_exhausted`.
+
+**Why these windows changed in 3.12.1.** With the 3.9.0 windows (60 s safety net + 3 retries) the same `<channel>` block could be pushed up to **4 times** for a single message over ~4 minutes whenever the receiver was reasoning hard but not invoking tools — a normal slow-thinking pattern. 3.12.1 raised the safety-net to 180 s and lowered the retry cap to 1, capping worst-case duplicates at **2**. Trade-off: a genuinely-dead receiver wastes 3 minutes (vs 1 minute) before the single reinject, but the dead-channel escape-hatch + handover-on-restart paths still recover lost messages without depending on multiple per-message reinjects. See `CHANGELOG.md` 3.12.1 entry for the evidence and tuning rationale.
 
 An additional **escape-hatch** trips when 5+ pushes within 30 s yield zero alive-evidence: the channel is flagged dead, future emissions skip the JSON-RPC notification entirely and stage straight to `.pending-ack/` for the next plugin reload to replay (`channel.dead_escape_hatch` event).
 
@@ -1088,7 +1093,7 @@ All agent-bridge MCP tools (`bridge_send_message`, `bridge_status`, `bridge_run_
 ```text
 ToolSearch select:mcp__plugin_agent-bridge_agent-bridge__bridge_send_message,...
 bridge_send_message(machine="...", target="...", message="...")
-bridge_receive_messages(wait: true, timeout_ms: 60000)  # for replies
+bridge_receive_messages(wait: true, timeout_seconds: 60)  # for replies (server cap 60s)
 ```
 
 File-drop workarounds (writing JSON directly into peer's `~/.agent-bridge/inbox/<target>/<id>.json` via SCP) are NOT needed and should not be used — they bypass the watcher's validation/lease guarantees.
@@ -1234,6 +1239,24 @@ Install the native OpenClaw channel plugin (`openclaw-channel/`):
 Registers `agent-bridge` as a first-class OpenClaw channel (same tier as Telegram) via `api.registerChannel()`. Inbound messages dispatch through `dispatchInboundReplyWithBase` from `openclaw/plugin-sdk/compat` — the same dispatch primitive used by the native IRC / Nextcloud Talk channels — so a bridge message arriving for a Telegram-bound target runs a real agent turn and the reply lands in the Telegram chat. No CLI shell-out, no scanner bypass. Cross-harness outbound replies SFTP-deliver a `BridgeMessage` back to the sender. Keep the MCP server in `tools-only` mode on OpenClaw, so only the real Claude Code plugin owns `inbox/claude-code/` delivery. See [`openclaw-channel/README.md`](openclaw-channel/README.md) and [`openclaw-channel/ARCHITECTURE.md`](openclaw-channel/ARCHITECTURE.md).
 
 > **Migrating from v1.3.0 (`openclaw-plugin/`)?** That extension plugin has been removed as of v2.0.0. Delete any `plugins.entries["agent-bridge"]` block from your config and point `plugins.load.paths` at the new `openclaw-channel/` directory. The gateway hot-reloads on config change.
+
+> 🚨 **`replyVia: "telegram"` is the right default for Telegram-backed OpenClaw personas.** If a single OpenClaw persona is reachable via both Telegram and agent-bridge and you want bridge-originated turns to land in the SAME Telegram thread the human already sees, set `replyVia: "telegram"` at the plugin level (or per-target). Without it, a `fromTarget`-tagged inbound bridge message defaults to the silent `agent-bridge` back-channel and creates a SECOND, hidden session keyed by `agent:main:agent-bridge:<account>:direct:<encoded-peer>` — replies SFTP back over agent-bridge instead of into the chat. The Telegram-visible session and the bridge-driven session diverge, and the user sees nothing on their phone. This is the bridge↔Telegram session split that surfaced 2026-04-30; the fix is config-only:
+>
+> ```jsonc
+> // ~/.openclaw/openclaw.json
+> {
+>   "channels": {
+>     "agent-bridge": {
+>       "enabled": true,
+>       "config": {
+>         "replyVia": "telegram"
+>       }
+>     }
+>   }
+> }
+> ```
+>
+> Precedence (highest first): per-message `BridgeMessage.replyVia` → `targets.<name>.replyVia` → plugin-level `channels["agent-bridge"].config.replyVia` → sender-derived default. Valid values: `"telegram"` | `"agent-bridge"`. Unknown values fall back to `"telegram"` with a warn log. Use `"agent-bridge"` only if you explicitly want a silent peer-to-peer back-channel for that target. See [`openclaw-channel/README.md`](openclaw-channel/README.md) for the full session-keying model.
 
 **How OpenClaw push delivery works:**
 1. Peer's `bridge_send_message` writes a JSON file to `~/.agent-bridge/inbox/openclaw/<target>/` via SFTP over SSH
@@ -1403,21 +1426,32 @@ Machine A (MCP client)                    Machine B (manual MCP client)
 ~/.agent-bridge/
 ├── config                         # Paired machines (INI-style key-value)
 ├── machine-name                   # Optional: override local machine name
-├── .pending-token                 # One-time pairing token (deleted after use)
+├── .identity                      # Local-machine identity / canonical name
+├── .pending-token                 # Pairing token (idempotent across setup runs; delete to rotate)
 ├── .openclaw-v2-delivered         # OpenClaw delivered-ID ledger
+├── .last-update-notified-head     # Auto-update sentinel: last-notified origin/main SHA (3.10.0+)
 ├── inbox/                         # Incoming fan-out root
 │   ├── claude-code/               # Claude Code target; pending <id>.json files
 │   ├── openclaw/<target>/         # OpenClaw targets; pending <id>.json files
 │   ├── .processed                 # Manual-consume dedup tracker
 │   ├── .delivered                 # Claude Code channel-delivery dedup tracker
+│   ├── .pending-ack/              # 3.9.0+ pending-ack staging (per target)
+│   │   └── claude-code/           # Pushed-to-stdout, awaiting alive-evidence
 │   ├── .archive/claude-code/      # Claude Code delivered-message archive
 │   └── .failed/                   # Quarantine root
 │       ├── claude-code/           # Malformed/misrouted files from claude-code/
+│       ├── .exhausted/            # 3.9.0+ retry-cap-exceeded entries (channel presumed dead)
 │       └── _unrouted/             # Legacy flat files with no target
 ├── archive/openclaw/<target>/     # OpenClaw delivered-message archives
 ├── outbox/                        # Copies of sent messages (local tracking)
-├── logs/                          # MCP server logs
-│   └── mcp-server.log
+├── locks/                         # Watcher leases + 3.12.0 auto-update coord locks
+│   ├── claude-code.watcher-lock.json
+│   ├── auto-update.<sha256>.lock  # Per-checkout coord lock (one per real source path)
+│   └── auto-update.<sha256>.state # Cycle/holder/exit metadata sidecar
+├── logs/                          # Unified log directory
+│   ├── mcp-server.log             # MCP server events (auto_update_check.armed, watcher.*, etc.)
+│   ├── mcp-server-stderr.log      # Captured stderr from spawned MCP children
+│   └── agent-bridge.log           # auto-update-coord.sh + bash CLI events (auto_update_coord.*)
 └── keys/                          # SSH key pairs (ED25519)
     ├── agent-bridge_MacBook-Pro
     └── agent-bridge_MacBook-Pro.pub
@@ -2086,12 +2120,15 @@ tailscale ip -4
 
 ### Messages not arriving
 
-1. Check that the MCP server is running: `bridge_inbox_stats` tool or check `~/.agent-bridge/logs/mcp-server.log`
-2. Verify SSH connectivity: `agent-bridge status <machine>`
-3. Check the target-specific inbox, e.g. `ls ~/.agent-bridge/inbox/claude-code/` or `ls ~/.agent-bridge/inbox/openclaw/default/`
-4. Check delivered archives: `ls ~/.agent-bridge/inbox/.archive/claude-code/` and `ls ~/.agent-bridge/archive/openclaw/`
-5. Check for quarantined messages: `find ~/.agent-bridge/inbox/.failed -maxdepth 3 -type f -name '*.json'`
-6. The watcher polls the inbox every 2 s — no external dependencies (fswatch/inotifywait removed in 3.4.3)
+1. **Read the unified log first.** `tail -200 ~/.agent-bridge/logs/mcp-server.log` (and `~/.agent-bridge/logs/agent-bridge.log` for `auto_update_coord.*` events). Look for `notification.push_failed`, `channel.pending_*`, `watcher.lease_*`, and Patch F standby/promotion events before assuming a code bug.
+2. **Check the live MCP child path** before assuming a code bug. `claude mcp list | grep agent-bridge` should show your dev clone path (`~/Projects/agent-bridge/mcp-server/build/index.js`), NOT a stale `~/.claude/plugins/cache/agent-bridge/agent-bridge/X.Y.Z/build/index.js`. If `installed_plugins.json`'s `installPath` references an archived dir, the plugin silently fails to spawn — see [Setup guide → staleness rules](#document-the-staleness-rules-in-your-harness-claudemd--agentsmd) Rule 1.
+3. Check that the MCP server is running: `bridge_inbox_stats` tool or check `~/.agent-bridge/logs/mcp-server.log`. `ps -axww -o pid,command | grep 'agent-bridge.*build/index'` should show one live `node` process.
+4. Verify SSH connectivity: `agent-bridge status <machine>`
+5. Check the target-specific inbox, e.g. `ls ~/.agent-bridge/inbox/claude-code/` or `ls ~/.agent-bridge/inbox/openclaw/default/`. Also check `inbox/.pending-ack/<target>/` — messages staged here have been pushed to stdout but await alive-evidence.
+6. Check delivered archives: `ls ~/.agent-bridge/inbox/.archive/claude-code/` and `ls ~/.agent-bridge/archive/openclaw/`
+7. Check for quarantined messages: `find ~/.agent-bridge/inbox/.failed -maxdepth 3 -type f -name '*.json'` — look for `.failed/.exhausted/` (retry cap exceeded, channel presumed dead) and `.failed/_unrouted/` (target subdir routing failed).
+8. **OpenClaw "agent received message but Telegram chat saw nothing" → bridge↔Telegram session split.** A `fromTarget`-tagged bridge message defaults to the silent `agent-bridge` back-channel, creating a hidden session that replies via SFTP instead of into the Telegram chat. Set `channels["agent-bridge"].config.replyVia = "telegram"` in `~/.openclaw/openclaw.json`. See the OpenClaw section above for the precedence chain.
+9. The watcher polls the inbox every 2 s — no external dependencies (fswatch/inotifywait removed in 3.4.3).
 
 ### `paired machine "..." not found` (label mismatch)
 
