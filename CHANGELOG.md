@@ -1,5 +1,18 @@
 # Changelog
 
+## agent-bridge 3.14.2 — 2026-05-02
+
+### Bin-bundled `plugin-registry-rewire.mjs` + multi-location CLI search
+
+Dell-Claude (during voice-6055 self-setup verification) hit a subtle distribution gap: when agent-bridge is installed via the `install.sh` / `install.ps1` bin layout (binary at `/usr/local/bin/agent-bridge` or `%LOCALAPPDATA%\agent-bridge\bin\agent-bridge`), the CLI's `plugin-registry-rewire` dispatch function couldn't find the helper script — `scripts/plugin-registry-rewire.mjs` lives in the dev clone, not next to the bin. Workaround was to invoke the script directly from a workspace clone path. Permanent fix in this release.
+
+- **`agent-bridge` CLI** — `cmd_plugin_registry_rewire` now searches multiple candidate locations in order: (1) `<script-dir>/scripts/plugin-registry-rewire.mjs` (dev-clone layout), (2) `<script-dir>/plugin-registry-rewire.mjs` (bin layout — bundled by the installers), (3) `~/Projects/agent-bridge/scripts/plugin-registry-rewire.mjs`, (4) `~/.openclaw/workspace/agent-bridge/scripts/plugin-registry-rewire.mjs`, (5–6) Windows-equivalents using `$USERPROFILE`. First hit wins. Error message lists searched paths if all miss.
+- **`install.sh`** — additionally fetches `plugin-registry-rewire.mjs` from origin and drops it next to the `agent-bridge` bin (`/usr/local/bin/plugin-registry-rewire.mjs`). Honors the same `sudo` write-fallback as the bin install. Soft-fails with a `(note: ...)` log if the fetch fails (CLI still works via dev-clone search).
+- **`install.ps1`** — identical bundle step for Windows: writes `plugin-registry-rewire.mjs` into `%LOCALAPPDATA%\agent-bridge\bin\` next to `agent-bridge` + the `.cmd` shim. Soft-fails with the same fallback message.
+- **No new tests** — pure path-resolution + installer-fetch change. Existing 83/83 still pass.
+
+After this release, re-running `install.sh` / `install.ps1` is sufficient to refresh the bundled rewire script on a previously-installed bin layout. Dev-clone users are unchanged — the script has always been at `<repo>/scripts/plugin-registry-rewire.mjs`.
+
 ## agent-bridge 3.14.1 — 2026-05-02
 
 ### Codex-review fixes for the v3.14.0 plugin-registry-rewire step
