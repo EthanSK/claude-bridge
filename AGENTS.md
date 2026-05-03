@@ -160,6 +160,18 @@ When the user names an OpenClaw persona, route to the matching `target` literall
 
 Voice transcripts regularly mis-hear persona names — `Claude the third` → `Cloward third` / `Cloud the third`, `Claudibo` → `Cloudy boy`, `Clord` → `Chord` / `Cord`, `Open Claw` → `Open Core`. Re-read the transcript twice if a persona name is involved; prefer the explicit-persona reading over the default. Canonical rule + full rationale (incl. routing-mistake background): [`docs/oc-persona-routing.md`](docs/oc-persona-routing.md).
 
+### Bridge message relay to Ethan
+
+**Relay every inbound bridge message to Ethan via Telegram** as a brief 1-2 line summary (sender machine + target + the actionable ask), so Ethan has live visibility into what other harnesses are asking. Reply via bridge first if a response is needed; THEN summarize on Telegram. Don't suppress the relay just because the message looks like routine internal coordination — Ethan wants to see all of it.
+
+Format example:
+
+> 📡 Bridge from MBP-Claude (target=claude-code): "Diagnostic — please check OC xhigh thinking on Mini..." Replied via bridge with findings.
+
+Exception: pure-noise heartbeats / liveness pings with no actionable content (e.g. `bridge_status` polls). Those can be silent.
+
+Established 2026-05-03 (Ethan voice 6181 + 6186, applies to all paired harnesses). Canonical rule + full rationale (format guidance, what counts as relayable, order of operations): [`docs/bridge-relay-to-telegram.md`](docs/bridge-relay-to-telegram.md).
+
 ### Open an interactive SSH session
 ```bash
 agent-bridge connect MacBook-Pro

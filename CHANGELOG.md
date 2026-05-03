@@ -1,5 +1,22 @@
 # Changelog
 
+## agent-bridge 3.14.6 — 2026-05-03
+
+### Bridge message relay to Ethan via Telegram — built into agent-bridge so it travels with the plugin
+
+Mini-Claude (and historically MBP-Claude) had been inconsistently relaying inbound bridge messages to Ethan over Telegram — sometimes folding them into broader status updates, sometimes going silent on purely-internal coordination chatter (like MBP xhigh diagnostics) on the assumption that "internal" meant "uninteresting." OpenClaw already does this correctly. Ethan voice 6181: *"Do you have in your instructions to relay any agent-bridge messages you get to Telegram? OpenClaw does correctly. I want to know if Claude Code does that."* Voice 6186: *"this rule should live in agent-bridge docs (so it travels with the plugin and shows up in setup instructions for any harness installing agent-bridge)."*
+
+3.14.6 ships the relay rule as part of agent-bridge so every paired harness gets it without depending on dot-claude sync. **No behavior change** — pure documentation + tool-description wiring (same shape as the 3.14.5 OC persona routing rollout).
+
+- **New canonical doc** — `docs/bridge-relay-to-telegram.md`. Full rule, format example (`📡 Bridge from MBP-Claude (target=claude-code): "..." Replied via bridge with findings.`), rationale, what counts as relayable, what can be silent (pure-noise heartbeats / `bridge_status` polls), order of operations (bridge-reply first → Telegram-relay second), and format guidance.
+- **`bridge_send_message` tool description** — appended a 4-line "Recipient relay rule" note directly under the OC persona block so future agents see it the moment they read the tool schema. Points at `docs/bridge-relay-to-telegram.md` for canonical text.
+- **`AGENTS.md`** — added "Bridge message relay to Ethan" subsection right after "OC persona routing", with format example + canonical-doc link.
+- **`README.md`** — added a one-paragraph callout right after the OC persona callout in the "Message routing / targets" section, pointing at the canonical doc + AGENTS.md mirror + tool-description mirror.
+- **DRY by design** — only `docs/bridge-relay-to-telegram.md` carries the full canonical text. Other surfaces have abbreviated versions that link back. Same approach as the 3.14.5 OC persona rollout.
+- **No code change, no test change beyond version-string assertions** — bash CLI VERSION, `MCP_SERVER_VERSION` in `config.ts`, `mcp-server/package.json`, `mcp-server/.claude-plugin/plugin.json`, `mcp-server/package-lock.json`, and the in-test version-equality assertions all bump 3.14.5 → 3.14.6.
+
+The dot-claude side rule (a new bullet under "Telegram reply rules" in `~/.claude/CLAUDE.md`) is intentionally **kept**. Defense-in-depth: dot-claude carries the rule for any Claude Code session regardless of agent-bridge install state; agent-bridge carries it for any new harness / fleet machine that picks up the plugin without a dot-claude sync.
+
 ## agent-bridge 3.14.5 — 2026-05-03
 
 ### OC persona name routing — built into agent-bridge so it travels with the plugin
