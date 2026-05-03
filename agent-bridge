@@ -9,7 +9,7 @@ set -euo pipefail
 
 INVOKED_AS="$(basename "$0")"
 
-VERSION="3.14.3"
+VERSION="3.14.4"
 
 # -- Colours (ANSI) ----------------------------------------------------------
 RED='\033[0;31m'
@@ -2018,6 +2018,162 @@ cmd_plugin_registry_rewire() {
   exec node "$rewire_script" "$@"
 }
 
+cmd_mcp_incident_report() {
+  # 3.14.4 — Human-readable post-mortem report for an MCP-disconnect window.
+  # Greps ~/.agent-bridge/logs/agent-bridge.log for the relevant Patch F /
+  # auto-update / epitaph events around a given timestamp and prints a one-
+  # screen summary so debugging is one command, not log-spelunking.
+  #
+  # Usage:
+  #   agent-bridge mcp-incident-report [--around <ISO-timestamp>] [--window-mins N]
+  #
+  # Defaults:
+  #   --around       now
+  #   --window-mins  15
+  local around_iso="" window_mins=15
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --around)         around_iso="$2"; shift 2 ;;
+      --around=*)       around_iso="${1#*=}"; shift ;;
+      --window-mins)    window_mins="$2"; shift 2 ;;
+      --window-mins=*)  window_mins="${1#*=}"; shift ;;
+      --help|-h)        cmd_mcp_incident_report_help; exit 0 ;;
+      *) die "unknown flag: $1 (try --help)" ;;
+    esac
+  done
+  case "$window_mins" in ''|*[!0-9]*) die "--window-mins must be a positive integer" ;; esac
+
+  local log_file="$HOME/.agent-bridge/logs/agent-bridge.log"
+  [ -f "$log_file" ] || die "log file not found: $log_file (no events to report)"
+
+  command -v node >/dev/null 2>&1 || die "node is required for 'agent-bridge mcp-incident-report'"
+
+  # Use node for ISO-timestamp arithmetic + JSON line filtering. Pure bash
+  # date math is too platform-fragile (BSD vs GNU date semantics differ).
+  AROUND_ISO="$around_iso" WINDOW_MINS="$window_mins" LOG_FILE="$log_file" node --input-type=module -e '
+    import { readFileSync } from "node:fs";
+    const around = process.env.AROUND_ISO ? new Date(process.env.AROUND_ISO) : new Date();
+    if (Number.isNaN(around.getTime())) {
+      process.stderr.write(`Invalid --around timestamp: ${process.env.AROUND_ISO}\n`);
+      process.exit(2);
+    }
+    const windowMs = Number(process.env.WINDOW_MINS) * 60_000;
+    const lo = around.getTime() - windowMs;
+    const hi = around.getTime() + windowMs;
+
+    const RELEVANT = new Set([
+      "auto_update_check.armed",
+      "auto_update_check.scheduled",
+      "auto_update_check.exit",
+      "auto_update_runner.start",
+      "auto_update_runner.end",
+      "auto_update_runner.error",
+      "auto_update_runner.kill_will_evict_active_session",
+      "auto_update_runner.epitaph",
+      "patch_f.peer_version_kill",
+      "patch_f.peer_version_sigkill",
+      "patch_f.standby",
+      "patch_f.check_error",
+      "watcher.lease_acquired",
+      "watcher.lease_stolen",
+      "watcher.lease_busy",
+      "signal.evidence",
+      "signal.ignored_channel_owner",
+      "server.shutdown",
+      "server.starting",
+      "server.ready",
+    ]);
+
+    let raw;
+    try { raw = readFileSync(process.env.LOG_FILE, "utf8"); }
+    catch (err) { process.stderr.write(`failed to read log: ${err}\n`); process.exit(1); }
+
+    const events = [];
+    for (const line of raw.split("\n")) {
+      const t = line.trim(); if (!t) continue;
+      let ev; try { ev = JSON.parse(t); } catch { continue; }
+      if (!ev || !ev.ts || !ev.event) continue;
+      const ts = new Date(ev.ts).getTime();
+      if (Number.isNaN(ts)) continue;
+      if (ts < lo || ts > hi) continue;
+      if (!RELEVANT.has(ev.event)) continue;
+      events.push({ ev, ts });
+    }
+    events.sort((a, b) => a.ts - b.ts);
+
+    const head = `AGENT-BRIDGE MCP INCIDENT REPORT — ${around.toISOString()} (±${process.env.WINDOW_MINS}m window)`;
+    console.log("");
+    console.log(head);
+    console.log("=".repeat(head.length));
+    console.log("");
+    console.log("Events:");
+    if (events.length === 0) {
+      console.log("  (no relevant agent-bridge events in this window)");
+      console.log("");
+      console.log("SUMMARY: clean window — no Patch F / auto-update / shutdown events recorded.");
+      process.exit(0);
+    }
+    for (const { ev } of events) {
+      const t = new Date(ev.ts).toISOString().replace(/\..*Z$/, "Z");
+      const ctx = ev.context || {};
+      let extra = "";
+      if (ev.event === "auto_update_runner.kill_will_evict_active_session") {
+        extra = ` peer_pid=${ctx.peer_pid} peer_v=${ctx.peer_version} our_v=${ctx.our_version} would_orphan=${ctx.would_orphan_this_session}`;
+      } else if (ev.event === "patch_f.peer_version_kill" || ev.event === "patch_f.peer_version_sigkill") {
+        extra = ` peer_pid=${ctx.peer_pid} peer_v=${ctx.peer_version} our_v=${ctx.our_version}`;
+      } else if (ev.event === "auto_update_runner.epitaph") {
+        extra = ` pid=${ctx.pid} v=${ctx.version} reason=${ctx.kill_reason}`;
+      } else if (ev.event === "patch_f.standby") {
+        extra = ` holder=${ctx.holder} peer_v=${ctx.peer_version} our_v=${ctx.our_version}`;
+      } else if (ev.event === "watcher.lease_acquired" || ev.event === "watcher.lease_stolen") {
+        extra = ` pid=${ctx.pid ?? ctx.holderPid ?? "?"}`;
+      } else if (ev.event === "signal.evidence" || ev.event === "signal.ignored_channel_owner") {
+        extra = ` signal=${ctx.signal} pid=${ctx.pid}`;
+      }
+      console.log(`  [${t}] ${ev.event.padEnd(48)}${extra}`);
+    }
+
+    // Build a concise SUMMARY line. Look for the most-recent kill or epitaph.
+    const lastKill = [...events].reverse().find((x) =>
+      x.ev.event === "patch_f.peer_version_kill" || x.ev.event === "patch_f.peer_version_sigkill");
+    const lastEpitaph = [...events].reverse().find((x) => x.ev.event === "auto_update_runner.epitaph");
+    const preKill = [...events].reverse().find((x) => x.ev.event === "auto_update_runner.kill_will_evict_active_session");
+
+    console.log("");
+    if (lastKill) {
+      const c = lastKill.ev.context || {};
+      console.log(`SUMMARY: Patch F killed pid=${c.peer_pid} (v=${c.peer_version}) because our build (v=${c.our_version}) is newer.`);
+      if (preKill) {
+        const orphan = preKill.ev.context?.would_orphan_this_session;
+        if (orphan === true) {
+          console.log("AFFECTED: Claude Code session(s) attached to the killed peer lost their MCP transport.");
+        } else if (orphan === false) {
+          console.log("AFFECTED: peer was idle (stale heartbeat); likely no live session lost.");
+        } else {
+          console.log("AFFECTED: orphan-state unknown — check session presence at the time of kill.");
+        }
+      }
+      console.log(`RECOVERY: /reload-plugins on affected sessions, OR fully restart Claude Code to load v=${c.our_version}.`);
+    } else if (lastEpitaph) {
+      const c = lastEpitaph.ev.context || {};
+      console.log(`SUMMARY: agent-bridge MCP child pid=${c.pid} (v=${c.version}) exited with reason=${c.kill_reason}.`);
+      console.log("RECOVERY: /reload-plugins on affected sessions, OR fully restart Claude Code.");
+    } else {
+      console.log("SUMMARY: no kill/epitaph events in this window — see Events list above for what did happen.");
+    }
+  '
+}
+
+cmd_mcp_incident_report_help() {
+  printf '\nagent-bridge mcp-incident-report — post-mortem MCP disconnect summary\n\n'
+  printf 'Usage:\n  agent-bridge mcp-incident-report [--around <ISO-timestamp>] [--window-mins N]\n\n'
+  printf 'Greps ~/.agent-bridge/logs/agent-bridge.log for Patch F kills, auto-update\n'
+  printf 'runs, watcher lease handovers, signals, and epitaphs in the given window\n'
+  printf 'and prints a human-readable timeline + SUMMARY.\n\n'
+  printf 'Defaults: --around=now, --window-mins=15.\n\n'
+  printf 'Example:\n  agent-bridge mcp-incident-report --around 2026-05-03T12:11:00Z --window-mins 5\n\n'
+}
+
 cmd_help() {
   printf '\n'
   printf "${BOLD}agent-bridge${RESET} v%s\n" "$VERSION"
@@ -2033,6 +2189,7 @@ cmd_help() {
   printf '  config <machine>   View or update machine config (--internet-host, --internet-port)\n'
   printf '  chime ...          Fleet-aware completion chimes and hook helpers\n'
   printf '  plugin-registry-rewire  Self-heal stale plugin-registry entries (Claude Code + OpenClaw)\n'
+  printf '  mcp-incident-report     Post-mortem report of MCP disconnect events around a timestamp\n'
   printf '  connect <machine>  Open an interactive SSH session\n'
   printf '  run <machine> "cmd"  Run a plain shell command on a paired machine (diagnostics only)\n'
   printf '  list               List all paired machines\n'
@@ -2081,6 +2238,7 @@ main() {
     config)   cmd_config "$@" ;;
     chime)    cmd_chime "$@" ;;
     plugin-registry-rewire) cmd_plugin_registry_rewire "$@" ;;
+    mcp-incident-report) cmd_mcp_incident_report "$@" ;;
     connect)  cmd_connect "$@" ;;
     run)      cmd_run "$@" ;;
     list)     cmd_list "$@" ;;

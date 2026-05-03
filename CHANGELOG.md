@@ -1,5 +1,22 @@
 # Changelog
 
+## agent-bridge 3.14.4 — 2026-05-03
+
+### MCP-disconnect cascade fix + observability
+
+Fixes the recurring "BridgeMCP offline" problem documented in `docs/mcp-disconnect-investigation-2026-05-03.md`. Root cause: every Claude Code session boot — **including subagent boots dispatched via the Task tool** — fired `scripts/update.sh --auto` via SessionStart hook, which during a version-bump window let Patch F's stale-version peer-kill SIGTERM/SIGKILL the parent session's running channel-owner. Net effect: every subagent dispatch in a fresh-version window assassinated the user's MCP transport, requiring `/reload-plugins` or a full Claude Code restart.
+
+Two changes ship in lock-step. The dot-claude side (`~/.claude/settings.json` + `~/.claude/scripts/maybe-update-agent-bridge.sh`) gates the SessionStart hook so subagent boots no longer pull/rebuild. The agent-bridge side (this release) **keeps Patch F's kill behaviour unchanged** — Ethan voice 6163: *"I don't want to defer the newer sessions. It should always update the latest version if possible and kill the old version."* — and instead invests in observability so future MCP-disconnect debugging is one command, not log-spelunking.
+
+- **New event `auto_update_runner.kill_will_evict_active_session`** (warn level) — fires *before* every Patch F SIGTERM with full context: `peer_pid`, `peer_version`, `our_pid`, `our_version`, `peer_heartbeat_age_ms`, `would_orphan_this_session`, and a plain-English `human_summary` (`"I'm about to kill peer pid=X v=Y because I'm v=Z and Patch F prefers newer. Peer last heartbeat 250ms ago. This will likely disconnect the active session attached to that peer."`). Fresh heartbeat (<30 s) → `would_orphan_this_session=true`; stale heartbeat → `false`.
+- **New event `auto_update_runner.epitaph`** (info level) — fires inside `process.on('exit')` capturing `pid`, `parent_pid`, `version`, `kill_reason`, `kill_initiator_pid`, `last_tool_call_ts`, `lease_state`, `watcher_started`, `uptime_s`, `trigger`. SIGTERM with parent alive sets `kill_reason: "patch_f.peer_version_kill_suspected"` (the dominant disconnect path); orphan-watchdog and sibling-takeover shutdowns capture their reason via `shutdown:<reason>`. Also breadcrumbed to `~/.agent-bridge/logs/mcp-server-sync-exit.log` so a wedged logger can't hide the death cause.
+- **Patch F decisions promoted from WARN → INFO** — `patch_f.peer_version_kill`, `patch_f.peer_version_sigkill`, `patch_f.standby`, and `watcher.lease_stolen` now log at default INFO level so they're visible in the standard log view (was: only when filtering for `level=warn`). `patch_f.check_error` stays warn (real error path).
+- **New CLI verb `agent-bridge mcp-incident-report [--around <ISO>] [--window-mins N]`** — greps `~/.agent-bridge/logs/agent-bridge.log` for Patch F kills, auto-update runs, watcher lease handovers, signals, and epitaphs in the given window (default: now ±15 min), prints a human-readable timeline + SUMMARY/AFFECTED/RECOVERY block. ~140 lines of bash + node-glue, registered in `agent-bridge --help`. Lets users go from "BridgeMCP just dropped" to "here's the exact event chain and what to do" in one command.
+- **Tests** — 3 new tests added to `mcp-server/test/unified-channel.test.mjs`: pre-kill warning fires-before-kill ordering, epitaph fires on SIGTERM-initiated shutdown, mcp-incident-report extracts events around a target timestamp. **86/86 tests pass** (was 83/83 in 3.14.3 + 3 new = 86).
+- **No code change to Patch F's kill decision** — the kill still happens whenever a newer-version peer is observed. Ethan was explicit on voice 6163: keep the kill, just stop firing it from subagent dispatches and log the heck out of it when it does fire.
+
+**Manual step**: this version requires a full **Claude Code restart** on each machine to pick up the new MCP server runtime — `/reload-plugins` is not enough (per the well-known limitation: a healthy channel-owner lease defeats the migration). After restart, the subagent-gate kicks in and disconnect cascades stop.
+
 ## agent-bridge 3.14.3 — 2026-05-03
 
 ### OpenClaw Telegram-visible Agent Bridge relay receipts

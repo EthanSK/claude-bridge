@@ -820,7 +820,7 @@ function tryAcquireWatcherLease(role: string): WatcherLeaseAcquireResult {
         );
         logEvent({
           event: 'watcher.lease_stolen',
-          level: 'warn',
+          level: 'info',
           msg: `Removed stale watcher lease for ${CLAUDE_CODE_TARGET}`,
           context: {
             target: CLAUDE_CODE_TARGET,

@@ -102,10 +102,10 @@ test('source-level: Patches F, G, H wired into unified plugin', async () => {
   assert.ok(indexSrc.includes('signal.evidence'), 'signal.evidence event wired');
   assert.ok(indexSrc.includes('last_notification_at_ms'), 'last_notification_at_ms tracked');
   assert.ok(indexSrc.includes('tool_calls_received_count'), 'tool_calls_received_count tracked');
-  // Version constant — 3.14.3, sourced from config.ts
+  // Version constant — 3.14.4, sourced from config.ts
   assert.ok(
-    /MCP_SERVER_VERSION\s*=\s*['"]3\.14\.3['"]/.test(configSrc),
-    'MCP_SERVER_VERSION must be 3.14.3 in config.ts',
+    /MCP_SERVER_VERSION\s*=\s*['"]3\.14\.4['"]/.test(configSrc),
+    'MCP_SERVER_VERSION must be 3.14.4 in config.ts',
   );
   assert.ok(
     indexSrc.includes('/claude\\.app\\/Contents\\/MacOS\\/claude'),
@@ -133,7 +133,7 @@ test('Patch F (3.7.1): server stays in standby when a same-version healthy peer 
     token: `${process.pid}-fake-${Math.random().toString(36).slice(2, 10)}`,
     startedAt: Date.now(),
     updatedAt: Date.now(),
-    version: '3.14.3', // same version as our build → no kill
+    version: '3.14.4', // same version as our build → no kill
   };
   await writeFile(lockPath, JSON.stringify(fakeLease, null, 2));
 
@@ -289,7 +289,7 @@ test('Patch F (3.7.1): SIGTERMs and replaces a peer with an older version', { ti
       const killEvent = events.find((e) => e.event === 'patch_f.peer_version_kill');
       assert.ok(killEvent, 'expected patch_f.peer_version_kill event for stale-version peer');
       assert.equal(killEvent.context.peer_version, '3.6.0', 'peer_version logged');
-      assert.equal(killEvent.context.our_version, '3.14.3', 'our_version logged');
+      assert.equal(killEvent.context.our_version, '3.14.4', 'our_version logged');
       assert.equal(killEvent.context.peer_pid, peer.pid, 'peer_pid logged');
     } finally {
       try { child.kill('SIGTERM'); } catch {}
@@ -456,7 +456,7 @@ test('Patch H: tools/list reports claude_code_channel_status; tools/call returns
     assert.equal(typeof parsed.pid, 'number', 'status.pid is a number');
     assert.equal(parsed.pid, child.pid, 'status.pid matches the plugin child pid');
     assert.equal(typeof parsed.uptime_s, 'number', 'status.uptime_s is a number');
-    assert.equal(parsed.version, '3.14.3', 'status.version is 3.14.3');
+    assert.equal(parsed.version, '3.14.4', 'status.version is 3.14.4');
     assert.equal(typeof parsed.machine, 'string', 'status.machine is a string');
     assert.equal(parsed.machine, 'test-patch-h', 'status.machine reflects env override');
     assert.equal(typeof parsed.watcher_active, 'boolean', 'status.watcher_active is boolean');
@@ -560,4 +560,158 @@ test('unified plugin: watcher detects new inbox file, pushes channel notificatio
     await sleep(100);
     await rm(home, { recursive: true, force: true });
   }
+});
+
+// ─── 3.14.4 — Pre-kill warning event + epitaph ──────────────────────────────
+test('3.14.4: kill_will_evict_active_session fires before peer_version_kill', { timeout: 12_000 }, async () => {
+  const home = await mkdtemp(join(tmpdir(), 'agent-bridge-3.14.4-prekill-'));
+  const lockDir = join(home, '.agent-bridge', 'locks');
+  const lockPath = join(lockDir, 'claude-code.watcher-lock.json');
+  await mkdir(lockDir, { recursive: true, mode: 0o700 });
+
+  const peer = spawn(process.execPath, [
+    '-e',
+    `process.on('SIGTERM', () => { setTimeout(() => process.exit(0), 200); });
+     setInterval(() => {}, 1000);`,
+  ], { stdio: 'ignore' });
+  await sleep(200);
+
+  try {
+    const peerLease = {
+      pid: peer.pid,
+      target: 'claude-code',
+      role: 'channel-owner',
+      token: `${peer.pid}-old-${Math.random().toString(36).slice(2, 10)}`,
+      startedAt: Date.now(),
+      updatedAt: Date.now(), // fresh heartbeat — would_orphan_this_session=true
+      version: '3.6.0', // older than 3.14.4
+    };
+    await writeFile(lockPath, JSON.stringify(peerLease, null, 2));
+
+    const child = startServer(home, { AGENT_BRIDGE_ROLE: 'channel-owner' });
+    try {
+      await Promise.race([
+        new Promise((resolve) => peer.once('exit', resolve)),
+        sleep(8_000),
+      ]);
+
+      // Wait an extra moment for log file flushes to land.
+      await sleep(500);
+
+      const events = await readEvents(home);
+      const preKill = events.find((e) => e.event === 'auto_update_runner.kill_will_evict_active_session');
+      assert.ok(preKill, 'expected auto_update_runner.kill_will_evict_active_session event before peer kill');
+      assert.equal(preKill.context.peer_pid, peer.pid, 'peer_pid logged in pre-kill warning');
+      assert.equal(preKill.context.peer_version, '3.6.0', 'peer_version logged');
+      assert.equal(preKill.context.our_version, '3.14.4', 'our_version logged');
+      assert.equal(preKill.context.would_orphan_this_session, true, 'fresh heartbeat → would_orphan_this_session=true');
+      assert.ok(typeof preKill.context.human_summary === 'string', 'human_summary string present');
+      assert.ok(preKill.context.human_summary.includes('disconnect'), 'human_summary mentions disconnect risk');
+
+      // Pre-kill warning MUST come before the actual kill event.
+      const killIdx = events.findIndex((e) => e.event === 'patch_f.peer_version_kill');
+      const preKillIdx = events.findIndex((e) => e.event === 'auto_update_runner.kill_will_evict_active_session');
+      assert.ok(preKillIdx >= 0 && killIdx >= 0, 'both events present');
+      assert.ok(preKillIdx < killIdx, 'pre-kill warning must be logged BEFORE the kill itself');
+    } finally {
+      try { child.kill('SIGTERM'); } catch {}
+      await Promise.race([
+        new Promise((resolve) => child.once('exit', resolve)),
+        sleep(2000),
+      ]);
+      try { child.kill('SIGKILL'); } catch {}
+    }
+  } finally {
+    try { peer.kill('SIGKILL'); } catch {}
+    await sleep(100);
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('3.14.4: epitaph fires on SIGTERM-initiated shutdown', { timeout: 10_000 }, async (t) => {
+  if (process.platform === 'win32') {
+    t.skip("Windows child.kill('SIGTERM') can terminate without exercising Node's SIGTERM handler");
+    return;
+  }
+  // Spin up a server with Patch G disabled so SIGTERM actually triggers shutdown.
+  const home = await mkdtemp(join(tmpdir(), 'agent-bridge-3.14.4-epitaph-'));
+  const child = startServer(home, {
+    AGENT_BRIDGE_ROLE: 'channel-owner',
+    AGENT_BRIDGE_DISABLE_PATCH_G: '1',
+  });
+  try {
+    // Give the server a moment to boot + acquire the lease.
+    await sleep(1500);
+    child.kill('SIGTERM');
+    await Promise.race([
+      new Promise((resolve) => child.once('exit', resolve)),
+      sleep(5000),
+    ]);
+    // Allow log flushes.
+    await sleep(300);
+
+    const events = await readEvents(home);
+    const epitaph = events.find((e) => e.event === 'auto_update_runner.epitaph');
+    assert.ok(epitaph, 'expected auto_update_runner.epitaph event after SIGTERM-initiated shutdown');
+    assert.equal(epitaph.context.version, '3.14.4', 'epitaph carries our version');
+    assert.ok(
+      typeof epitaph.context.kill_reason === 'string' && epitaph.context.kill_reason.length > 0,
+      'epitaph carries a kill_reason string',
+    );
+    assert.ok(
+      epitaph.context.pid === child.pid || typeof epitaph.context.pid === 'number',
+      'epitaph carries pid',
+    );
+  } finally {
+    try { child.kill('SIGKILL'); } catch {}
+    await sleep(100);
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+// ─── 3.14.4 — mcp-incident-report CLI extracts events in window ─────────────
+test('3.14.4: agent-bridge mcp-incident-report extracts events around timestamp', { timeout: 10_000 }, async () => {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const execFileP = promisify(execFile);
+
+  // Build a synthetic agent-bridge.log in a sandbox HOME.
+  const home = await mkdtemp(join(tmpdir(), 'agent-bridge-incident-report-'));
+  const logsDir = join(home, '.agent-bridge', 'logs');
+  await mkdir(logsDir, { recursive: true, mode: 0o700 });
+  const logPath = join(logsDir, 'agent-bridge.log');
+
+  const t0 = new Date('2026-05-03T12:00:00.000Z').getTime();
+  const events = [
+    { ts: new Date(t0 - 60_000).toISOString(), event: 'unrelated.before_window', level: 'info' },
+    { ts: new Date(t0 + 5_000).toISOString(), event: 'auto_update_runner.kill_will_evict_active_session', level: 'warn',
+      context: { peer_pid: 111, peer_version: '3.14.3', our_version: '3.14.4', would_orphan_this_session: true,
+                 human_summary: 'about to kill v=3.14.3' } },
+    { ts: new Date(t0 + 6_000).toISOString(), event: 'patch_f.peer_version_kill', level: 'info',
+      context: { peer_pid: 111, peer_version: '3.14.3', our_version: '3.14.4' } },
+    { ts: new Date(t0 + 7_000).toISOString(), event: 'auto_update_runner.epitaph', level: 'info',
+      context: { pid: 111, version: '3.14.3', kill_reason: 'patch_f.peer_version_kill_suspected' } },
+    { ts: new Date(t0 + 30 * 60_000).toISOString(), event: 'unrelated.after_window', level: 'info' },
+  ];
+
+  await writeFile(
+    logPath,
+    events.map((e) => JSON.stringify({ ...e, component: 'mcp-server', machine: 'test' })).join('\n') + '\n',
+  );
+
+  const cliPath = join(__dirname, '..', '..', 'agent-bridge');
+  const { stdout } = await execFileP('bash', [cliPath, 'mcp-incident-report', '--around', '2026-05-03T12:00:05.000Z'], {
+    env: { ...process.env, HOME: home },
+    timeout: 8_000,
+  });
+
+  // The report must include the in-window events and the human summary.
+  assert.ok(stdout.includes('auto_update_runner.kill_will_evict_active_session'), 'report mentions pre-kill warning event');
+  assert.ok(stdout.includes('patch_f.peer_version_kill'), 'report mentions kill event');
+  assert.ok(stdout.includes('auto_update_runner.epitaph'), 'report mentions epitaph');
+  assert.ok(!stdout.includes('unrelated.before_window'), 'report excludes events before the window');
+  assert.ok(!stdout.includes('unrelated.after_window'), 'report excludes events after the window');
+  assert.ok(/SUMMARY:/i.test(stdout), 'report includes a SUMMARY line');
+
+  await rm(home, { recursive: true, force: true });
 });

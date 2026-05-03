@@ -206,6 +206,37 @@ function compareSemver(a: string, b: string): number | null {
               : null;
             const peerIsOlder = versionCompare !== null && versionCompare < 0;
             if (peerIsOlder) {
+              // 3.14.4 — Pre-kill warning event. Logged BEFORE the SIGTERM so
+              // post-mortem incident reports (`agent-bridge mcp-incident-report`)
+              // can show the exact intent right before the kill, not just the
+              // mechanical `patch_f.peer_version_kill` line. Includes a
+              // human-readable summary so log-spelunking is not required.
+              const peerHeartbeatAgeMs = Date.now() - updatedAt;
+              const wouldOrphanThisSession =
+                peerHeartbeatAgeMs < 30_000; // fresh heartbeat ⇒ likely active session
+              const humanSummary =
+                `I'm about to kill peer pid=${holder} v=${peerVersion} `
+                + `because I'm v=${MCP_SERVER_VERSION} and Patch F prefers newer. `
+                + `Peer last heartbeat ${peerHeartbeatAgeMs}ms ago. `
+                + (wouldOrphanThisSession
+                  ? 'This will likely disconnect the active session attached to that peer.'
+                  : 'Peer heartbeat is stale; unlikely to disconnect anyone.');
+              try {
+                logEvent({
+                  event: 'auto_update_runner.kill_will_evict_active_session',
+                  level: 'warn',
+                  msg: humanSummary,
+                  context: {
+                    peer_pid: holder,
+                    peer_version: peerVersion,
+                    our_pid: process.pid,
+                    our_version: MCP_SERVER_VERSION,
+                    peer_heartbeat_age_ms: peerHeartbeatAgeMs,
+                    would_orphan_this_session: wouldOrphanThisSession,
+                    human_summary: humanSummary,
+                  },
+                });
+              } catch { /* best-effort */ }
               try {
                 process.stderr.write(
                   `agent-bridge: peer pid=${holder} version=${peerVersion} is older than our ${MCP_SERVER_VERSION}; sending SIGTERM to force migration\n`,
@@ -214,13 +245,15 @@ function compareSemver(a: string, b: string): number | null {
               try {
                 logEvent({
                   event: 'patch_f.peer_version_kill',
-                  level: 'warn',
+                  level: 'info',
                   msg: 'Patch F: SIGTERM-killing stale-version peer to force migration',
                   context: {
                     peer_pid: holder,
                     peer_version: peerVersion,
                     our_version: MCP_SERVER_VERSION,
                     pid: process.pid,
+                    peer_heartbeat_age_ms: peerHeartbeatAgeMs,
+                    would_orphan_this_session: wouldOrphanThisSession,
                   },
                 });
               } catch { /* best-effort */ }
@@ -258,7 +291,7 @@ function compareSemver(a: string, b: string): number | null {
                 try {
                   logEvent({
                     event: 'patch_f.peer_version_sigkill',
-                    level: 'warn',
+                    level: 'info',
                     msg: 'Patch F: SIGKILL fallback after 2s SIGTERM grace expired',
                     context: {
                       peer_pid: holder,
@@ -294,7 +327,7 @@ function compareSemver(a: string, b: string): number | null {
               try {
                 logEvent({
                   event: 'patch_f.standby',
-                  level: 'warn',
+                  level: 'info',
                   msg: 'Patch F: peer holds watcher lease — entering standby + retry instead of exit (3.7.1)',
                   context: {
                     holder,
@@ -435,8 +468,67 @@ function fatalTransportExit(event: string, msg: string, err?: unknown): never {
   process.exit(0);
 }
 
+// 3.14.4 — Post-mortem epitaph. When this MCP child dies, log one final
+// `auto_update_runner.epitaph` event capturing WHY we died and which session
+// is now MCP-orphaned. `agent-bridge mcp-incident-report` reads this back
+// out and prints a human-readable summary. The epitaph runs synchronously
+// in the 'exit' phase so the NDJSON line lands in agent-bridge.log even on
+// SIGKILL → SIGTERM-handler-aborted exits.
+//
+// Mutation order:
+//   - SIGTERM/SIGINT/SIGHUP arrival sets killReason + killInitiatorPid
+//     (best-effort — SIGKILL bypasses every handler so those fields stay
+//     undefined and the epitaph reads `kill_reason: "unknown"`, which is
+//     itself a useful signal: "this child died via SIGKILL or async error").
+//   - process.on('exit') fires once during normal shutdown OR force-exit
+//     timer OR SIGKILL backstop. Atomically writes the epitaph.
+let epitaphKillReason: string = 'unknown';
+let epitaphKillInitiatorPid: number | undefined;
+let epitaphLastToolCallTs: number | undefined;
+let epitaphWatcherStarted = false;
+let epitaphLeaseState: string = 'unknown'; // 'channel-owner' | 'standby' | 'tools-only' | 'unknown'
+let epitaphWritten = false;
+
+function writeEpitaph(triggerEvent: string): void {
+  if (epitaphWritten) return;
+  epitaphWritten = true;
+  try {
+    logEvent({
+      event: 'auto_update_runner.epitaph',
+      level: 'info',
+      msg: `agent-bridge MCP child epitaph: pid=${process.pid} v=${MCP_SERVER_VERSION} reason=${epitaphKillReason}`,
+      context: {
+        pid: process.pid,
+        parent_pid: process.ppid,
+        version: MCP_SERVER_VERSION,
+        kill_reason: epitaphKillReason,
+        kill_initiator_pid: epitaphKillInitiatorPid,
+        last_tool_call_ts: epitaphLastToolCallTs,
+        lease_state: epitaphLeaseState,
+        watcher_started: epitaphWatcherStarted,
+        uptime_s: Math.floor(process.uptime()),
+        trigger: triggerEvent,
+      },
+    });
+  } catch { /* best-effort — epitaph must never throw */ }
+  // Also breadcrumb-log so post-mortem tooling has it on disk even if
+  // logEvent's filesystem path is wedged.
+  try {
+    syncExitBreadcrumb('auto_update_runner.epitaph', {
+      version: MCP_SERVER_VERSION,
+      kill_reason: epitaphKillReason,
+      kill_initiator_pid: epitaphKillInitiatorPid,
+      last_tool_call_ts: epitaphLastToolCallTs,
+      lease_state: epitaphLeaseState,
+      watcher_started: epitaphWatcherStarted,
+      trigger: triggerEvent,
+    });
+  } catch { /* best-effort */ }
+}
+
 process.on('exit', (code) => {
   syncExitBreadcrumb('process.exit_event', { code });
+  writeEpitaph(`process.exit_event(code=${code})`);
 });
 
 process.stderr.on('error', (err) => {
@@ -615,6 +707,10 @@ async function main(): Promise<void> {
   const TOOL_BOOT_TIME_MS = Date.now();
   let toolCallsReceivedCount = 0;
   let channelCallbackRegisteredAt = 0;
+  // 3.14.4 — track ts of the most recent tool call so the post-mortem
+  // epitaph can record "when did this MCP child last serve a tool call"
+  // (helps distinguish "mid-session kill" from "idle plugin reaped").
+  let lastToolCallTs: number | null = null;
   registerAliveSignals({
     getToolCallsReceivedCount: () => toolCallsReceivedCount,
     getChannelCallbackRegisteredAt: () => channelCallbackRegisteredAt,
@@ -625,6 +721,7 @@ async function main(): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const wrapped = async (...args: any[]) => {
       toolCallsReceivedCount += 1;
+      lastToolCallTs = Date.now();
       return handler(...args);
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1187,6 +1284,18 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
 
+    // 3.14.4 — Make sure the epitaph carries the most precise reason we
+    // know at shutdown time. If a more specific reason was already set in
+    // the SIGTERM handler (e.g. patch_f.peer_version_kill_suspected), keep
+    // it — the signal handler ran first and captured the cause. Otherwise
+    // adopt the shutdown() reason (orphan-watchdog, sibling-takeover, etc.).
+    if (epitaphKillReason === 'unknown') {
+      epitaphKillReason = `shutdown:${reason}`;
+    }
+    epitaphLastToolCallTs = lastToolCallTs ?? undefined;
+    epitaphWatcherStarted = watcherStarted;
+    epitaphLeaseState = bridgeRole;
+
     // Stop the parent-liveness timer immediately so it can't fire again during
     // async shutdown (would log a spurious second shutdown reason).
     if (parentWatchdog) {
@@ -1302,6 +1411,22 @@ async function main(): Promise<void> {
     const lastNotifAgeMs = lastNotificationAtMs === null
       ? null
       : Date.now() - lastNotificationAtMs;
+
+    // 3.14.4 — Capture the kill reason for the epitaph. If we fall through
+    // to shutdown(), the 'exit' handler will write `auto_update_runner.epitaph`
+    // with this reason. SIGTERM with stale-version peer-kill from another
+    // bridge MCP child is the dominant disconnect path — reflect that.
+    if (signal === 'SIGTERM' && parentAlive) {
+      // Heuristic: if our parent is alive (so this isn't an orphan-watchdog
+      // shutdown) and we're getting a SIGTERM, the most likely sender is
+      // another MCP child running Patch F's peer-version-kill path.
+      epitaphKillReason = 'patch_f.peer_version_kill_suspected';
+    } else {
+      epitaphKillReason = `signal_${signal}`;
+    }
+    epitaphLastToolCallTs = lastToolCallTs ?? undefined;
+    epitaphWatcherStarted = watcherStarted;
+    epitaphLeaseState = bridgeRole;
 
     syncExitBreadcrumb('signal.received', {
       signal,
