@@ -55,13 +55,13 @@ Use `bridge_send_message` from the MCP server. **As of mcp-server 3.4.0 the `tar
 
 ```
 bridge_send_message({ machine: "MacBook", message: "fix the failing tests", target: "claude-code" })
-bridge_send_message({ machine: "MacBook", message: "what's up?",            target: "openclaw/clawdiboi2" })
+bridge_send_message({ machine: "MacBook", message: "what's up?",            target: "openclaw/<account-alias>" })
 ```
 
-Each target maps to a subdir under `~/.agent-bridge/inbox/` on the remote (`inbox/claude-code/`, `inbox/openclaw/clawdiboi2/`, …) and a specific listener picks it up:
+Each target maps to a subdir under `~/.agent-bridge/inbox/` on the remote (`inbox/claude-code/`, `inbox/openclaw/<account-alias>/`, …) and a specific listener picks it up:
 
 - `target: "claude-code"` → Claude Code channel plugin pushes the message into the running Claude session as a `<channel source="agent-bridge" ...>` event.
-- `target: "openclaw/<account>"` → openclaw-channel plugin dispatches the message into the OpenClaw Telegram session for `<account>` via `dispatchInboundReplyWithBase` from `openclaw/plugin-sdk/compat` — a synchronous agent turn runs and the reply is sent through the live Telegram outbound (landing in e.g. @Clawdiboi2bot) because the synthetic ctxPayload pins `OriginatingChannel: "telegram"`.
+- `target: "<harness>/<account-alias>"` (e.g. `openclaw/<account-alias>`) → the harness's channel plugin dispatches the message into the per-account session for `<account-alias>`. For OpenClaw specifically, this is `dispatchInboundReplyWithBase` from `openclaw/plugin-sdk/compat` — a synchronous agent turn runs and the reply is sent through the live Telegram outbound for the registered bot account because the synthetic ctxPayload pins `OriginatingChannel: "telegram"`.
 
 Calls without `target` are rejected. Legacy flat-file messages that land at the root of `inbox/` are moved to `inbox/.failed/_unrouted/` on next startup.
 
@@ -72,8 +72,8 @@ There is no fresh-spawn / `--print` equivalent. The old `agent-bridge run ... --
 `bridge_send_message` accepts the **local machine name** (or one of the reserved aliases `local`, `self`, `localhost`) as its `machine` parameter. When the target is local, the message JSON is written directly to `~/.agent-bridge/inbox/<target>/<id>.json` using the same atomic write pattern as the SSH path — no SSH hop, no loopback round-trip.
 
 ```
-bridge_send_message({ machine: "local",            message: "...", target: "openclaw/clawdiboi2" })
-bridge_send_message({ machine: "Ethans-Mac-mini",  message: "...", target: "claude-code" })
+bridge_send_message({ machine: "local",     message: "...", target: "openclaw/<account-alias>" })
+bridge_send_message({ machine: "Mac-Mini",  message: "...", target: "claude-code" })
 ```
 
 Use it when one MCP host on a machine needs to fan a message out to another agent harness on the **same** machine — the canonical case is a Claude Code session sending to OpenClaw embedded Telegram sessions running in the same OpenClaw gateway. The receiver still needs a watcher running on its own per-target subdir: the Claude Code channel plugin watches `inbox/claude-code/`, `openclaw-channel` watches `inbox/openclaw/<account>/`. agent-bridge does not push the message into the receiver itself; it just lands the file atomically.

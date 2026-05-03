@@ -1,5 +1,22 @@
 # Changelog
 
+## agent-bridge 3.14.7 — 2026-05-03
+
+### Generalize public docs — drop user-specific names, neutralize tool descriptions
+
+agent-bridge is a PUBLIC repo intended for any user setting up cross-machine AI agent communication. The 3.14.5 / 3.14.6 doc rollouts (OC persona routing + bridge-relay-to-Telegram) landed canonical text containing operator-specific references — specific persona aliases, specific bot handles, the operator's own name — which would only confuse a fresh user reading the docs for the first time.
+
+3.14.7 generalizes those canonical doc surfaces while preserving the actual rules / principles intact. **No behavior change**, no code change — pure documentation + tool-description editing.
+
+- **`docs/oc-persona-routing.md` → `docs/named-target-routing.md`** (renamed via `git mv`). Generalized from a specific persona-mapping table to the underlying principle: when the user names a specific target alias, match the alias literally before falling back to a default. Examples now use `<harness>/<account-alias>` placeholders and illustrative `bot-alpha` / `bot-beta` aliases instead of the original real persona names.
+- **`docs/bridge-relay-to-telegram.md` → `docs/relay-to-user.md`** (renamed via `git mv`). Generalized from a Telegram-only rule to a channel-agnostic rule: every paired harness MUST relay inbound bridge messages to the user via the harness's configured user-facing channel (Telegram, Slack, Discord, native UI, etc.). Telegram is now one example channel rather than the canonical name.
+- **`bridge_send_message` tool description in `mcp-server/src/tools.ts`** — drops the persona-specific bullet list, keeps `target="openclaw/default"` as a generic example, and adds `<harness>/<account-alias>` placeholder. Routing rule still points at the renamed canonical doc.
+- **`README.md`** — replaces persona-specific routing/relay callouts with the generalized versions. Inbox tree example uses placeholder `<account-alias-N>` subdirs. New **"First-time setup — read these docs before sending your first bridge message"** section near the top tells the harness's AI agent to read README.md AND every file in `docs/` before sending its first bridge message, with explicit pointers to the renamed routing and relay-to-user docs.
+- **`AGENTS.md`** — same generalization pass on the "OC persona routing" → "Named target routing" and "Bridge message relay to Ethan" → "Relay inbound bridge messages to the user" subsections.
+- **`INSTRUCTIONS.md`** — same pass on its `bridge_send_message` examples and target-mapping descriptions.
+- **CHANGELOG history is preserved.** Older entries still reference the original doc filenames and persona aliases (which were correct at the time they were written) — changelogs are append-only.
+- **Version bumps** — `mcp-server/package.json` + `mcp-server/package-lock.json` 3.14.6 → 3.14.7. Bash CLI VERSION, `MCP_SERVER_VERSION` in `config.ts`, `mcp-server/.claude-plugin/plugin.json`, and any in-test version-equality assertions follow the same bump.
+
 ## agent-bridge 3.14.6 — 2026-05-03
 
 ### Bridge message relay to Ethan via Telegram — built into agent-bridge so it travels with the plugin

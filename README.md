@@ -33,6 +33,20 @@ Then photograph the pairing screen on one machine and send it to the Claude Code
 
 ---
 
+## First-time setup — read these docs before sending your first bridge message
+
+If you are an AI agent (Claude Code, OpenClaw, or any other harness) being onboarded onto a new machine, **read the full `README.md` AND every file under `docs/` before sending your first bridge message**. The docs contain canonical rules for routing and user-relay behavior that are easy to get wrong without context.
+
+In particular, you MUST read:
+
+- **[`docs/named-target-routing.md`](docs/named-target-routing.md)** — when the user names a specific target alias (a persona, a session, a per-account bot, etc.), match the alias literally. Do NOT silently default to `<harness>/default` when a specific alias was named. Voice transcripts often mis-hear short proper-noun aliases; re-read the source twice if a specific name is involved.
+
+- **[`docs/relay-to-user.md`](docs/relay-to-user.md)** — every inbound bridge message MUST be relayed to the user via the harness's configured user-facing channel (Telegram, Slack, Discord, native UI, etc.) as a brief 1-2 line summary. Reply via bridge first if needed, THEN relay to the user. Don't suppress routine internal coordination — relay it.
+
+Other docs in `docs/` cover the auto-update lifecycle, channel-plugin migration history, lifecycle history, and known investigation reports — read them for full context, not just the summary above.
+
+---
+
 ## What is agent-bridge?
 
 agent-bridge lets running Claude Code and OpenClaw sessions on different machines talk to each other agent-to-agent, and (optionally) run commands on each other's machines over SSH. Design goals:
@@ -479,7 +493,7 @@ The helper writes unified log breadcrumbs to `~/.agent-bridge/logs/agent-bridge.
 
 **OpenClaw specifics.** OpenClaw receivers should use the same helper and lock directory. If the running OpenClaw version exposes background subagents/sessions, dispatch one and wrap `./scripts/update.sh --auto` with `auto-update-coord.sh run` exactly as above. If no safe background-dispatch primitive is available in that harness version, print the notification and the coordination command to the operator instead of running pull/build/reload in the foreground. Cross-machine update propagation is unaffected: bridge delivery can notify every host, but coordination remains local to each host's checkout.
 
-**Resume the user-facing thread after processing bridge messages.** ([RESUME-USER-THREAD 2026-05-01]) After you finish processing inbound bridge messages — auto-update notifications, multi-step exchanges with another agent, flurries of cross-machine traffic — explicitly check whether you have an unfinished thread with the user on Telegram (or whichever user-facing channel is active) and resume it. Do not go silent on the user just because the bridge round-trip is done. Pick up wherever the human-facing conversation last left off, address any user-asked question that is still pending, and post a status update if the bridge work changed anything user-relevant. Bridge processing is a side-channel; the user thread is the primary thread. The auto-update receiver flow is a common place this slips: the subagent posts its "dispatching/applying/done" Telegram updates correctly, but the parent agent then forgets to return to whatever Telegram thread was already in flight before the update notification arrived. Established 2026-05-01 (Ethan voice 5954) after repeated incidents of agents going silent on Telegram once a bridge flurry completed.
+**Resume the user-facing thread after processing bridge messages.** ([RESUME-USER-THREAD 2026-05-01]) After you finish processing inbound bridge messages — auto-update notifications, multi-step exchanges with another agent, flurries of cross-machine traffic — explicitly check whether you have an unfinished thread with the user on Telegram (or whichever user-facing channel is active) and resume it. Do not go silent on the user just because the bridge round-trip is done. Pick up wherever the human-facing conversation last left off, address any user-asked question that is still pending, and post a status update if the bridge work changed anything user-relevant. Bridge processing is a side-channel; the user thread is the primary thread. The auto-update receiver flow is a common place this slips: the subagent posts its "dispatching/applying/done" user-channel updates correctly, but the parent agent then forgets to return to whatever user-facing thread was already in flight before the update notification arrived. Established 2026-05-01 after repeated incidents of agents going silent on the user-facing channel once a bridge flurry completed.
 
 #### Live-test recipe
 
@@ -645,7 +659,7 @@ After install, copy the following two debug-first rules into your `~/.claude/CLA
 **Rule 2: `/reload-plugins` is NOT a hot-reload for MCP child processes**
 > `/reload-plugins` re-reads plugin descriptors / skills / hooks but does NOT reliably kill and respawn long-running MCP child processes. Patch F's lease coordination keeps healthy channel-owners alive and demotes /reload-plugins-spawned children to standby. Result: the running plugin keeps its OLD code regardless of how many times you fire /reload-plugins. **Full Claude Code session restart is the only deterministic way to load new MCP code.** The `self-reload-plugins` skill triggers /reload-plugins but does NOT do what its name implies for MCP-child code refreshes — useful for descriptor refreshes only.
 
-These rules are mirrored in [EthanSK/dot-claude](https://github.com/EthanSK/dot-claude)'s `CLAUDE.md` (commits `aefd7bb` and `2017f8f`) and [EthanSK/dot-claude-dell](https://github.com/EthanSK/dot-claude-dell) (`92d1ae6`). Established 2026-04-30 after a multi-hour debug where an MBP agent-bridge MCP child silently died for 2-3 days because its cache install dir was archived; the runtime had no `node ...build/index.js` process at all and 6 bridge messages stacked in the inbox queue waiting forever.
+Established 2026-04-30 after a multi-hour debug where an agent-bridge MCP child silently died for 2-3 days because its cache install dir was archived; the runtime had no `node ...build/index.js` process at all and 6 bridge messages stacked in the inbox queue waiting forever.
 
 ---
 
@@ -795,7 +809,7 @@ If anything else appears (e.g. `BUILTIN\Users`, `Authenticated Users`, the local
 
 When the peer regenerates its keypair (e.g. after `agent-bridge unpair` + `agent-bridge pair` on the *other* side, or a clean reinstall), the new line must be added to `administrators_authorized_keys` **and the old line must be deleted**. sshd happily reads the file top-to-bottom; a stale matching line just means the old, no-longer-trusted key would still authenticate if the corresponding private key ever leaked. Worse, when debugging, two lines with the same `agent-bridge:<peer-name>` comment make it ambiguous which one actually matched.
 
-A regex-based rewrite via `(Get-Content ... | Where-Object ...)` has a subtle pipeline bug: if the file is *empty* after filtering, `Set-Content` writes nothing and the next `Add-Content` still appends — but Ethan has hit cases where the regex didn't match the line he expected (whitespace, trailing comment differences) and the stale line survived. Use a literal `-Contains` check on the trimmed lines instead:
+A regex-based rewrite via `(Get-Content ... | Where-Object ...)` has a subtle pipeline bug: if the file is *empty* after filtering, `Set-Content` writes nothing and the next `Add-Content` still appends — but in practice we've hit cases where the regex didn't match the expected line (whitespace, trailing comment differences) and the stale line survived. Use a literal `-Contains` check on the trimmed lines instead:
 
 ```powershell
 $AdminKeys = 'C:\ProgramData\ssh\administrators_authorized_keys'
@@ -1187,7 +1201,7 @@ while (true) {
 `bridge_send_message` accepts the **local machine name** (or one of the reserved aliases `local`, `self`, `localhost`) and writes the BridgeMessage JSON directly to `~/.agent-bridge/inbox/<target>/<id>.json` with no SSH hop:
 
 ```text
-bridge_send_message({ machine: "local", message: "review the queue", target: "openclaw/clawdiboi2" })
+bridge_send_message({ machine: "local", message: "review the queue", target: "openclaw/<account-alias>" })
 ```
 
 The atomic write pattern matches the SSH path, so the receiver's file watcher never sees a partial JSON file. Use this when one MCP host needs to fan a message out to another agent harness on the **same** machine — for example, a Claude Code session messaging the OpenClaw embedded Telegram sessions running in the same OpenClaw gateway. The receiver still needs a watcher on its inbox subdir (Claude Code channel plugin, `openclaw-channel`, etc.); agent-bridge just lands the file.
@@ -1326,7 +1340,7 @@ Registers `agent-bridge` as a first-class OpenClaw channel (same tier as Telegra
 >
 > Precedence (highest first): per-message `BridgeMessage.replyVia` → `targets.<name>.replyVia` → plugin-level `channels["agent-bridge"].config.replyVia` → sender-derived default. Valid values: `"telegram"` | `"agent-bridge"`. Unknown values fall back to `"telegram"` with a warn log. Use `"agent-bridge"` only if you explicitly want a silent peer-to-peer back-channel for that target. See [`openclaw-channel/README.md`](openclaw-channel/README.md) for the full session-keying model.
 
-> 🛰️ **Relay receipts:** OpenClaw targets also send a short Telegram-visible receipt for every inbound bridge message before the agent turn runs. The first line is `[Agent Bridge relay] 🛰️`, followed by `from/fromTarget → target`, reply path, message id, and a compact preview. This is independent of `replyVia`: even silent back-channel turns can still give Ethan a glanceable “another harness messaged this OpenClaw” update. Disable with `channels["agent-bridge"].config.relayNotice = false` (or per-target `targets.<name>.relayNotice = false`).
+> 🛰️ **Relay receipts:** OpenClaw targets also send a short Telegram-visible receipt for every inbound bridge message before the agent turn runs. The first line is `[Agent Bridge relay] 🛰️`, followed by `from/fromTarget → target`, reply path, message id, and a compact preview. This is independent of `replyVia`: even silent back-channel turns can still give the user a glanceable “another harness messaged this OpenClaw” update. Disable with `channels["agent-bridge"].config.relayNotice = false` (or per-target `targets.<name>.relayNotice = false`).
 
 **How OpenClaw push delivery works:**
 1. Peer's `bridge_send_message` writes a JSON file to `~/.agent-bridge/inbox/openclaw/<target>/` via SFTP over SSH
@@ -1624,9 +1638,9 @@ As of **mcp-server 3.4.0** and **openclaw-channel 2.1.0**, every bridge message 
 ~/.agent-bridge/inbox/
 ├── claude-code/              ← Claude Code's channel plugin watches ONLY this
 ├── openclaw/
-│   ├── default/              ← OpenClaw @ClawdStationMiniBot session
-│   ├── clawdiboi2/           ← OpenClaw @Clawdiboi2bot session
-│   └── clordlethird/         ← OpenClaw @ClordLeThirdBot session
+│   ├── default/              ← example: OpenClaw "default" Telegram-account session
+│   ├── <account-alias-1>/    ← OpenClaw per-account session (one subdir per registered Telegram account)
+│   └── <account-alias-2>/    ← ...etc
 ├── .archive/claude-code/     ← Claude Code delivered messages kept for debug tail
 ├── .failed/claude-code/      ← malformed/misrouted Claude Code-target files
 └── .failed/_unrouted/        ← legacy flat files with no routable target
@@ -1641,19 +1655,20 @@ As of **mcp-server 3.4.0** and **openclaw-channel 2.1.0**, every bridge message 
 // fromTarget defaults to "claude-code", so replies can route back.
 bridge_send_message({ machine: "Mac-Mini", message: "hi", target: "claude-code" })
 
-// Inject into the OpenClaw @Clawdiboi2bot session and let it reply over the bridge:
-bridge_send_message({ machine: "Mac-Mini", message: "what's up?", target: "openclaw/clawdiboi2" })
+// Inject into a specific OpenClaw per-account session and let it reply over the bridge.
+// Replace <account-alias> with the alias registered in your OpenClaw config.
+bridge_send_message({ machine: "Mac-Mini", message: "what's up?", target: "openclaw/<account-alias>" })
 
 // Deliberate one-way injection: omit fromTarget so OpenClaw can fall back to
 // its configured/default visible route instead of a bridge back-channel.
-bridge_send_message({ machine: "Mac-Mini", message: "FYI", target: "openclaw/clawdiboi2", one_way: true })
+bridge_send_message({ machine: "Mac-Mini", message: "FYI", target: "openclaw/<account-alias>", one_way: true })
 ```
 
 There is **no default routing** — a call without `target` is rejected. Legacy flat files that arrive at the root of `inbox/` (from pre-3.4.0 senders) are moved to `.failed/_unrouted/` on next startup with a deprecation log line. Upgrade your senders.
 
-**OC persona routing.** When the user names an OpenClaw persona — `Claude the third` / `Clord` → `openclaw/clordlethird`, `Claudibo` / `Claude two` → `openclaw/clawdiboi2`, `Claude Station Mini` / unspecified → `openclaw/default` — match LITERALLY before falling back to default. Voice-transcripts often mis-hear persona names (`Claude the third` → `"Cloward third"`); re-read before routing. Full table + rationale: [`docs/oc-persona-routing.md`](docs/oc-persona-routing.md), also mirrored in [`AGENTS.md`](AGENTS.md#oc-persona-routing) and the `bridge_send_message` tool description.
+**Named target routing.** When the user names a specific target alias (a persona, a session, a per-account bot, etc.), match the alias LITERALLY before falling back to `<harness>/default`. Voice transcripts often mis-hear short proper-noun aliases; re-read before routing. Full principle + examples: [`docs/named-target-routing.md`](docs/named-target-routing.md), also mirrored in [`AGENTS.md`](AGENTS.md#named-target-routing) and the `bridge_send_message` tool description.
 
-**Bridge message relay to Ethan via Telegram.** Every paired harness MUST relay inbound bridge messages to Ethan over Telegram as a brief 1-2 line summary (sender machine + target + actionable ask) so Ethan has live visibility into cross-harness coordination from his phone. Reply via bridge first if a response is needed, THEN Telegram-relay. Don't suppress routine internal chatter — Ethan wants to see all of it. Exception: pure-noise heartbeats / `bridge_status` polls. Full rule + format example + rationale: [`docs/bridge-relay-to-telegram.md`](docs/bridge-relay-to-telegram.md), also mirrored in [`AGENTS.md`](AGENTS.md#bridge-message-relay-to-ethan) and the `bridge_send_message` tool description. Established 2026-05-03 (Ethan voice 6181 + 6186).
+**Relay inbound bridge messages to the user.** Every paired harness MUST relay inbound bridge messages to the user via the harness's configured user-facing channel (Telegram, Slack, Discord, native UI, etc.) as a brief 1-2 line summary (sender machine + target + actionable ask) so the user has live visibility into cross-harness coordination. Reply via bridge first if a response is needed, THEN relay to the user. Don't suppress routine internal chatter — relay it. Exception: pure-noise heartbeats / `bridge_status` polls. Full rule + format example + rationale: [`docs/relay-to-user.md`](docs/relay-to-user.md), also mirrored in [`AGENTS.md`](AGENTS.md#relay-inbound-bridge-messages-to-the-user) and the `bridge_send_message` tool description.
 
 Target strings accept Unicode letters/digits plus `_`, `.`, `-`, `/` (no `..`, no leading/trailing `/`, no `//`, ≤256 chars) so multilingual harness names are allowed.
 
@@ -1666,14 +1681,14 @@ Target strings accept Unicode letters/digits plus `_`, `.`, `-`, `/` (no `..`, n
     "enabled": true,
     "config": {
       "agentId": "main",
-      "peer_id": "6164541473"
+      "peer_id": "<your-telegram-user-id>"
     }
   },
   "telegram": {
     "accounts": {
-      "default":      { "token": "...", "allowFrom": ["6164541473"] },
-      "clawdiboi2":   { "token": "...", "allowFrom": ["6164541473"] },
-      "clordlethird": { "token": "...", "allowFrom": ["6164541473"] }
+      "default":          { "token": "...", "allowFrom": ["<your-telegram-user-id>"] },
+      "<account-alias-1>": { "token": "...", "allowFrom": ["<your-telegram-user-id>"] },
+      "<account-alias-2>": { "token": "...", "allowFrom": ["<your-telegram-user-id>"] }
     }
   }
 }
@@ -1690,18 +1705,18 @@ Explicit `targets` blocks (advanced override, still fully supported):
     "config": {
       "agentId": "main",
       "targets": {
-        "default":      { "openclaw_channel": "telegram", "account": "default",      "peer_id": "6164541473" },
-        "clawdiboi2":   { "openclaw_channel": "telegram", "account": "clawdiboi2",   "peer_id": "6164541473" },
-        "clordlethird": { "openclaw_channel": "telegram", "account": "clordlethird", "peer_id": "6164541473" }
+        "default":           { "openclaw_channel": "telegram", "account": "default",           "peer_id": "<your-telegram-user-id>" },
+        "<account-alias-1>": { "openclaw_channel": "telegram", "account": "<account-alias-1>", "peer_id": "<your-telegram-user-id>" },
+        "<account-alias-2>": { "openclaw_channel": "telegram", "account": "<account-alias-2>", "peer_id": "<your-telegram-user-id>" }
       }
     }
   }
 }
 ```
 
-Each entry resolves to an OpenClaw session route via `runtime.channel.routing.resolveAgentRoute({cfg, channel, accountId, peer})` — for Ethan's `dmScope=per-account-channel-peer` that produces keys of the form `agent:main:telegram:<account>:direct:<peer_id>`. The openclaw-channel plugin calls `dispatchInboundReplyWithBase` (from `openclaw/plugin-sdk/compat`) with a synthetic `ctxPayload` pinned to `Provider: "telegram"` + `OriginatingChannel: "telegram"` + `OriginatingTo: "telegram:<peer_id>"`, which runs a real agent turn and sends the agent's reply back via the live Telegram outbound — same dispatch path a native Telegram DM would take.
+Each entry resolves to an OpenClaw session route via `runtime.channel.routing.resolveAgentRoute({cfg, channel, accountId, peer})` — with `dmScope=per-account-channel-peer` that produces keys of the form `agent:main:telegram:<account>:direct:<peer_id>`. The openclaw-channel plugin calls `dispatchInboundReplyWithBase` (from `openclaw/plugin-sdk/compat`) with a synthetic `ctxPayload` pinned to `Provider: "telegram"` + `OriginatingChannel: "telegram"` + `OriginatingTo: "telegram:<peer_id>"`, which runs a real agent turn and sends the agent's reply back via the live Telegram outbound — same dispatch path a native Telegram DM would take.
 
-**Round-trip bridge replies.** `BridgeMessage` carries an optional `fromTarget` field — the sender's OWN target-id. When an agent replies back over the bridge (cross-harness agent ↔ agent flows), `fromTarget` is copied into the reply's `target` field so the reply lands back in the session that started the conversation. The Claude Code MCP tool now defaults `fromTarget` to `claude-code`; pass `from_target` / `fromTarget` explicitly when sending from another local target (for example `openclaw/default` or `openclaw/clawdiboi2`), and pass `one_way: true` when no bridge reply path should be included.
+**Round-trip bridge replies.** `BridgeMessage` carries an optional `fromTarget` field — the sender's OWN target-id. When an agent replies back over the bridge (cross-harness agent ↔ agent flows), `fromTarget` is copied into the reply's `target` field so the reply lands back in the session that started the conversation. The Claude Code MCP tool now defaults `fromTarget` to `claude-code`; pass `from_target` / `fromTarget` explicitly when sending from another local target (for example `<harness>/<account-alias>`), and pass `one_way: true` when no bridge reply path should be included.
 
 Listeners are separated by target and lifecycle: Claude Code's channel-owner MCP child watches only `inbox/claude-code/`, while the OpenClaw gateway plugin watches only its configured `inbox/openclaw/<target>/` subdirs. Tool-only MCP hosts should not watch `claude-code` at all. The leases prevent duplicate watchers inside each path, but they do not make Claude Code and OpenClaw the same kind of host process. After a successful push, Claude Code-target files are archived to `inbox/.archive/claude-code/`; OpenClaw files are archived to `~/.agent-bridge/archive/openclaw/<target>/`.
 
@@ -1752,7 +1767,7 @@ Every NDJSON line has this shape:
 {
   "ts": "2026-04-19T23:45:00.123Z",
   "component": "mcp-server",
-  "machine": "Ethans-MacBook-Pro",
+  "machine": "MacBook-Pro",
   "event": "message.delivered",
   "level": "info",
   "msg": "Message msg-abc123 delivered to Mac-Mini",
@@ -1835,11 +1850,11 @@ Each machine can have two endpoints in its config:
 ```ini
 [MacBookPro]
 host=192.168.1.208            # LAN address
-internet_host=100.126.23.87   # Tailscale IP (preferred when configured)
+internet_host=100.x.y.z       # Tailscale IP (preferred when configured)
 internet_port=22
 port=22
-user=ethansarif-kattan
-key=/Users/ethansk/.agent-bridge/keys/agent-bridge_Mac-Mini
+user=<remote-username>
+key=/Users/<you>/.agent-bridge/keys/agent-bridge_Mac-Mini
 paired_at=2026-04-13T00:03:01Z
 ```
 
@@ -1979,10 +1994,10 @@ internet_port=22
 
 ```bash
 agent-bridge status MacBookPro     # should reach via LAN or fall back to Tailscale
-ssh -i ~/.agent-bridge/keys/agent-bridge_Mac-Mini ethansarif-kattan@100.126.23.87
+ssh -i ~/.agent-bridge/keys/agent-bridge_Mac-Mini <remote-user>@100.x.y.z
 ```
 
-The host key you see should be the target machine's real sshd host key — not Tailscale's — since Tailscale routes raw TCP and doesn't proxy SSH. The SOCKS5 proxy from step 3 is doing the work: `ssh` dials `100.126.23.87:22`, `nc -X 5` funnels that through `localhost:1055`, and `tailscaled` routes it across the tailnet to the peer's sshd on the other end.
+The host key you see should be the target machine's real sshd host key — not Tailscale's — since Tailscale routes raw TCP and doesn't proxy SSH. The SOCKS5 proxy from step 3 is doing the work: `ssh` dials `100.x.y.z:22`, `nc -X 5` funnels that through `localhost:1055`, and `tailscaled` routes it across the tailnet to the peer's sshd on the other end.
 
 ### Teardown
 

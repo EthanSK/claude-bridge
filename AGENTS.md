@@ -124,7 +124,7 @@ agent-bridge run MacBook-Pro "brew update && brew upgrade"
 `bridge_send_message` accepts the **local machine name** (or one of the reserved aliases `local`, `self`, `localhost`) as its `machine` parameter. The message JSON is written directly to `~/.agent-bridge/inbox/<target>/<id>.json` — no SSH hop, no loopback round-trip:
 
 ```
-bridge_send_message({ machine: "local",  message: "review the queue", target: "openclaw/clawdiboi2" })
+bridge_send_message({ machine: "local",  message: "review the queue", target: "openclaw/<account-alias>" })
 ```
 
 Use this when an MCP host needs to talk to another agent harness running on the **same** machine (canonical case: a Claude Code session messaging OpenClaw embedded Telegram sessions in the same gateway). The receiver still needs a watcher running on its inbox subdir — agent-bridge just lands the file. `agent-bridge run <local>` and `agent-bridge connect <local>` are deliberately rejected: there is no SSH loopback.
@@ -144,33 +144,35 @@ Targets decide which listener on the receiving machine picks up the message:
 - `"openclaw/<account>"` — injects into the OpenClaw Telegram session for `<account>`. If the openclaw side runs the openclaw-channel plugin ≥ 2.1.0, each account under `channels.telegram.accounts` is auto-discovered as a target, so you can address them directly without an extra `targets` block in `openclaw.json`. With the current MCP tool default, replies can route back over agent-bridge because `from_target` defaults to `claude-code`; use `one_way: true` or target/plugin `replyVia: "telegram"` when you intentionally want a visible Telegram reply.
 - `"<harness>/<name>"` — any other configured harness/subdir. Target names may contain Unicode letters / digits plus `_`, `.`, `-`, `/` (no `..`, no leading/trailing `/`, no `//`, ≤256 chars).
 
-For bidirectional flows across harnesses, set `fromTarget` (or MCP tool arg `from_target`) on outbound messages to your own target-id (e.g. `fromTarget: "openclaw/clawdiboi2"`). The Claude Code MCP tool supplies `from_target: "claude-code"` by default unless `one_way: true` is set. The receiver copies that into `reply.target` so the reply round-trips back to the session that originated it. For OpenClaw-originated sends, always use the CURRENT Telegram account's target-id (`openclaw/default`, `openclaw/clawdiboi2`, etc.) so replies stay isolated per account.
+For bidirectional flows across harnesses, set `fromTarget` (or MCP tool arg `from_target`) on outbound messages to your own target-id (e.g. `fromTarget: "<harness>/<account-alias>"`). The Claude Code MCP tool supplies `from_target: "claude-code"` by default unless `one_way: true` is set. The receiver copies that into `reply.target` so the reply round-trips back to the session that originated it. For OpenClaw-originated sends, always use the CURRENT Telegram account's target-id (e.g. `openclaw/default`, `openclaw/<your-account-alias>`, etc.) so replies stay isolated per account.
 
 The message is pushed into the running Claude session on MacBook-Pro as a `<channel source="agent-bridge" ...>` event. Its reply comes back the same way. This is the only supported agent-to-agent communication path.
 
-### OC persona routing
+### Named target routing
 
-When the user names an OpenClaw persona, route to the matching `target` literally — **don't default to `openclaw/default` when a specific persona was named**. That's a routing bug, not a fallback.
+When the user names a specific target alias (a persona, a session, a per-account bot, etc.), route to the matching `target` literally — **don't default to `<harness>/default` when a specific alias was named**. That's a routing bug, not a fallback.
 
-| Spoken / written name(s)                                                | `target`                  |
-|-------------------------------------------------------------------------|---------------------------|
-| `Claude the third` / `Claude III` / `Clord` / `clordlethird`            | `openclaw/clordlethird`   |
-| `Claudibo` / `Clawdiboi2` / `Claude two` / `Claude II`                  | `openclaw/clawdiboi2`     |
-| `Claude Station Mini` / `Clawdmini` / `default` / unspecified           | `openclaw/default`        |
+The convention is `<harness>/<account-alias>`:
 
-Voice transcripts regularly mis-hear persona names — `Claude the third` → `Cloward third` / `Cloud the third`, `Claudibo` → `Cloudy boy`, `Clord` → `Chord` / `Cord`, `Open Claw` → `Open Core`. Re-read the transcript twice if a persona name is involved; prefer the explicit-persona reading over the default. Canonical rule + full rationale (incl. routing-mistake background): [`docs/oc-persona-routing.md`](docs/oc-persona-routing.md).
+| Spoken / written name(s)                              | `target`                          |
+|-------------------------------------------------------|-----------------------------------|
+| `Bot Alpha` / `bot-alpha` / `alpha`                   | `<harness>/bot-alpha`             |
+| `Bot Beta` / `bot-beta` / `beta`                      | `<harness>/bot-beta`              |
+| `<harness> default` / `default` / unspecified         | `<harness>/default`               |
 
-### Bridge message relay to Ethan
+Voice transcripts often mis-hear short proper-noun aliases. Re-read the transcript twice if a specific name is involved; prefer the explicit-alias reading over the default. Canonical rule + full rationale: [`docs/named-target-routing.md`](docs/named-target-routing.md).
 
-**Relay every inbound bridge message to Ethan via Telegram** as a brief 1-2 line summary (sender machine + target + the actionable ask), so Ethan has live visibility into what other harnesses are asking. Reply via bridge first if a response is needed; THEN summarize on Telegram. Don't suppress the relay just because the message looks like routine internal coordination — Ethan wants to see all of it.
+### Relay inbound bridge messages to the user
 
-Format example:
+**Relay every inbound bridge message to the user via your harness's configured user-facing channel** (Telegram, Slack, Discord, native UI, etc.) as a brief 1-2 line summary (sender machine + target + the actionable ask), so the user has live visibility into what other harnesses are asking. Reply via bridge first if a response is needed; THEN relay to the user. Don't suppress the relay just because the message looks like routine internal coordination — the user generally wants to see all of it.
 
-> 📡 Bridge from MBP-Claude (target=claude-code): "Diagnostic — please check OC xhigh thinking on Mini..." Replied via bridge with findings.
+Format example (Telegram-style, adapt to your channel):
+
+> 📡 Bridge from <sender-machine> (target=<routed-target>): "<1-2 sentence quote of the actionable ask>" Replied via bridge with <action>.
 
 Exception: pure-noise heartbeats / liveness pings with no actionable content (e.g. `bridge_status` polls). Those can be silent.
 
-Established 2026-05-03 (Ethan voice 6181 + 6186, applies to all paired harnesses). Canonical rule + full rationale (format guidance, what counts as relayable, order of operations): [`docs/bridge-relay-to-telegram.md`](docs/bridge-relay-to-telegram.md).
+Canonical rule + full rationale (format guidance, what counts as relayable, order of operations): [`docs/relay-to-user.md`](docs/relay-to-user.md).
 
 ### Open an interactive SSH session
 ```bash

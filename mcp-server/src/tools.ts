@@ -207,22 +207,17 @@ export function registerTools(server: McpServer): void {
       title: 'Send Message',
       description:
         'Send a message to a running agent on another machine, OR to a same-machine target. Cross-machine sends go via SSH; same-machine sends write directly to the local inbox (no SSH). The receiver picks up the message via their per-target inbox subdir:\n'
-        + '  • target="claude-code"           — Claude Code channel plugin (default for cross-machine Claude ↔ Claude)\n'
-        + '  • target="openclaw/default"      — OpenClaw @ClawdStationMiniBot running Telegram session\n'
-        + '  • target="openclaw/clawdiboi2"   — OpenClaw @Clawdiboi2bot running Telegram session\n'
-        + '  • target="openclaw/clordlethird" — OpenClaw @ClordLeThirdBot running Telegram session\n'
-        + '  • target="<harness>/<name>"      — any other configured harness\n\n'
-        + 'OC persona name → target (match LITERALLY, do NOT default to openclaw/default when a persona is named):\n'
-        + '  • "Claude the third" / "Claude III" / "Clord" / "clordlethird"   → openclaw/clordlethird\n'
-        + '  • "Claudibo" / "Clawdiboi2" / "Claude two" / "Claude II"         → openclaw/clawdiboi2\n'
-        + '  • "Claude Station Mini" / "default" / unspecified                → openclaw/default\n'
-        + 'Voice transcripts mis-hear persona names ("Claude the third" → "Cloward third"); re-read before routing. Canonical rule + rationale: docs/oc-persona-routing.md.\n\n'
-        + '**Recipient relay rule**: when YOU receive an inbound bridge message via the `<channel source="agent-bridge">` block, summarize it on Telegram (1-2 lines: sender machine + target + actionable ask) so Ethan has live visibility into cross-harness coordination. Reply via bridge first if needed, THEN Telegram-relay. Don\'t suppress purely-routine messages — relay them. Exception: pure-noise heartbeats / `bridge_status` polls. See AGENTS.md "Bridge message relay to Ethan" + canonical doc docs/bridge-relay-to-telegram.md.\n\n'
-        + 'The `machine` parameter accepts either a paired remote machine name OR the local machine name (or one of the aliases "local", "self", "localhost"). Same-machine delivery is first-class (3.5.0+): the message JSON is written directly to ~/.agent-bridge/inbox/<target>/<id>.json with no SSH hop. Useful for routing to OpenClaw embedded agents (target="openclaw/<account>") on the same host.\n\n'
+        + '  • target="claude-code"                 — Claude Code channel plugin (default for cross-machine Claude ↔ Claude)\n'
+        + '  • target="openclaw/default"            — example: an OpenClaw running Telegram session (the "default" account)\n'
+        + '  • target="<harness>/<account-alias>"   — any other configured harness/per-account session, e.g. "openclaw/<your-account-alias>"\n\n'
+        + 'Named-target routing rule: when the user names a specific target alias (a persona, a session, a per-account bot, etc.), match the alias LITERALLY — do NOT silently default to "<harness>/default" when a specific alias was named. Voice transcripts often mis-hear short proper-noun aliases; re-read the source twice if a specific name was mentioned. Canonical rule + rationale: docs/named-target-routing.md.\n\n'
+        + '**Recipient relay rule**: when YOU receive an inbound bridge message via the `<channel source="agent-bridge">` block, relay a 1-2 line summary (sender machine + target + actionable ask) to the user via your harness\'s configured user-facing channel (Telegram, Slack, Discord, native UI, etc.) so the user has live visibility into cross-harness coordination. Reply via bridge first if needed, THEN relay to the user. Don\'t suppress purely-routine messages — relay them. Exception: pure-noise heartbeats / `bridge_status` polls. See AGENTS.md "Relay inbound bridge messages to the user" + canonical doc docs/relay-to-user.md.\n\n'
+        + 'The `machine` parameter accepts either a paired remote machine name OR the local machine name (or one of the aliases "local", "self", "localhost"). Same-machine delivery is first-class (3.5.0+): the message JSON is written directly to ~/.agent-bridge/inbox/<target>/<id>.json with no SSH hop. Useful for routing to embedded agents (e.g. target="<harness>/<account-alias>") on the same host.\n\n'
         + 'The target field is REQUIRED as of agent-bridge 3.4.0 — there is intentionally no default delivery routing. '
         + 'Messages without a target are rejected at the sender. Legacy messages that land at the root of the inbox on the receiver are moved to .failed/_unrouted/ on next startup. '
         + '`from_target` / `fromTarget` defaults to `claude-code` for normal Claude Code sends so the remote agent can reply over agent-bridge. '
-        + 'Set `one_way=true` only when you intentionally do not want a bridge reply path.',      inputSchema: {
+        + 'Set `one_way=true` only when you intentionally do not want a bridge reply path.',
+      inputSchema: {
         machine: z
           .string()
           .describe(
@@ -232,13 +227,13 @@ export function registerTools(server: McpServer): void {
         target: z
           .string()
           .describe(
-            'Required. Slash-delimited routing target, e.g. "claude-code", "openclaw/clawdiboi2". Determines which inbox subdir on the remote the message lands in, and which listener picks it up.',
+            'Required. Slash-delimited routing target, e.g. "claude-code", "<harness>/<account-alias>" (such as "openclaw/default"). Determines which inbox subdir on the remote the message lands in, and which listener picks it up.',
           ),
         from_target: z
           .string()
           .optional()
           .describe(
-            'Sender-side reply target for round-trip routing. Defaults to `claude-code` for Claude Code sends. Set explicitly when sending from another local target such as `openclaw/default` or `openclaw/clawdiboi2`.',
+            'Sender-side reply target for round-trip routing. Defaults to `claude-code` for Claude Code sends. Set explicitly when sending from another local target such as `<harness>/<account-alias>`.',
           ),
         fromTarget: z
           .string()
@@ -297,7 +292,7 @@ export function registerTools(server: McpServer): void {
               type: 'text' as const,
               text:
                 `Missing/invalid target. The target field is REQUIRED as of agent-bridge 3.4.0 — there is no default routing. `
-                + `Use "claude-code" for Claude Code ↔ Claude Code, or "openclaw/<account>" for an OpenClaw Telegram session. `
+                + `Use "claude-code" for Claude Code ↔ Claude Code, or "<harness>/<account-alias>" (e.g. "openclaw/default") for a per-account session. `
                 + `Got: ${JSON.stringify(target ?? null)}.`,
             },
           ],
@@ -344,7 +339,7 @@ export function registerTools(server: McpServer): void {
               type: 'text' as const,
               text:
                 `Missing/invalid from_target. When provided it must be a valid target like `
-                + `"claude-code" or "openclaw/<account>". `
+                + `"claude-code" or "<harness>/<account-alias>". `
                 + `Got: ${JSON.stringify(resolvedFromTarget)}.`,
             },
           ],
