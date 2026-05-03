@@ -675,6 +675,12 @@ export function sendLocalMessage(message: BridgeMessage): void {
   // field in the JSON-on-disk so the watcher's persona-scoped target
   // check accepts it. The outbox copy carries the rewritten target too,
   // matching the canonical inbox file.
+  //
+  // Local-only — same machine means same agent-bridge version (a v3.x
+  // process and a v4.0+ process never coexist on the same host because
+  // a single channel-owner lease coordinates them). The rolling-upgrade
+  // concern that suppresses the rewrite in `sendMessage` (SSH path)
+  // does NOT apply here.
   if (message.target === CLAUDE_CODE_TARGET) {
     message.target = claudeCodeTargetForPersona(DEFAULT_PERSONA);
   }
@@ -776,17 +782,18 @@ export async function sendMessage(
       + `Got: ${JSON.stringify(message.target ?? null)}`,
     );
   }
-  // 4.0.0 — legacy `claude-code` addressing is rewritten to
-  // `claude-code/default` so the receiver's default-persona watcher
-  // picks it up via its native subdir scan. Without this, a 4.0.0+
-  // receiver would route the file to `.failed/_unrouted/` because it
-  // landed at `inbox/claude-code/<file>.json` (no persona segment).
-  if (message.target === CLAUDE_CODE_TARGET) {
-    message.target = claudeCodeTargetForPersona(DEFAULT_PERSONA);
-  }
-  if (message.fromTarget === CLAUDE_CODE_TARGET) {
-    message.fromTarget = claudeCodeTargetForPersona(DEFAULT_PERSONA);
-  }
+  // 4.0.0 — rolling-upgrade compatibility: when the caller addresses the
+  // legacy `claude-code` literal (no persona segment), DO NOT rewrite the
+  // wire `target` or the on-disk path. A pre-4.0 receiver only watches
+  // `inbox/claude-code/*.json` (flat) and only accepts
+  // `target === "claude-code"`; rewriting either to `claude-code/default`
+  // would silently drop the message on still-3.x peers. A 4.0+ receiver
+  // handles the legacy form natively: `migrateLegacyClaudeCodeInboxFiles`
+  // (called on init AND periodically by the watcher tick) drains the
+  // flat path into `inbox/claude-code/default/`, and
+  // `isTargetForActivePersona` accepts `target === "claude-code"` directly.
+  // Local sends (`sendLocalMessage`) keep rewriting because both sides
+  // are guaranteed same-version on the same machine.
   const remotePath = `~/.agent-bridge/inbox/${message.target}/${message.id}.json`;
   const content = JSON.stringify(message, null, 2);
 
