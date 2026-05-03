@@ -99,3 +99,13 @@ bridge_send_message({
   target: "claude-code"
 })
 ```
+
+## OC persona routing
+
+When the user names an OpenClaw persona, route to the matching `target` LITERALLY — do not default to `openclaw/default` when a specific persona was named:
+
+- `Claude the third` / `Claude III` / `Clord` / `clordlethird`  → `openclaw/clordlethird`
+- `Claudibo` / `Clawdiboi2` / `Claude two` / `Claude II`        → `openclaw/clawdiboi2`
+- `Claude Station Mini` / `Clawdmini` / `default` / unspecified → `openclaw/default`
+
+Voice transcripts mis-hear persona names (`Claude the third` → `"Cloward third"`); re-read before routing. Canonical rule + rationale: [`docs/oc-persona-routing.md`](../../docs/oc-persona-routing.md).

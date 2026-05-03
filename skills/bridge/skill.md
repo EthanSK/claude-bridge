@@ -86,6 +86,8 @@ bridge_send_message({
 
 For `target: "claude-code"`, the message is pushed into the live Claude Code session on MacBook-Pro as a `<channel source="agent-bridge" ...>` event, and the reply comes back the same way. OpenClaw targets use `target: "openclaw/<account>"` and are delivered by the separate `openclaw-channel/` plugin. In all cases, use `bridge_send_message` for agent-to-agent work — do not shell out to fresh agent wrappers.
 
+**OC persona routing.** When the user names an OpenClaw persona (`Claude the third` / `Clord` → `openclaw/clordlethird`, `Claudibo` / `Claude two` → `openclaw/clawdiboi2`, `Claude Station Mini` / unspecified → `openclaw/default`), match LITERALLY — do not default to `openclaw/default`. Voice transcripts mis-hear persona names; re-read before routing. Canonical: [`docs/oc-persona-routing.md`](../../docs/oc-persona-routing.md).
+
 ### Open an interactive SSH session
 ```bash
 agent-bridge connect MacBook-Pro

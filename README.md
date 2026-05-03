@@ -1651,6 +1651,8 @@ bridge_send_message({ machine: "Mac-Mini", message: "FYI", target: "openclaw/cla
 
 There is **no default routing** — a call without `target` is rejected. Legacy flat files that arrive at the root of `inbox/` (from pre-3.4.0 senders) are moved to `.failed/_unrouted/` on next startup with a deprecation log line. Upgrade your senders.
 
+**OC persona routing.** When the user names an OpenClaw persona — `Claude the third` / `Clord` → `openclaw/clordlethird`, `Claudibo` / `Claude two` → `openclaw/clawdiboi2`, `Claude Station Mini` / unspecified → `openclaw/default` — match LITERALLY before falling back to default. Voice-transcripts often mis-hear persona names (`Claude the third` → `"Cloward third"`); re-read before routing. Full table + rationale: [`docs/oc-persona-routing.md`](docs/oc-persona-routing.md), also mirrored in [`AGENTS.md`](AGENTS.md#oc-persona-routing) and the `bridge_send_message` tool description.
+
 Target strings accept Unicode letters/digits plus `_`, `.`, `-`, `/` (no `..`, no leading/trailing `/`, no `//`, ≤256 chars) so multilingual harness names are allowed.
 
 **OpenClaw target mapping** — the happy path is now **auto-discovery** in `openclaw.json`: each entry under `channels.telegram.accounts` is automatically registered as a bridge target of the same name, routing to `telegram:<account>`. You only need a `targets` block if you want to override that (different peer per bot, non-Telegram target, etc.).

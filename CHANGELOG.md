@@ -1,5 +1,24 @@
 # Changelog
 
+## agent-bridge 3.14.5 — 2026-05-03
+
+### OC persona name routing — built into agent-bridge so it travels with the plugin
+
+Mini-Claude routed an `[ETHAN-AUTHED]` directive intended for "Claude the third" to `openclaw/default` instead of `openclaw/clordlethird` (voice 6172, 2026-05-03), because the persona-name → target mapping had been documented only in `~/.claude/CLAUDE.md` on Mini and not in agent-bridge itself. Ethan voice 6176: *"this routing rule should be in agent bridge. It shouldn't just be patched in Mini's CLAUDE.md — agent-bridge should have these instructions so that we set it up properly in the future."*
+
+3.14.5 ships the persona-routing rule as part of agent-bridge so every paired harness (Claude Code on Mini / MBP / Dell, OpenClaw sessions, fresh installs) gets it without depending on dot-claude sync. **No behavior change** — pure documentation + tool-description wiring.
+
+- **New canonical doc** — `docs/oc-persona-routing.md`. Full persona → target table (`Claude the third` / `Clord` / `clordlethird` → `openclaw/clordlethird`, `Claudibo` / `Claude two` → `openclaw/clawdiboi2`, `Claude Station Mini` / `default` → `openclaw/default`), routing rule with the literal-match-before-default requirement, voice-transcript mishearing caveats (`Claude the third` → `"Cloward third"`, `Claudibo` → `"Cloudy boy"`, `Open Claw` → `"Open Core"`, etc.), correct/incorrect routing examples, and the routing-mistake background.
+- **`bridge_send_message` tool description** — appended a 5-line abbreviated persona-mapping table directly to the MCP tool description so future agents see it the moment they read the tool schema. Points at `docs/oc-persona-routing.md` for canonical text. Description still ends with the existing required-target / from_target / one_way guidance.
+- **`AGENTS.md`** — added "OC persona routing" subsection under "Talk to the RUNNING remote agent" with the same abbreviated table + voice-transcript caveat + link to the canonical doc.
+- **`README.md`** — added a one-paragraph callout at the end of the "Message routing / targets" section pointing at the canonical doc, AGENTS.md mirror, and tool-description mirror.
+- **`skills/bridge/skill.md` + `skills/openclaw/SKILL.md`** — both skill files now carry an "OC persona routing" pointer back to `docs/oc-persona-routing.md` so the rule is reachable via the skill system on both Claude Code and OpenClaw.
+- **DRY by design** — only `docs/oc-persona-routing.md` carries the full canonical text. Other surfaces have abbreviated 3-5 line versions that link back. This avoids skew the next time a new persona is provisioned (one edit in the canonical doc + one row in each abbreviated table).
+- **No code change, no test change beyond the version-string assertions** — bash CLI VERSION, `MCP_SERVER_VERSION` in `config.ts`, `mcp-server/package.json`, `mcp-server/.claude-plugin/plugin.json`, `mcp-server/package-lock.json`, and the in-test version-equality assertions all bump 3.14.4 → 3.14.5.
+- **Tests** — full mcp-server suite stays at 86/86 pass.
+
+The dot-claude side rule (added earlier today in commit `003e63d`) is intentionally **kept**. Ethan's defense-in-depth pattern: critical rules live in multiple places so a single missing source of truth doesn't degrade behavior. dot-claude carries the rule for any Claude Code session regardless of agent-bridge install state; agent-bridge carries it for any new harness / fleet machine that picks up the plugin without a dot-claude sync.
+
 ## agent-bridge 3.14.4 — 2026-05-03
 
 ### MCP-disconnect cascade fix + observability

@@ -148,6 +148,18 @@ For bidirectional flows across harnesses, set `fromTarget` (or MCP tool arg `fro
 
 The message is pushed into the running Claude session on MacBook-Pro as a `<channel source="agent-bridge" ...>` event. Its reply comes back the same way. This is the only supported agent-to-agent communication path.
 
+### OC persona routing
+
+When the user names an OpenClaw persona, route to the matching `target` literally — **don't default to `openclaw/default` when a specific persona was named**. That's a routing bug, not a fallback.
+
+| Spoken / written name(s)                                                | `target`                  |
+|-------------------------------------------------------------------------|---------------------------|
+| `Claude the third` / `Claude III` / `Clord` / `clordlethird`            | `openclaw/clordlethird`   |
+| `Claudibo` / `Clawdiboi2` / `Claude two` / `Claude II`                  | `openclaw/clawdiboi2`     |
+| `Claude Station Mini` / `Clawdmini` / `default` / unspecified           | `openclaw/default`        |
+
+Voice transcripts regularly mis-hear persona names — `Claude the third` → `Cloward third` / `Cloud the third`, `Claudibo` → `Cloudy boy`, `Clord` → `Chord` / `Cord`, `Open Claw` → `Open Core`. Re-read the transcript twice if a persona name is involved; prefer the explicit-persona reading over the default. Canonical rule + full rationale (incl. routing-mistake background): [`docs/oc-persona-routing.md`](docs/oc-persona-routing.md).
+
 ### Open an interactive SSH session
 ```bash
 agent-bridge connect MacBook-Pro
