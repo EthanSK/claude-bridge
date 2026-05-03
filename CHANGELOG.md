@@ -1,5 +1,16 @@
 # Changelog
 
+## agent-bridge 3.14.3 — 2026-05-03
+
+### OpenClaw Telegram-visible Agent Bridge relay receipts
+
+Ethan asked to bring back the old affordance where OpenClaw/Agent Bridge harnesses visibly acknowledge bridge traffic in Telegram, so he can tell at a glance that another agent sent a message even when the actual reply is routed silently over Agent Bridge.
+
+- **`openclaw-channel` 2.4.1** — inbound BridgeMessages now send a best-effort receipt to the configured OpenClaw chat before the agent turn runs. The first line is `[Agent Bridge relay] 🛰️`; the body shows `from/fromTarget → target`, reply path, message id, and a compact one-line content preview.
+- **Independent of `replyVia`** — receipts are sent even when `replyVia: "agent-bridge"` keeps the actual agent reply on the silent SFTP back-channel. This separates “Ethan can see that bridge traffic happened” from “the agent reply should be Telegram-visible”.
+- **Config** — receipts default to enabled. Set `channels["agent-bridge"].config.relayNotice = false` (or `targets.<name>.relayNotice = false`) to silence them. Optional `relayNoticeChannel` / `relayNoticePeerId` override the delivery route.
+- **Tests** — added `openclaw-channel/test/relay-notice.test.js`; `node --test test/*.test.js` passes in `openclaw-channel/`.
+
 ## agent-bridge 3.14.2 — 2026-05-02
 
 ### Bin-bundled `plugin-registry-rewire.mjs` + multi-location CLI search

@@ -45,6 +45,25 @@
         "enum": ["telegram", "agent-bridge"],
         "description": "Plugin-level default reply routing for inbound bridge messages. 'telegram' routes the agent's reply back through the same Telegram chat that injected the session (visible to Ethan's phone). 'agent-bridge' routes the reply back to the SENDER machine via agent-bridge SFTP delivery (invisible to Telegram). If unset, routing mirrors the sender: messages with fromTarget reply over agent-bridge; messages without it reply through Telegram. Per-target overrides win over this default."
       },
+      "relayNotice": {
+        "description": "Telegram-visible receipt/update for inbound Agent Bridge messages before the agent turn runs. Defaults to enabled; set false (or {\"enabled\": false}) to silence. The notice starts with '[Agent Bridge relay] 🛰️' so Ethan can identify it at a glance.",
+        "oneOf": [
+          { "type": "boolean" },
+          {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": { "enabled": { "type": "boolean" } }
+          }
+        ]
+      },
+      "relayNoticeChannel": {
+        "type": "string",
+        "description": "Optional channel id for relay notices. Defaults to the target's openclaw_channel (normally telegram)."
+      },
+      "relayNoticePeerId": {
+        "type": "string",
+        "description": "Optional peer/chat id for relay notices. Defaults to the target peer_id."
+      },
       "targets": {
         "type": "object",
         "description": "OPTIONAL: Map of target-name -> routing config. If present, acts as an advanced override — each target name becomes an inbox subdir at `<inboxRoot>/openclaw/<name>/` and identifies which Telegram account/session to inject bridge messages into. If absent or empty (the default), the plugin AUTO-DISCOVERS one target per entry in `channels.telegram.accounts` on the OpenClaw global config. Peer id resolution: explicit `targets.<name>.peer_id` -> `channels.agent-bridge.config.peer_id` -> `meta.user_id` on the global config -> first chat id in `channels.telegram.accounts[<name>].allowFrom`.",
@@ -74,6 +93,25 @@
               "type": "string",
               "enum": ["telegram", "agent-bridge"],
               "description": "Override plugin-level `replyVia` for this target. 'telegram' = reply goes out through Telegram (Ethan's phone pings). 'agent-bridge' = reply is SFTP-delivered back to the sender machine as a BridgeMessage (no Telegram traffic). Default: inherits plugin-level, then mirrors the sender (agent-bridge when fromTarget is present, otherwise telegram)."
+            },
+            "relayNotice": {
+              "description": "Per-target override for Telegram-visible Agent Bridge relay receipts. Defaults to enabled; set false (or {\"enabled\": false}) to silence.",
+              "oneOf": [
+                { "type": "boolean" },
+                {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": { "enabled": { "type": "boolean" } }
+                }
+              ]
+            },
+            "relayNoticeChannel": {
+              "type": "string",
+              "description": "Optional channel id for this target's relay notices. Defaults to openclaw_channel."
+            },
+            "relayNoticePeerId": {
+              "type": "string",
+              "description": "Optional peer/chat id for this target's relay notices. Defaults to peer_id."
             }
           },
           "required": ["account"]

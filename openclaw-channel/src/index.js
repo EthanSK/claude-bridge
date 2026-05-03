@@ -79,6 +79,7 @@ import {
 } from "./channel-plugin.js";
 import { localMachineName } from "./outbound.js";
 import { encodeBridgePeerId } from "./bridge-peer.js";
+import { formatRelayNotice, relayNoticeEnabled } from "./relay-notice.js";
 import { emitLifecycleEvent, ensureService as ensureChimeService } from "../../chime/emitter.mjs";
 
 const PLUGIN_ID = "agent-bridge";
@@ -291,6 +292,17 @@ export default {
 
             const account = target.config.account ?? target.name;
             const telegramPeerId = target.config.peer_id;
+
+            await sendBridgeRelayNotice({
+              runtime,
+              hostCfg,
+              pluginCfg,
+              target,
+              account,
+              msg,
+              replyVia,
+              log,
+            });
 
             // Legacy: targets flagged as legacy_session bypass session
             // injection and rely purely on the native agent-bridge channel.
@@ -542,6 +554,9 @@ function buildWatcherSignature({ agentId, inboxRoot, pollIntervalMs, targets }) 
         cfg.account ?? null,
         cfg.peer_id ?? null,
         cfg.replyVia ?? null,
+        cfg.relayNotice ?? null,
+        cfg.relayNoticeChannel ?? null,
+        cfg.relayNoticePeerId ?? null,
         Boolean(cfg.legacy_session),
       ];
     });
@@ -642,6 +657,47 @@ function registerReplyTarget(replyTargets, { sessionKey, fromMachine, incoming, 
  *
  * Args: `{ to, text, cfg, accountId, replyToId }`.
  */
+async function sendBridgeRelayNotice({ runtime, hostCfg, pluginCfg, target, account, msg, replyVia, log }) {
+  if (!relayNoticeEnabled(pluginCfg, target.config)) return;
+
+  const noticeChannel = target.config.relayNoticeChannel
+    ?? target.config.openclaw_channel
+    ?? "telegram";
+  const noticePeerId = target.config.relayNoticePeerId
+    ?? target.config.peer_id;
+
+  if (!noticePeerId) {
+    log?.debug?.(
+      `bridge relay notice skipped for ${target.name}/${msg.id}: target has no peer_id`,
+    );
+    return;
+  }
+
+  const deliverFn = resolveProviderDeliver({ runtime, targetChannel: noticeChannel });
+  if (!deliverFn) {
+    log?.warn?.(
+      `bridge relay notice skipped for ${target.name}/${msg.id}: no outbound delivery function for channel="${noticeChannel}"`,
+    );
+    return;
+  }
+
+  try {
+    await deliverFn({
+      to: String(noticePeerId),
+      text: formatRelayNotice(msg, { targetName: target.name, replyVia }),
+      cfg: hostCfg,
+      accountId: account,
+      replyToId: null,
+    });
+  } catch (err) {
+    // A receipt should never block the actual agent-to-agent dispatch. Log and
+    // keep going so bridge messages still get processed if Telegram is flaky.
+    log?.warn?.(
+      `bridge relay notice failed for ${target.name}/${msg.id}: ${err?.message ?? err}`,
+    );
+  }
+}
+
 function resolveProviderDeliver({ runtime, targetChannel }) {
   // Strategy 1: 2026.4.15+ generic adapter loader.
   const loadAdapter = runtime?.channel?.outbound?.loadAdapter;
@@ -775,6 +831,9 @@ function normalizeExplicitTargets(pluginCfg, log) {
       agent_id: cfg.agent_id ?? null,
       legacy_session: Boolean(cfg.legacy_session),
       replyVia: cfg.replyVia ?? null,
+      relayNotice: cfg.relayNotice ?? pluginCfg.relayNotice ?? null,
+      relayNoticeChannel: cfg.relayNoticeChannel ?? pluginCfg.relayNoticeChannel ?? null,
+      relayNoticePeerId: cfg.relayNoticePeerId ?? pluginCfg.relayNoticePeerId ?? null,
     };
   }
   return out;
@@ -842,6 +901,9 @@ function autoDiscoverFromTelegram({ pluginCfg, openclawGlobalCfg, log }) {
       // wants per-account back-channel routing he can switch to an
       // explicit `targets` map.
       replyVia: null,
+      relayNotice: pluginCfg.relayNotice ?? null,
+      relayNoticeChannel: pluginCfg.relayNoticeChannel ?? null,
+      relayNoticePeerId: pluginCfg.relayNoticePeerId ?? null,
       auto_discovered: true,
     };
   }

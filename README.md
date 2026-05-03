@@ -1326,11 +1326,14 @@ Registers `agent-bridge` as a first-class OpenClaw channel (same tier as Telegra
 >
 > Precedence (highest first): per-message `BridgeMessage.replyVia` → `targets.<name>.replyVia` → plugin-level `channels["agent-bridge"].config.replyVia` → sender-derived default. Valid values: `"telegram"` | `"agent-bridge"`. Unknown values fall back to `"telegram"` with a warn log. Use `"agent-bridge"` only if you explicitly want a silent peer-to-peer back-channel for that target. See [`openclaw-channel/README.md`](openclaw-channel/README.md) for the full session-keying model.
 
+> 🛰️ **Relay receipts:** OpenClaw targets also send a short Telegram-visible receipt for every inbound bridge message before the agent turn runs. The first line is `[Agent Bridge relay] 🛰️`, followed by `from/fromTarget → target`, reply path, message id, and a compact preview. This is independent of `replyVia`: even silent back-channel turns can still give Ethan a glanceable “another harness messaged this OpenClaw” update. Disable with `channels["agent-bridge"].config.relayNotice = false` (or per-target `targets.<name>.relayNotice = false`).
+
 **How OpenClaw push delivery works:**
 1. Peer's `bridge_send_message` writes a JSON file to `~/.agent-bridge/inbox/openclaw/<target>/` via SFTP over SSH
 2. The channel plugin's file watcher sees the new file
-3. The plugin resolves the canonical session route via `runtime.channel.routing.resolveAgentRoute(...)`, builds a synthetic inbound ctxPayload with `Provider: "telegram"` + `OriginatingChannel: "telegram"` + `OriginatingTo: "telegram:<peerId>"`, and calls `dispatchInboundReplyWithBase` — a synchronous agent turn runs in the target session and the agent's reply is sent out through `runtime.channel.telegram.sendMessageTelegram(...)`, landing in the matching Telegram chat
-4. For cross-harness replies (peer is ALSO agent-bridge-aware), the plugin SFTP-delivers a reply `BridgeMessage` back to the sender's inbox via the native `agent-bridge` channel's outbound adapter
+3. The plugin best-effort sends the `[Agent Bridge relay] 🛰️` receipt to the target's configured chat unless `relayNotice` is disabled
+4. The plugin resolves the canonical session route via `runtime.channel.routing.resolveAgentRoute(...)`, builds a synthetic inbound ctxPayload with `Provider: "telegram"` + `OriginatingChannel: "telegram"` + `OriginatingTo: "telegram:<peerId>"`, and calls `dispatchInboundReplyWithBase` — a synchronous agent turn runs in the target session and the agent's reply is sent out through `runtime.channel.telegram.sendMessageTelegram(...)`, landing in the matching Telegram chat
+5. For cross-harness replies (peer is ALSO agent-bridge-aware), the plugin SFTP-delivers a reply `BridgeMessage` back to the sender's inbox via the native `agent-bridge` channel's outbound adapter
 
 ### Codex (OpenAI) (MCP server -- tools-only / manual fallback)
 

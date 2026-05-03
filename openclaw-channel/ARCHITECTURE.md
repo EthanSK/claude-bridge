@@ -133,6 +133,14 @@ to="..." target="..." message_id="..." ts="..." reply_to="...">content</channel>
 block. This is intentional parity with the Claude Code channel plugin so
 the agent sees the same message shape on both sides of the bridge.
 
+Before dispatching the agent turn, `sendBridgeRelayNotice(...)` best-effort
+sends a short human-visible receipt through the target's configured chat
+(normally Telegram). The notice starts `[Agent Bridge relay] 🛰️` and is
+controlled by `relayNotice` / `relayNoticeChannel` / `relayNoticePeerId`.
+It deliberately does not affect the real reply path: `replyVia` still
+decides whether the agent's answer goes to Telegram or back over the
+silent agent-bridge channel.
+
 ### Per-target subdir routing
 
 v2.1.0 watches `~/.agent-bridge/inbox/openclaw/<targetName>/*.json` for
@@ -216,6 +224,7 @@ openclaw-channel/
     ├── index.js            # plugin entry: registerChannel + start watcher
     ├── channel-plugin.js   # the ChannelPlugin object (meta, config, outbound)
     ├── inbox-watcher.js    # poll ~/.agent-bridge/inbox/*.json
+    ├── relay-notice.js     # format/enable Telegram-visible bridge receipts
     ├── outbound.js         # SFTP reply BridgeMessages back to sender
     ├── envelope.js         # BridgeMessage parse/build helpers
     └── log.js              # thin logger wrapper over api.logger
