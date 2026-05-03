@@ -70,6 +70,23 @@ async function readEvents(home) {
   }
 }
 
+/**
+ * Poll for a specific log event up to `timeoutMs`. Returns the event when
+ * found, or `null` on timeout. Use this instead of a fixed `sleep()` so the
+ * test is robust against the cmdline-fallback path's synchronous `ps` call,
+ * which adds variable startup latency on slow CI hosts.
+ */
+async function waitForEvent(home, eventName, timeoutMs = 8000, pollMs = 100) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const events = await readEvents(home);
+    const found = events.find((e) => e.event === eventName);
+    if (found) return found;
+    await sleep(pollMs);
+  }
+  return null;
+}
+
 test('server.shutdown_diag dumps active handles and request counts on shutdown', async (t) => {
   if (process.platform === 'win32') {
     t.skip("Windows child.kill() signal delivery can bypass Node's shutdown handler");
@@ -81,7 +98,12 @@ test('server.shutdown_diag dumps active handles and request counts on shutdown',
   // handled shutdown signal, which goes through handleSignal → shutdown → diag.
   const server = startServer(home);
   try {
-    await sleep(800);
+    // Poll for server.starting instead of a fixed sleep — the cmdline-fallback
+    // identity path (forced by clearing AGENT_BRIDGE_PERSONA above) does a
+    // synchronous `ps` shell-out before logging server.starting, which can
+    // exceed any fixed-sleep budget on slow CI.
+    const startingEvt = await waitForEvent(home, 'server.starting', 8000);
+    assert.ok(startingEvt, 'expected server.starting event before shutdown');
     const shutdownSignal = process.platform === 'win32' ? 'SIGINT' : 'SIGTERM';
     server.child.kill(shutdownSignal);
     await new Promise((resolve) => server.child.once('exit', resolve));
@@ -192,8 +214,20 @@ test('3.6.1: channel-owner survives idle stdin and shuts down cleanly on SIGTERM
   // 4.0.0 — lease key is `claude-code__<persona>.watcher-lock.json`.
   const lockPath = join(home, '.agent-bridge', 'locks', 'claude-code__default.watcher-lock.json');
   try {
-    await sleep(800);
-    assert.ok(await readFile(lockPath, 'utf8'), 'channel-owner should acquire watcher lease');
+    // Poll for the lease file instead of a fixed sleep — startup latency
+    // varies (cmdline-fallback path, slow CI hosts) and a fixed budget can
+    // race the lease write.
+    const leaseDeadline = Date.now() + 8000;
+    let leaseAcquired = false;
+    while (Date.now() < leaseDeadline) {
+      try {
+        await readFile(lockPath, 'utf8');
+        leaseAcquired = true;
+        break;
+      } catch { /* not yet */ }
+      await sleep(100);
+    }
+    assert.ok(leaseAcquired, 'channel-owner should acquire watcher lease');
 
     // Simulate MCP handshake: write a JSON-RPC initialize message and KEEP
     // the pipe open. This is what Claude Code does — the production bug case.
