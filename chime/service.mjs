@@ -76,13 +76,20 @@ import {
   roleFor,
   saveChimePeers,
   saveChimeState,
+  speak,
 } from "./core.mjs";
+import {
+  refreshLocalBotNameCache,
+  resolveBotNameSync,
+  shortenMachineNameForSpeech,
+  speechForChime,
+} from "./bot-name.mjs";
 import { deliverReply, resolvePairedMachine } from "../openclaw-channel/src/outbound.js";
 
 const COMPONENT = "chime-service";
 const LEASE_STALE_MS = 15_000;
 const POLL_MS = 2_000;
-const CHIME_VERSION = "1.0.0-mini-master";
+const CHIME_VERSION = "1.1.0-bot-name-say";
 
 function logEvent(level, event, msg, context = {}) {
   const logFile = join(BRIDGE_HOME, "logs", "agent-bridge.log");
@@ -283,6 +290,14 @@ async function processInboxOnce() {
   let localPerAgent = 0;
   let remotePerAgent = 0;
   let registrationsHandled = 0;
+  // Track the origin machine of the LAST processed perAgent event in this
+  // cycle, so the post-chime `say` can speak the right bot name. We pick
+  // the most-recent event so multi-event bursts feel coherent (you hear the
+  // name of the agent that "just" finished). If both local and remote events
+  // land in the same cycle, we prefer the LOCAL one — that's "Ethan's desk"
+  // and matches the same-cycle pitch decision below.
+  let lastPerAgentOriginMachine = null;
+  let lastPerAgentWasLocal = false;
 
   for (const name of files) {
     const filePath = join(CHIME_INBOX_DIR, name);
@@ -314,8 +329,17 @@ async function processInboxOnce() {
         changed = true;
         if (result.broadcast) localSnapshotToBroadcast.push(result.broadcast);
         if (result.perAgent) {
-          if (isRemoteEvent) remotePerAgent += 1;
-          else localPerAgent += 1;
+          if (isRemoteEvent) {
+            remotePerAgent += 1;
+            // Only set as last-origin if we don't already have a LOCAL pick.
+            if (!lastPerAgentWasLocal) {
+              lastPerAgentOriginMachine = eventOriginMachine;
+            }
+          } else {
+            localPerAgent += 1;
+            lastPerAgentOriginMachine = eventOriginMachine || localMachineName();
+            lastPerAgentWasLocal = true;
+          }
         }
       }
     } else if (payload.kind === "agent.snapshot") {
@@ -362,6 +386,45 @@ async function processInboxOnce() {
     }, 350);
   }
 
+  // -------------------------------------------------------------------------
+  // POST-CHIME SAY (2026-05-04, voice 6308) — speak the Telegram bot name
+  // bound to the event's origin machine. We say AT MOST ONCE per cycle:
+  //   - If the cycle resolved to all-complete, prefer that boundary's
+  //     speech ("<botname> all complete"). If we know the originating
+  //     machine of the last perAgent event in this cycle, use ITS bot
+  //     name; otherwise fall back to the master's local bot name.
+  //   - Otherwise (per-agent only), say "<botname> subagent complete".
+  //
+  // Cooldown / dedup: bursting multiple per-agent events in one cycle
+  // collapses to one `say` (we don't speak per file, only per cycle).
+  // Multiple cycles in quick succession (e.g. several SubagentStop hooks
+  // arriving within 2s) will each say once. Acceptable — Ethan can dial
+  // via `sayBotName: false` if it's too chatty.
+  //
+  // Toggle off via config: { "sayBotName": false }.
+  // -------------------------------------------------------------------------
+  if (shouldPlayHere && config.sayBotName !== false && (totalPerAgentEnded > 0 || fleet.allCompletePlayback)) {
+    const speechMachine = lastPerAgentOriginMachine || localMachineName();
+    const speechBotName = resolveBotNameSync({ machine: speechMachine, config });
+    const speechFallback = shortenMachineNameForSpeech(speechMachine);
+    const speechKind = fleet.allCompletePlayback ? "all_complete" : "per_agent";
+    const phrase = speechForChime({
+      kind: speechKind,
+      bot_name: speechBotName,
+      machine_fallback: speechFallback,
+    });
+    if (phrase) {
+      // Stagger after the chime sound so we don't speak over Glass/Hero.
+      // All-complete sound is itself delayed ~350ms; speak at ~1200ms total.
+      // Per-agent sound fires immediately; speak at ~600ms.
+      const delay = fleet.allCompletePlayback ? 1200 : 600;
+      speak(phrase, delay);
+    }
+    // Best-effort: refresh local bot-name cache async so the NEXT cycle
+    // has a fresh entry even if the local token rotated. Never blocks.
+    refreshLocalBotNameCache({ local_machine: localMachineName() }).catch(() => {});
+  }
+
   saveChimeState(state);
   logChimeEvent({
     ts: Date.now(),
@@ -382,6 +445,8 @@ async function processInboxOnce() {
       seq: snapshot.seq,
       activeCount: snapshot.activeAgents.length,
     })),
+    spokenOriginMachine: lastPerAgentOriginMachine,
+    spokenLocal: lastPerAgentWasLocal,
   });
 }
 

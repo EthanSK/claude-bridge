@@ -62,6 +62,32 @@ export const DEFAULT_CONFIG = {
   // ---------------------------------------------------------------------------
   masterMachine: "Ethans-Mac-mini",
   remotePitchRate: 1.05,
+  // ---------------------------------------------------------------------------
+  // Post-chime SAY (2026-05-04, voice 6308). After the master daemon plays a
+  // chime — local OR forwarded from a peer — speak the Telegram BOT USERNAME
+  // bound to that event's origin machine. Ethan recognizes per-bot:
+  // "Realclaude4bot" = Mini-CC, "Lemaciboi5bot" = MBP-CC. Voice 6308:
+  //
+  //   "I wanted to try and be the Telegram name that I'm communicating with,
+  //    because that's the one I see, right? The name of the bot."
+  //
+  // - sayBotName: master toggle. true = speak after each chime,
+  //               false = silent (chime sound only, legacy behavior).
+  // - botNamesByMachine: static map { <machine>: <bot_username> } that takes
+  //                      precedence over the auto-derived cache. Hand-edit
+  //                      this when adding new fleet hosts. The auto-derive
+  //                      path (Telegram getMe) only knows about the LOCAL
+  //                      machine's bot, so peer entries MUST be added here
+  //                      for the master daemon to speak the correct name
+  //                      when processing forwarded events from peers.
+  //
+  // Resolution detail lives in chime/bot-name.mjs.
+  // ---------------------------------------------------------------------------
+  sayBotName: true,
+  botNamesByMachine: {
+    "Ethans-Mac-mini": "Realclaude4bot",
+    "MacBookPro": "Lemaciboi5bot",
+  },
 };
 
 export const EMPTY_STATE = {
@@ -199,6 +225,38 @@ export function resolveSoundPath(name) {
   }
   const normalized = name.endsWith(".aiff") ? name : `${name}.aiff`;
   return join("/System/Library/Sounds", normalized);
+}
+
+/**
+ * Speak a short label via macOS `say`. Detached fire-and-forget — never
+ * blocks. `delayMs` lets the caller stagger speech after the chime sound
+ * so it doesn't talk over Glass / Hero. Sanitizes input (strips backticks
+ * + double-quotes, caps at 80 chars).
+ *
+ * Returns true if the spawn was scheduled, false on no-op (empty text).
+ *
+ * `say` is macOS-only. On other platforms the spawn fails silently with
+ * detached:true + stdio:'ignore' and we still return true (best-effort).
+ */
+export function speak(text, delayMs = 600) {
+  if (!text || typeof text !== "string") return false;
+  const cleaned = text.replace(/[`"]/g, "").slice(0, 80).trim();
+  if (!cleaned) return false;
+  try {
+    setTimeout(() => {
+      try {
+        const child = spawn("/usr/bin/say", [cleaned], {
+          detached: true,
+          stdio: "ignore",
+        });
+        child.on("error", () => {});
+        child.unref();
+      } catch {}
+    }, Math.max(0, Number(delayMs) || 0));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function playSound(name, volume = 1.0, rate = 1.0) {

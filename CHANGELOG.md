@@ -1,5 +1,27 @@
 # Changelog
 
+## agent-bridge chime 1.1.0 — 2026-05-04 (post-Mini-as-master)
+
+### Speak the Telegram bot name after each chime
+
+After Mini-as-master shipped, the chime CLI's post-chime `say` was speaking the agent task description (e.g. "PP testing or something") — meaningless to Ethan because Telegram is what he sees in his chat list, not the agent's internal subtask label. Voice 6308 (2026-05-04):
+
+> "I wanted to try and be the Telegram name that I'm communicating with, because that's the one I see, right? The name of the bot."
+
+Now both the standalone chime CLI and the agent-bridge master daemon say the **Telegram bot username** bound to the event's origin machine. The bot username comes from a static map in chime config (Ethan can hand-edit), with an optional `getMe` auto-derive fallback for the LOCAL machine (cached 7 days in `~/.agent-bridge/chime/bot-name.cache.json`). Peer-forwarded events still resolve the peer's bot name by static-map lookup (peer's bot token isn't reachable from master; auto-derive only works locally).
+
+- **`chime/bot-name.mjs`** — new module. `resolveBotNameSync({machine, config})` does the lookup chain (static-map → cache → null); `refreshLocalBotNameCache(...)` is the async getMe helper that runs detached after each chime. `speechForChime({kind, bot_name, machine_fallback})` builds the spoken phrase (`"<botname> all complete"` / `"<botname> subagent complete"`); `shortenMachineNameForSpeech(...)` turns "Ethans-Mac-mini.local" into "Mac mini" for fallback speech when no bot mapping exists.
+- **`chime/core.mjs`** — `DEFAULT_CONFIG.sayBotName: true` (master toggle) + `DEFAULT_CONFIG.botNamesByMachine: {Ethans-Mac-mini → Realclaude4bot, MacBookPro → Lemaciboi5bot}` (static map, edit to add new fleet hosts). New `speak(text, delayMs)` helper — detached `say` spawn, sanitizes input, never blocks. Module-level constants for the cache path resolve at call time so test code that flips `AGENT_BRIDGE_HOME` between tests sees the right path.
+- **`chime/service.mjs`** — `processInboxOnce` now tracks `lastPerAgentOriginMachine` + `lastPerAgentWasLocal` per cycle. After playing chimes, speaks ONCE per cycle: prefers all-complete phrasing if it fired, falls through to per-agent. Cooldown / dedup: bursting multiple per-agent events in one cycle collapses to a single say. Also kicks off an async `refreshLocalBotNameCache` after speech so the next cycle has a fresh local bot-name cache. `CHIME_VERSION` bumped to `1.1.0-bot-name-say`. `chime.log` `state_update` events now include `spokenOriginMachine` + `spokenLocal` for debugging.
+- **`chime/test/chime-bot-name.test.mjs`** — new test file (11 cases): static-map preference, unknown-machine null, cache hit, stale-cache miss, speech format strings (per-agent + all-complete + fallback + null), shortenMachineNameForSpeech, fetchBotUsernameFromTelegram (success + api-error + ok=false), refreshLocalBotNameCache TTL hit doesn't call fetch.
+- **Cross-repo coordination.** Standalone `agent-completion-chime@0.4.0` ships matching support: `src/bot-name.js` (mirror of `chime/bot-name.mjs`), `bin/chime.js` rewired to use `localBotName(config)` instead of `spokenAgentNameFromPayload(...)`, default config gets `say_bot_name` + `bot_names_by_machine`. Both repos must be on these versions for the standalone hook + master daemon to speak the right bot username end-to-end.
+
+#### Out of scope
+
+- No UI for managing the bot-name map. Hand-edit `~/.agent-bridge/chime/config.json` (master-side static map) or `~/.agent-completion-chime/config.json` (standalone CLI map).
+- No on-each-chime Telegram API call. Auto-derive runs detached AFTER each cycle to refresh the local cache for next time.
+- No peer-side auto-derive of remote bots. Static map is the source of truth for peers; auto-derive only handles the local machine because that's the only machine whose `TELEGRAM_BOT_TOKEN` is on disk here.
+
 ## agent-bridge chime 1.0.0 — 2026-05-04
 
 ### Mini-as-master architecture — only ONE machine plays chimes
