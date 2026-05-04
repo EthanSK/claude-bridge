@@ -167,6 +167,58 @@ ID="msg-update-$(date -u +%Y%m%dT%H%M%SZ)-${ORIGIN_HEAD:0:8}"
 TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
 SUBJECTS="$(git log --format='  %h %s' "$LOCAL_HEAD..$ORIGIN_HEAD" 2>/dev/null | head -10)"
 
+# ---------- Changed files (high level) ---------------------------------------
+
+# Surface the file-list summary so the agent can see at a glance what
+# kind of update this is (mcp-server-only, openclaw-channel, scripts,
+# docs, etc.). Cap to 30 entries to avoid runaway message size.
+CHANGED_FILES="$(git diff --name-only "$LOCAL_HEAD..$ORIGIN_HEAD" 2>/dev/null | head -30)"
+CHANGED_FILES_COUNT="$(git diff --name-only "$LOCAL_HEAD..$ORIGIN_HEAD" 2>/dev/null | wc -l | tr -d ' ')"
+
+# ---------- Migration docs (agent-aware update instructions) -----------------
+#
+# [AGENT-AWARE-UPDATE-NOTIFICATIONS 2026-05-04]
+#
+# If origin/main introduces NEW files under docs/migrations/*.md (added
+# in this LOCAL_HEAD..ORIGIN_HEAD diff range), extract the
+# "## Instructions for the agent receiving this update" section from
+# each and inject it into the bridge message body. This lets the
+# receiver agent run additional steps beyond mechanical
+# `pull && npm run build` — e.g. config audits, service restarts, env
+# var changes — driven by natural-language directives rather than
+# script hard-codes. Convention: docs/migrations/README.md.
+
+MIGRATION_FILES="$(
+  git log --format= --name-only --diff-filter=A "$LOCAL_HEAD..$ORIGIN_HEAD" -- 'docs/migrations/*.md' 2>/dev/null \
+    | awk 'NF' \
+    | awk '!seen[$0]++' \
+    | grep -v '^docs/migrations/README.md$' \
+    || true
+)"
+
+MIGRATION_BLOCKS=""
+if [[ -n "$MIGRATION_FILES" ]]; then
+  while IFS= read -r migfile; do
+    [[ -z "$migfile" ]] && continue
+    # Read the file contents at ORIGIN_HEAD (the migration may not yet
+    # exist on disk — we haven't pulled). `git show` is the safe path.
+    raw="$(git show "${ORIGIN_HEAD}:${migfile}" 2>/dev/null || true)"
+    [[ -z "$raw" ]] && continue
+    # Extract the "## Instructions for the agent receiving this update"
+    # section: from that header until the next `^## ` header or EOF.
+    instructions="$(printf '%s\n' "$raw" | awk '
+      /^## Instructions for the agent receiving this update[[:space:]]*$/ { in_block = 1; next }
+      in_block && /^## / { in_block = 0 }
+      in_block { print }
+    ' | sed -e '/./,$!d' | awk 'BEGIN{n=0} {lines[NR]=$0; n=NR} END{ for(i=n; i>=1 && lines[i] ~ /^[[:space:]]*$/; i--) n--; for(i=1;i<=n;i++) print lines[i] }')"
+    [[ -z "$instructions" ]] && continue
+    if [[ -z "$MIGRATION_BLOCKS" ]]; then
+      MIGRATION_BLOCKS="### Agent migration instructions"$'\n'
+    fi
+    MIGRATION_BLOCKS+=$'\n'"From \`${migfile}\`:"$'\n\n'"${instructions}"$'\n'
+  done <<< "$MIGRATION_FILES"
+fi
+
 # ---------- Coordination helper details --------------------------------------
 
 COORD_HELPER="$SCRIPT_DIR/auto-update-coord.sh"
@@ -204,11 +256,17 @@ JSON_PAYLOAD="$(
   AB_HEADER="$CONTENT_HEADER" \
   AB_BODY="$CONTENT_BODY" \
   AB_SUBJECTS="$SUBJECTS" \
+  AB_CHANGED_FILES="$CHANGED_FILES" \
+  AB_CHANGED_FILES_COUNT="$CHANGED_FILES_COUNT" \
+  AB_MIGRATION_BLOCKS="$MIGRATION_BLOCKS" \
   AB_COORD_STATUS="$COORD_STATUS" \
   AB_COORD_LOCK_PATH="$COORD_LOCK_PATH" \
   AB_TIMESTAMP="$TIMESTAMP" \
   "$NODE_BIN" -e '
     const subjects = process.env.AB_SUBJECTS || "";
+    const changedFiles = process.env.AB_CHANGED_FILES || "";
+    const changedCount = process.env.AB_CHANGED_FILES_COUNT || "";
+    const migrationBlocks = process.env.AB_MIGRATION_BLOCKS || "";
     const coordStatus = process.env.AB_COORD_STATUS || "";
     const coordLockPath = process.env.AB_COORD_LOCK_PATH || "";
     const coordLines = [];
@@ -222,15 +280,27 @@ JSON_PAYLOAD="$(
       }));
       coordLines.push(`Coord state: ${state.lock_state || "unknown"}` + (state.last_attempt_iso ? `; last attempt ${state.last_attempt_iso}` : ""));
     }
-    const content = [
+    const sections = [
       process.env.AB_HEADER,
       "",
       "Incoming commits:",
       subjects,
-      "",
-      process.env.AB_BODY,
-      ...(coordLines.length ? ["", ...coordLines] : []),
-    ].join("\n");
+    ];
+    if (changedFiles) {
+      const truncatedNote = changedCount && Number(changedCount) > 30
+        ? `  (showing 30 of ${changedCount} changed files)`
+        : "";
+      sections.push("", "Changed files:", changedFiles.split(/\n/).filter(Boolean).map((f) => `  ${f}`).join("\n"));
+      if (truncatedNote) sections.push(truncatedNote);
+    }
+    if (migrationBlocks) {
+      sections.push("", migrationBlocks.trim());
+    }
+    sections.push("", process.env.AB_BODY);
+    if (coordLines.length) {
+      sections.push("", ...coordLines);
+    }
+    const content = sections.join("\n");
     const payload = {
       id: process.env.AB_ID,
       from: process.env.AB_FROM,

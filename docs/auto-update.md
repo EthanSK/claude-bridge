@@ -1,6 +1,6 @@
 # agent-bridge auto-update flow
 
-[AUTO-UPDATE-CHECK 2026-04-29] · [PLUGIN-REGISTRY-REWIRE 2026-05-01] · [PERIODIC-UPDATE 2026-05-04]
+[AUTO-UPDATE-CHECK 2026-04-29] · [PLUGIN-REGISTRY-REWIRE 2026-05-01] · [PERIODIC-UPDATE 2026-05-04] · [AGENT-AWARE-UPDATE-NOTIFICATIONS 2026-05-04]
 
 This doc describes the full auto-update sequence — from the periodic origin
 probe down to the post-build self-healing of harness-side plugin registry
@@ -31,6 +31,18 @@ Within Layer 1, auto-update has two halves:
      (`~/.agent-bridge/inbox/<target>/...`). Sentinel-based dedup prevents
      re-notifying about the same SHA.
    - The probe NEVER pulls or builds — that's the receiver's job.
+   - **Agent-aware migration injection** (2026-05-04): if the
+     `LOCAL_HEAD..ORIGIN_HEAD` diff range adds any new files under
+     `docs/migrations/*.md`, the probe extracts the
+     `## Instructions for the agent receiving this update` section from
+     each and injects them verbatim into the bridge message body. This
+     gives the receiving agent natural-language directives for any
+     non-mechanical migration steps (config audits, service restarts,
+     env var changes, etc.) on top of the standard pull+build. Convention
+     and template: [`docs/migrations/README.md`](migrations/README.md).
+   - **Changed-files manifest**: the bridge message body also includes a
+     truncated list (cap 30) of files changed across the diff range so
+     the receiver agent can scan-decide the update's scope before acting.
 
 2. **Runner** (`scripts/update.sh`)
    - Triggered by a harness receiver (Claude Code or OpenClaw subagent) that
