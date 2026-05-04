@@ -1875,6 +1875,80 @@ async function main(): Promise<void> {
     if (parentWatchdog && !isChannelOwner) {
       parentWatchdog.unref();
     }
+
+    // 4.0.x — Orphan-suicide check (separate concern from the 5s 3-poll
+    // orphan watchdog above). Catches the launchd-adoption case that the
+    // captured-parentPid + kill(0) probe misses when macOS recycles the
+    // original parent's PID to an unrelated process: kill(originalParentPid, 0)
+    // succeeds against the recycled occupant, so `parentDead` never flips
+    // and the 3-poll watchdog never trips. After reparenting, `process.ppid`
+    // returns 1 (launchd / init) — that's a permanent state and a definitive
+    // orphan signal. Mini observed 6 stale MCP children with ppid=1 running
+    // for 10+ hours that the existing watchdog had not killed; this loop
+    // closes that gap.
+    //
+    // Distinct from the 3-poll watchdog: a longer 30s interval with a 60s
+    // grace period so we don't false-positive at boot when CC is slow to
+    // attach, and we exit on first confirmed detection (ppid=1 cannot be
+    // transient — once adopted by launchd, you stay adopted).
+    // Defaults: 30s poll, 60s grace. Both are env-tunable for tests so we
+    // don't need 60s sleeps in CI; production paths leave the env unset and
+    // get the documented defaults.
+    const ORPHAN_SUICIDE_INTERVAL_MS = Number.parseInt(
+      process.env.AGENT_BRIDGE_ORPHAN_SUICIDE_INTERVAL_MS ?? '',
+      10,
+    ) || 30_000;
+    const ORPHAN_SUICIDE_GRACE_MS = Number.parseInt(
+      process.env.AGENT_BRIDGE_ORPHAN_SUICIDE_GRACE_MS ?? '',
+      10,
+    ) || 60_000;
+    // Independent of AGENT_BRIDGE_DISABLE_ORPHAN_WATCHDOG: the 5s 3-poll
+    // watchdog and this 30s suicide check guard against different signals
+    // (captured-parent ESRCH vs. live ppid===1). Tests that disable the
+    // 3-poll watchdog still want suicide active to exercise this path.
+    const orphanSuicideDisabled =
+      process.env.AGENT_BRIDGE_DISABLE_ORPHAN_SUICIDE === '1';
+    if (orphanSuicideDisabled) {
+      logEvent({
+        event: 'orphan_suicide.disabled',
+        msg: 'Orphan-suicide check disabled (env or watchdog disable)',
+        context: { pid: process.pid, parentPid },
+      });
+    } else {
+      const orphanSuicide: NodeJS.Timeout = setInterval(() => {
+        if (shuttingDown) return;
+        // Grace period — at boot the harness may briefly leave us without a
+        // live parent reading our stdout; don't fire during startup.
+        if (process.uptime() * 1000 < ORPHAN_SUICIDE_GRACE_MS) return;
+        // ppid === 1 (launchd on macOS, init on Linux) means we've been
+        // reparented — original parent is gone. Definitive orphan signal.
+        if (process.ppid === 1) {
+          syncExitBreadcrumb('orphan_suicide.detected', {
+            pid: process.pid,
+            uptime_s: Math.floor(process.uptime()),
+            originalParentPid: parentPid,
+          });
+          logEvent({
+            event: 'orphan_suicide.detected',
+            level: 'warn',
+            msg: `Orphan suicide: ppid=1 (reparented to init/launchd) after ${Math.floor(process.uptime())}s — exiting`,
+            context: {
+              pid: process.pid,
+              ppid: 1,
+              originalParentPid: parentPid,
+              uptime_s: Math.floor(process.uptime()),
+              grace_ms: ORPHAN_SUICIDE_GRACE_MS,
+              interval_ms: ORPHAN_SUICIDE_INTERVAL_MS,
+            },
+          });
+          // Route through shutdown() so the watcher lease + inbox are
+          // released cleanly; bare process.exit() would leak the lease.
+          shutdown('orphan-suicide: ppid=1 (reparented to launchd/init)');
+        }
+      }, ORPHAN_SUICIDE_INTERVAL_MS);
+      // Never let this interval keep the event loop alive on its own.
+      orphanSuicide.unref();
+    }
   }
 }
 
