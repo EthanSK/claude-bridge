@@ -377,6 +377,15 @@ const ESCAPE_HATCH_PUSH_THRESHOLD = 5;
 const recentPushes: number[] = [];        // pushedAt timestamps within window
 let channelMarkedDead = false;
 let channelMarkedDeadAt = 0;
+// 4.0.1 [DEAD-FALSE-POSITIVE 2026-05-04] — IDs of messages currently being
+// re-emitted as part of a post-ack recovery sweep. The next channel push
+// for any ID in this set is excluded from the burst-detector ring so a
+// large recovered backlog (≥5 stranded messages) can't immediately re-trip
+// the escape-hatch on the very next poll, before any fresh harness ack.
+// Entry is removed once the push runs (success OR error path), so any
+// FUTURE message reusing the same fileName participates in burst detection
+// normally. Codex review round 2 surfaced this corner case.
+const recoveryReplayIds = new Set<string>();
 
 // ── Alive-heuristic plumbing ────────────────────────────────────────────────
 //
@@ -398,11 +407,25 @@ let channelMarkedDeadAt = 0;
 type AliveSignals = {
   getToolCallsReceivedCount: () => number;
   getChannelCallbackRegisteredAt: () => number;
+  /**
+   * 4.0.1 [DEAD-FALSE-POSITIVE 2026-05-04] — count of tool calls currently
+   * in flight (incremented at handler entry, decremented at handler exit).
+   * The escape-hatch's "no alive evidence" check used to flip dead-true
+   * even when a long-running tool call was actively executing — because
+   * `toolCallsReceivedCount` was already bumped BEFORE the first push
+   * entered the window, so all subsequent pushes saw `tcNow == firstSnapshot`
+   * and the check trivially returned "no new tool calls". Tracking
+   * in-flight separately lets us prove the harness is busy (not dead)
+   * regardless of how the receive-counter happens to align with the window.
+   * Optional for back-compat; defaults to 0 if the host hasn't wired it.
+   */
+  getToolCallsInFlight?: () => number;
 };
 
 let aliveSignals: AliveSignals = {
   getToolCallsReceivedCount: () => 0,
   getChannelCallbackRegisteredAt: () => 0,
+  getToolCallsInFlight: () => 0,
 };
 
 /**
@@ -411,7 +434,105 @@ let aliveSignals: AliveSignals = {
  * counter and channel-callback registration timestamp.
  */
 export function registerAliveSignals(signals: AliveSignals): void {
-  aliveSignals = signals;
+  aliveSignals = {
+    getToolCallsInFlight: () => 0,
+    ...signals,
+  };
+}
+
+/**
+ * 4.0.1 [DEAD-FALSE-POSITIVE 2026-05-04] — recovery hook called by index.ts
+ * each time the wrapped tool-handler shim runs. A successful tool call is
+ * incontrovertible proof the harness is alive: the JSON-RPC pipe carried a
+ * request from the harness to us, the dispatcher routed it to the handler,
+ * and the handler is now executing. If the channel was previously marked
+ * dead, that mark is now stale; clear it so subsequent push events flow
+ * through the normal callback path again instead of being staged-and-skipped
+ * indefinitely.
+ *
+ * Also recovers any messages that arrived during the dead-window — those
+ * were staged with `escapeHatch=true` and explicitly ignored by the in-process
+ * tick (the comment in processPendingDeliveries reads "only handover replay
+ * recovers them, never the in-process tick"). Without recovering them here,
+ * the ack would clear the flag for FUTURE pushes but silently strand any
+ * messages received WHILE the channel was incorrectly marked dead — exactly
+ * the message-loss scenario the recovery path is meant to fix.
+ *
+ * No-op when channel is healthy. Safe to call from any tool, including
+ * cheap diagnostic ones (`claude_code_channel_status`).
+ *
+ * Companion to maybeMarkChannelDead; together they convert the escape-hatch
+ * from sticky-until-restart to self-healing on the next harness ack.
+ */
+export function recordHarnessAck(): void {
+  if (!channelMarkedDead) return;
+  const wasMarkedAt = channelMarkedDeadAt;
+  channelMarkedDead = false;
+  channelMarkedDeadAt = 0;
+  // Drop the recent-pushes ring too — it's stale (window-of-bursts that
+  // led us to declare death). Starting fresh prevents an immediate
+  // re-flip if a few queued pushes pre-dated this ack.
+  recentPushes.length = 0;
+  // 4.0.1 [DEAD-FALSE-POSITIVE 2026-05-04] — recover any messages that
+  // were staged-and-skipped while the channel was marked dead. These have
+  // `escapeHatch=true` and the in-process processPendingDeliveries() tick
+  // refuses to touch them (`if (entry.escapeHatch) continue;`), so without
+  // this recovery sweep they'd sit in `.pending-ack/<target>/` until the
+  // next plugin reload / lease handover. Re-inject them back to inbox/
+  // WITHOUT bumping retry counters (these entries never genuinely tried —
+  // their callback was deliberately skipped) and let the watcher's next
+  // poll pick them up for a fresh channel push.
+  let recovered = 0;
+  for (const entry of Array.from(pendingDeliveries.values())) {
+    if (!entry.escapeHatch) continue;
+    const inboxPath = join(getClaudeCodeInboxDir(), entry.fileName);
+    try {
+      if (!existsSync(getClaudeCodeInboxDir())) {
+        mkdirSync(getClaudeCodeInboxDir(), { recursive: true, mode: 0o700 });
+      }
+      renameSync(entry.pendingPath, inboxPath);
+    } catch (err) {
+      logError(`Channel: failed to recover escape-hatch file ${entry.fileName} → inbox: ${err}`);
+      continue;
+    }
+    // Drop the meta sidecar — escape-hatch entries were never delivered,
+    // so retry persistence is a non-concept. The next stagePendingAck call
+    // (driven by the watcher re-picking up the file from inbox/) starts
+    // from retries=0.
+    try {
+      if (existsSync(entry.metaPath)) unlinkSync(entry.metaPath);
+    } catch { /* best-effort */ }
+    pendingDeliveries.delete(entry.id);
+    retriesByMsgId.delete(entry.id);
+    knownFiles.delete(entry.fileName);
+    invalidateCache();
+    // Mark this ID so the upcoming re-emit's push timestamp is NOT counted
+    // toward the burst detector. Without this, recovering a backlog of ≥5
+    // stranded messages would immediately re-trip the escape-hatch on the
+    // very next poll (before any new harness ack proves liveness).
+    recoveryReplayIds.add(entry.id);
+    recovered += 1;
+    logEvent({
+      event: 'channel.dead_escape_hatch_recovered',
+      level: 'warn',
+      msg: `Recovered escape-hatch-skipped message ${entry.id} after harness ack`,
+      context: {
+        msg_id: entry.id,
+        file_name: entry.fileName,
+        skipped_age_ms: Date.now() - entry.pushedAt,
+      },
+    });
+  }
+  logEvent({
+    event: 'channel.dead_escape_hatch_cleared',
+    level: 'warn',
+    msg: 'Escape-hatch cleared by harness ack — channel restored to healthy',
+    context: {
+      previously_marked_dead_at_ms: wasMarkedAt,
+      stuck_for_ms: Date.now() - wasMarkedAt,
+      messages_recovered: recovered,
+    },
+  });
 }
 
 function isHarnessAliveSincePush(pending: PendingEntry): boolean {
@@ -492,6 +613,7 @@ export function _resetChannelDeadStateForTesting(): void {
   channelMarkedDead = false;
   channelMarkedDeadAt = 0;
   recentPushes.length = 0;
+  recoveryReplayIds.clear();
 }
 
 /**
@@ -541,7 +663,20 @@ function maybeMarkChannelDead(): void {
   const tcNow = aliveSignals.getToolCallsReceivedCount();
   const noNewToolCalls = tcNow <= firstSnapshot;
   const noListeners = inboxArrivalListenerCount() === 0;
-  if (noNewToolCalls && noListeners) {
+  // 4.0.1 [DEAD-FALSE-POSITIVE 2026-05-04] — third gate: a tool call
+  // currently in flight is positive evidence the harness is busy, not
+  // dead. The receive-counter alone can't distinguish "harness frozen
+  // mid-tool" from "harness alive and chewing on a long tool" because
+  // it was bumped pre-handler. Without this gate, a single long tool
+  // (e.g. a 60s subagent call or a long shell exec) plus a burst of
+  // inbound pushes during that window will trip the escape-hatch as a
+  // false positive, exactly the symptom seen in the 2026-05-04 cross-fleet
+  // integration test (tool_calls_at_window_start=34, tool_calls_now=34,
+  // listeners_now=0 → marked dead while a tool was running).
+  const inFlightProbe = aliveSignals.getToolCallsInFlight ?? (() => 0);
+  const toolCallsInFlight = inFlightProbe();
+  const harnessBusyWithTool = toolCallsInFlight > 0;
+  if (noNewToolCalls && noListeners && !harnessBusyWithTool) {
     channelMarkedDead = true;
     channelMarkedDeadAt = now;
     logError(
@@ -560,8 +695,25 @@ function maybeMarkChannelDead(): void {
         window_ms: ESCAPE_HATCH_WINDOW_MS,
         tool_calls_at_window_start: firstSnapshot,
         tool_calls_now: tcNow,
+        tool_calls_in_flight: toolCallsInFlight,
         listeners_now: 0,
         marked_dead_at_ms: now,
+      },
+    });
+  } else if (noNewToolCalls && noListeners && harnessBusyWithTool) {
+    // Diagnostic-only: dead-mark suppressed because a tool is in flight.
+    // Useful for post-mortems that want to see "we got close to flipping
+    // dead, but a long-running tool kept the channel alive."
+    logEvent({
+      event: 'channel.dead_escape_hatch_skipped_tool_in_flight',
+      level: 'warn',
+      msg: 'Escape-hatch suppressed: tool call in flight is positive harness-alive evidence',
+      context: {
+        recent_pushes: recentPushes.length,
+        window_ms: ESCAPE_HATCH_WINDOW_MS,
+        tool_calls_at_window_start: firstSnapshot,
+        tool_calls_now: tcNow,
+        tool_calls_in_flight: toolCallsInFlight,
       },
     });
   }
@@ -1329,9 +1481,24 @@ function emitChannelNotification(fileName: string): void {
     // ring; if 5+ accumulate in 30 s with no alive evidence, the next call
     // to maybeMarkChannelDead() (driven from processPendingDeliveries) will
     // flip channelMarkedDead.
+    //
+    // 4.0.1 [DEAD-FALSE-POSITIVE 2026-05-04] — Exception: if this message
+    // is being re-emitted as part of a post-ack recovery sweep, do NOT
+    // count its push toward the burst detector. Otherwise a recovered
+    // backlog of ≥5 stranded messages would immediately re-trip the
+    // escape-hatch on the very next poll, before any fresh harness ack
+    // proves the channel is genuinely working again. Set membership is
+    // consumed exactly once per ID and removed below in both the success
+    // and failure paths so the next message reusing the same fileName
+    // (rare but possible after exhaust+resend) participates normally.
     const pushAt = Date.now();
-    recentPushes.push(pushAt);
-    trimRecentPushes(pushAt);
+    const isRecoveryReplay = recoveryReplayIds.has(msg.id);
+    if (isRecoveryReplay) {
+      recoveryReplayIds.delete(msg.id);
+    } else {
+      recentPushes.push(pushAt);
+      trimRecentPushes(pushAt);
+    }
 
     withChannelNotifyTimeout(Promise.resolve(savedChannelCallback(msg)), msg.id)
       .then(() => {

@@ -84,7 +84,7 @@ import { initInbox, setActivePersona, shutdownInbox } from './inbox.js';
 import type { BridgeMessage } from './inbox.js';
 import { resolveIdentity } from './persona.js';
 import { registerTools } from './tools.js';
-import { startWatcher, stopWatcher, replayUndeliveredMessages, registerAliveSignals, subscribeToPromotion } from './watcher.js';
+import { startWatcher, stopWatcher, replayUndeliveredMessages, registerAliveSignals, subscribeToPromotion, recordHarnessAck } from './watcher.js';
 import { logInfo, logError, logWarn } from './logger.js';
 import { logEvent } from './log.js';
 
@@ -775,6 +775,12 @@ async function main(): Promise<void> {
   const TOOL_BOOT_TIME_MS = Date.now();
   let toolCallsReceivedCount = 0;
   let channelCallbackRegisteredAt = 0;
+  // 4.0.1 [DEAD-FALSE-POSITIVE 2026-05-04] — count of tool handlers
+  // currently executing. Bumped in the wrapped shim BEFORE handler(...args),
+  // decremented in the finally clause AFTER. Surfaced to the watcher's
+  // alive-heuristic so the escape-hatch can distinguish "harness alive but
+  // busy on a long tool" from "harness genuinely frozen".
+  let toolCallsInFlight = 0;
   // 3.14.4 — track ts of the most recent tool call so the post-mortem
   // epitaph can record "when did this MCP child last serve a tool call"
   // (helps distinguish "mid-session kill" from "idle plugin reaped").
@@ -782,6 +788,7 @@ async function main(): Promise<void> {
   registerAliveSignals({
     getToolCallsReceivedCount: () => toolCallsReceivedCount,
     getChannelCallbackRegisteredAt: () => channelCallbackRegisteredAt,
+    getToolCallsInFlight: () => toolCallsInFlight,
   });
   const origRegisterTool = server.registerTool.bind(server);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -789,8 +796,23 @@ async function main(): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const wrapped = async (...args: any[]) => {
       toolCallsReceivedCount += 1;
+      toolCallsInFlight += 1;
       lastToolCallTs = Date.now();
-      return handler(...args);
+      // 4.0.1 [DEAD-FALSE-POSITIVE 2026-05-04] — recovery hook. If the
+      // channel was previously marked dead, this fresh tool call proves
+      // the harness is responsive and the dead-mark was stale (e.g. a
+      // false positive from a burst during a long-running tool, or a
+      // legitimate dead-mark followed by reload). Either way, clearing
+      // here lets future pushes flow through the normal callback path
+      // again — without this, the channel stayed sticky-dead until
+      // process restart, which is what the cross-fleet test surfaced.
+      // No-op when channel is healthy.
+      recordHarnessAck();
+      try {
+        return await handler(...args);
+      } finally {
+        toolCallsInFlight -= 1;
+      }
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return (origRegisterTool as any)(name, schema, wrapped);
