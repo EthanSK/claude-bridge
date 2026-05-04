@@ -107,13 +107,68 @@ echo "=== $(now_iso) agent-bridge periodic-update start ==="
 emit info "skill.start" "{\"repo\":\"$REPO\",\"with_openclaw_mcp_repair\":$WITH_OPENCLAW_MCP_REPAIR}"
 
 # ---------- Lock ------------------------------------------------------------
+#
+# Lock is a directory containing a `pid` file. Stale-lock handling: if the
+# lock dir exists AND its pid is either missing, malformed, or refers to a
+# process that's no longer alive, reclaim it. Without this, a kill during
+# git/npm leaves the lock orphaned and the LaunchAgent skips forever.
 
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-  echo "already running (lock held by previous invocation); exiting"
+LOCK_PID_FILE="$LOCK_DIR/pid"
+STALE_LOCK_AGE_SEC="${AGENT_BRIDGE_PERIODIC_STALE_LOCK_SEC:-1800}"  # 30min
+
+reclaim_stale_lock() {
+  # Returns 0 if lock was reclaimed (caller can proceed), 1 if held by live owner.
+  if [[ ! -d "$LOCK_DIR" ]]; then
+    return 0
+  fi
+
+  local existing_pid="" lock_age=0 now mtime
+  if [[ -f "$LOCK_PID_FILE" ]]; then
+    existing_pid="$(cat "$LOCK_PID_FILE" 2>/dev/null | head -1 | tr -d '[:space:]')"
+  fi
+
+  # PID still alive?
+  if [[ -n "$existing_pid" ]] && [[ "$existing_pid" =~ ^[0-9]+$ ]]; then
+    if kill -0 "$existing_pid" 2>/dev/null; then
+      # Live owner — but if the lock is older than STALE_LOCK_AGE_SEC, that
+      # implies a hung process; reclaim anyway with a warn.
+      now="$(date +%s)"
+      mtime="$(stat -f%m "$LOCK_DIR" 2>/dev/null || stat -c%Y "$LOCK_DIR" 2>/dev/null || printf '%s' "$now")"
+      lock_age=$(( now - mtime ))
+      if (( lock_age > STALE_LOCK_AGE_SEC )); then
+        echo "WARN: lock held by live pid=$existing_pid for ${lock_age}s (> ${STALE_LOCK_AGE_SEC}s); reclaiming"
+        emit warn "lock.reclaim_hung" "{\"pid\":$existing_pid,\"age_sec\":$lock_age}"
+        rm -rf "$LOCK_DIR" 2>/dev/null || true
+        return 0
+      fi
+      return 1
+    fi
+    echo "stale lock: pid=$existing_pid no longer alive; reclaiming"
+    emit warn "lock.reclaim_dead_pid" "{\"pid\":$existing_pid}"
+  else
+    echo "stale lock: missing/malformed pid file; reclaiming"
+    emit warn "lock.reclaim_no_pid" '{}'
+  fi
+  rm -rf "$LOCK_DIR" 2>/dev/null || true
+  return 0
+}
+
+if ! reclaim_stale_lock; then
+  echo "already running (lock held by live previous invocation); exiting"
   emit info "skill.skip" '{"reason":"lock_held"}'
   exit 0
 fi
-trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  # Race: someone else acquired between reclaim and mkdir. Retry once.
+  if ! reclaim_stale_lock || ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "already running (lock contended); exiting"
+    emit info "skill.skip" '{"reason":"lock_contended"}'
+    exit 0
+  fi
+fi
+echo "$$" > "$LOCK_PID_FILE" 2>/dev/null || true
+trap 'rm -rf "$LOCK_DIR" 2>/dev/null || true' EXIT
 
 # ---------- Repo guard ------------------------------------------------------
 

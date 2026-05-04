@@ -161,11 +161,19 @@ fi
 if [ "${AGENT_BRIDGE_NO_PERIODIC_UPDATE:-0}" = "1" ]; then
   printf "${DIM}  [skip] AGENT_BRIDGE_NO_PERIODIC_UPDATE=1 — skipping periodic-update LaunchAgent.${RESET}\n"
 else
+  # The periodic-update body operates on a dev clone (git fetch + pull +
+  # build), so it requires a local clone to exist. Search candidate clones in
+  # priority order:
+  #   1. The dir containing this install.sh (cloned-repo invocation).
+  #   2. ~/Projects/agent-bridge (Ethan's standard layout).
+  #   3. ~/.openclaw/workspace/agent-bridge (OC workspace clone).
   PROVISIONER=""
   if [ -n "${SCRIPT_DIR:-}" ] && [ -f "$SCRIPT_DIR/scripts/install-periodic-update.sh" ]; then
     PROVISIONER="$SCRIPT_DIR/scripts/install-periodic-update.sh"
   elif [ -f "$HOME/Projects/agent-bridge/scripts/install-periodic-update.sh" ]; then
     PROVISIONER="$HOME/Projects/agent-bridge/scripts/install-periodic-update.sh"
+  elif [ -f "$HOME/.openclaw/workspace/agent-bridge/scripts/install-periodic-update.sh" ]; then
+    PROVISIONER="$HOME/.openclaw/workspace/agent-bridge/scripts/install-periodic-update.sh"
   fi
 
   if [ -n "$PROVISIONER" ]; then
@@ -176,8 +184,14 @@ else
       printf "${DIM}  [warn] Periodic-update provisioner failed (rc=%s). Run 'agent-bridge install-periodic-update' manually to retry.${RESET}\n" "$?"
     fi
   else
-    printf "${DIM}  [skip] No local clone with scripts/install-periodic-update.sh found — skipping periodic-update LaunchAgent.${RESET}\n"
-    printf "${DIM}         Clone the repo and run 'agent-bridge install-periodic-update' to enable harness-independent auto-update.${RESET}\n"
+    # curl|bash bootstrap path: no clone yet. The periodic body needs a clone
+    # to operate on; we cannot meaningfully install the LaunchAgent without
+    # one. Emit a loud, actionable hint and continue (non-fatal).
+    printf "${BOLD}${DIM}  [skip] Harness-independent auto-update not installed.${RESET}\n"
+    printf "${DIM}         The periodic updater needs a local agent-bridge clone (it runs${RESET}\n"
+    printf "${DIM}         git fetch + pull + build every 10 min). After cloning, run:${RESET}\n"
+    printf "${DIM}             git clone https://github.com/EthanSK/agent-bridge ~/Projects/agent-bridge${RESET}\n"
+    printf "${DIM}             agent-bridge install-periodic-update${RESET}\n"
   fi
 fi
 

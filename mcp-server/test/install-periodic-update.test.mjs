@@ -201,3 +201,94 @@ test('install-periodic-update.ps1: structural markers present', () => {
   assert.match(src, /AtLogOn/, 'missing logon trigger');
   assert.match(src, /WithOpenclawMcpRepair/, 'missing OC MCP repair switch param');
 });
+
+// ---------- 5. Stale-lock reclaim behaviour --------------------------------
+
+test('agent-bridge-periodic-update.sh: reclaims stale lock with dead pid', { skip: !hasBash }, () => {
+  // We can't run the full body (it would actually `git fetch` against the
+  // real repo), but we CAN test the lock-reclaim logic in isolation by
+  // sourcing the script with a guard that exits before the repo guard.
+  //
+  // Strategy: stage a sandbox HOME with a stale lock containing a definitely-
+  // dead PID, run the body with AGENT_BRIDGE_REPO pointing at a non-git
+  // directory (so it exits with rc=1 at the repo guard step AFTER the lock
+  // logic ran), and verify the lock was reclaimed.
+  const sandboxHome = mkdtempSync(join(tmpdir(), 'periodic-lock-test-'));
+  const runDir = join(sandboxHome, '.agent-bridge', 'run');
+  const lockDir = join(runDir, 'periodic-update.lock');
+  mkdirSync(lockDir, { recursive: true });
+  // PID 999999999 is virtually guaranteed to not exist (Linux limits PIDs to
+  // <= 4 million; macOS similar).
+  writeFileSync(join(lockDir, 'pid'), '999999999\n');
+
+  const fakeRepo = mkdtempSync(join(tmpdir(), 'periodic-lock-fakerepo-'));
+  // Intentionally NOT a git repo — body will exit with the repo guard after
+  // the lock reclaim path executes.
+
+  try {
+    const env = {
+      ...process.env,
+      HOME: sandboxHome,
+      AGENT_BRIDGE_REPO: fakeRepo,
+    };
+    const res = spawnSync('/bin/bash', [BODY_SH], { env, encoding: 'utf8' });
+    // Exits 1 at the repo-missing guard, but the human log should show the
+    // stale-lock reclaim happened.
+    assert.equal(res.status, 1, `expected rc=1 from repo guard, got ${res.status}: ${res.stderr}`);
+
+    const logPath = join(sandboxHome, '.agent-bridge', 'logs', 'periodic-update.log');
+    assert.ok(existsSync(logPath), 'log file not created');
+    const logContents = readFileSync(logPath, 'utf8');
+    assert.match(logContents, /stale lock: pid=999999999 no longer alive; reclaiming/, 'lock reclaim log not emitted');
+    assert.match(logContents, /ERROR: repo missing/, 'repo guard did not run after reclaim');
+  } finally {
+    teardown(sandboxHome, fakeRepo);
+  }
+});
+
+test('agent-bridge-periodic-update.sh: reclaims stale lock with no pid file', { skip: !hasBash }, () => {
+  const sandboxHome = mkdtempSync(join(tmpdir(), 'periodic-lock-test-'));
+  const runDir = join(sandboxHome, '.agent-bridge', 'run');
+  const lockDir = join(runDir, 'periodic-update.lock');
+  mkdirSync(lockDir, { recursive: true });
+  // No `pid` file — malformed lock from an old version or interrupted write.
+
+  const fakeRepo = mkdtempSync(join(tmpdir(), 'periodic-lock-fakerepo-'));
+
+  try {
+    const env = { ...process.env, HOME: sandboxHome, AGENT_BRIDGE_REPO: fakeRepo };
+    const res = spawnSync('/bin/bash', [BODY_SH], { env, encoding: 'utf8' });
+    assert.equal(res.status, 1);
+
+    const logContents = readFileSync(join(sandboxHome, '.agent-bridge', 'logs', 'periodic-update.log'), 'utf8');
+    assert.match(logContents, /stale lock: missing\/malformed pid file; reclaiming/);
+  } finally {
+    teardown(sandboxHome, fakeRepo);
+  }
+});
+
+test('agent-bridge-periodic-update.sh: skips when lock held by live pid', { skip: !hasBash }, () => {
+  const sandboxHome = mkdtempSync(join(tmpdir(), 'periodic-lock-test-'));
+  const runDir = join(sandboxHome, '.agent-bridge', 'run');
+  const lockDir = join(runDir, 'periodic-update.lock');
+  mkdirSync(lockDir, { recursive: true });
+  // Use the test process's own PID — guaranteed alive AND owned by the same
+  // user (so `kill -0` works without privilege issues).
+  writeFileSync(join(lockDir, 'pid'), String(process.pid) + '\n');
+
+  const fakeRepo = mkdtempSync(join(tmpdir(), 'periodic-lock-fakerepo-'));
+
+  try {
+    const env = { ...process.env, HOME: sandboxHome, AGENT_BRIDGE_REPO: fakeRepo };
+    const res = spawnSync('/bin/bash', [BODY_SH], { env, encoding: 'utf8' });
+    // Should exit 0 (graceful skip), not 1 (repo guard didn't run).
+    assert.equal(res.status, 0, `expected graceful skip (rc=0), got ${res.status}: ${res.stderr}\n${res.stdout}`);
+
+    const logContents = readFileSync(join(sandboxHome, '.agent-bridge', 'logs', 'periodic-update.log'), 'utf8');
+    assert.match(logContents, /already running \(lock held by live previous invocation\)/);
+    // Confirm we did NOT proceed to repo guard.
+    assert.doesNotMatch(logContents, /ERROR: repo missing/);
+  } finally {
+    teardown(sandboxHome, fakeRepo);
+  }
+});

@@ -170,8 +170,14 @@ if ($env:AGENT_BRIDGE_NO_PERIODIC_UPDATE -eq '1') {
             Write-Host "  [warn] Periodic-update provisioner failed: $($_.Exception.Message)" -ForegroundColor Yellow
         }
     } else {
-        Write-Host '  [skip] No local clone with scripts\install-periodic-update.ps1 found — skipping periodic-update Scheduled Task.' -ForegroundColor DarkGray
-        Write-Host "         Clone the repo and run 'agent-bridge install-periodic-update' to enable harness-independent auto-update." -ForegroundColor DarkGray
+        # irm | iex bootstrap path: no clone yet. The periodic body needs a
+        # clone to operate on; we cannot meaningfully install the Scheduled
+        # Task without one. Loud, actionable hint and continue (non-fatal).
+        Write-Host '  [skip] Harness-independent auto-update not installed.' -ForegroundColor DarkGray
+        Write-Host '         The periodic updater needs a local agent-bridge clone (it runs' -ForegroundColor DarkGray
+        Write-Host '         git fetch + pull + build every 10 min). After cloning, run:' -ForegroundColor DarkGray
+        Write-Host '             git clone https://github.com/EthanSK/agent-bridge $env:USERPROFILE\Projects\agent-bridge' -ForegroundColor DarkGray
+        Write-Host '             agent-bridge install-periodic-update' -ForegroundColor DarkGray
     }
 }
 

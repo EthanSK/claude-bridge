@@ -62,13 +62,65 @@ function Invoke-CaptureExit {
 Write-Log "=== agent-bridge periodic-update start ==="
 
 # ---------- Lock ------------------------------------------------------------
+#
+# Lock is a directory containing a `pid` file. Stale-lock handling: if the
+# lock dir exists AND its pid is missing, malformed, or refers to a process
+# no longer alive, reclaim it. Without this, a kill during git/npm leaves
+# the lock orphaned and the Scheduled Task skips forever.
+
+$LockPidFile = Join-Path $LockDir 'pid'
+$StaleLockAgeSec = if ($env:AGENT_BRIDGE_PERIODIC_STALE_LOCK_SEC) { [int]$env:AGENT_BRIDGE_PERIODIC_STALE_LOCK_SEC } else { 1800 }
+
+function Test-LockReclaimable {
+    if (-not (Test-Path $LockDir)) { return $true }
+
+    $existingPid = $null
+    if (Test-Path $LockPidFile) {
+        $raw = (Get-Content -Path $LockPidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+        if ($raw -match '^\d+$') { $existingPid = [int]$raw }
+    }
+
+    if ($existingPid) {
+        $proc = Get-Process -Id $existingPid -ErrorAction SilentlyContinue
+        if ($proc) {
+            # Live owner; reclaim only if lock is hung (older than threshold).
+            $age = [int]((Get-Date) - (Get-Item $LockDir).LastWriteTime).TotalSeconds
+            if ($age -gt $StaleLockAgeSec) {
+                Write-Log "WARN: lock held by live pid=$existingPid for ${age}s (> ${StaleLockAgeSec}s); reclaiming"
+                Remove-Item -Path $LockDir -Recurse -Force -ErrorAction SilentlyContinue
+                return $true
+            }
+            return $false
+        }
+        Write-Log "stale lock: pid=$existingPid no longer alive; reclaiming"
+    } else {
+        Write-Log "stale lock: missing/malformed pid file; reclaiming"
+    }
+    Remove-Item -Path $LockDir -Recurse -Force -ErrorAction SilentlyContinue
+    return $true
+}
+
+if (-not (Test-LockReclaimable)) {
+    Write-Log "already running (lock held by live previous invocation); exiting"
+    exit 0
+}
 
 try {
     New-Item -ItemType Directory -Path $LockDir -ErrorAction Stop | Out-Null
 } catch {
-    Write-Log "already running (lock held); exiting"
-    exit 0
+    # Race: retry once after re-checking.
+    if (-not (Test-LockReclaimable)) {
+        Write-Log "already running (lock contended); exiting"
+        exit 0
+    }
+    try {
+        New-Item -ItemType Directory -Path $LockDir -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Log "already running (lock contended after retry); exiting"
+        exit 0
+    }
 }
+Set-Content -Path $LockPidFile -Value $PID -Encoding UTF8 -ErrorAction SilentlyContinue
 
 try {
     # ---------- Repo guard --------------------------------------------------
