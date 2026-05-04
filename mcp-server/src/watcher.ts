@@ -533,6 +533,27 @@ export function recordHarnessAck(): void {
       messages_recovered: recovered,
     },
   });
+  // 4.0.x — also emit a clean `channel.recovered` event with the full
+  // dead→healthy delta. This is the canonical structured event for the
+  // recovery transition; `channel.dead_escape_hatch_cleared` (above)
+  // remains for back-compat with existing grep-based tooling. Today's
+  // dead-channel debug had to stitch together `channel.dead_escape_hatch`
+  // + `channel.dead_escape_hatch_cleared` to compute the stuck duration;
+  // a single `channel.recovered` line answers the post-mortem in one jq
+  // query.
+  logEvent({
+    event: 'channel.recovered',
+    level: 'warn',
+    msg: `Channel recovered after ${Date.now() - wasMarkedAt}ms dead`,
+    context: {
+      marked_dead_at_ms: wasMarkedAt,
+      recovered_at_ms: Date.now(),
+      stuck_for_ms: Date.now() - wasMarkedAt,
+      messages_recovered: recovered,
+      pending_count_after: pendingDeliveries.size,
+      target: getActiveClaudeCodeTargetOrDefault(),
+    },
+  });
 }
 
 function isHarnessAliveSincePush(pending: PendingEntry): boolean {
@@ -591,6 +612,52 @@ export function _getPendingDeliveriesForTesting(): PendingEntry[] {
  */
 export function _isChannelMarkedDeadForTesting(): boolean {
   return channelMarkedDead;
+}
+
+/**
+ * 4.0.x — Public channel-health snapshot for observability events
+ * (`server.heartbeat`, post-mortem epitaphs, status tools). Returns the
+ * exact in-memory state used by the escape-hatch + hybrid AC pipeline so
+ * a single log line can answer "is the channel currently dead, and for
+ * how long, and how many messages are stranded?".
+ *
+ * Added 2026-05-04 — the dead-channel sticky bug went 12+ h undetected
+ * because heartbeat lines did NOT carry these fields, so a quick "tail
+ * the heartbeat" did not flag the problem. Including them in every
+ * heartbeat lets a 2-line jq query catch it.
+ */
+export function getChannelHealthSnapshot(): {
+  channel_dead: boolean;
+  channel_dead_age_ms: number;
+  channel_dead_at_ms: number | null;
+  pending_count: number;
+  pending_escape_hatch_count: number;
+  recent_pushes_in_window: number;
+} {
+  let escapeHatchCount = 0;
+  for (const entry of pendingDeliveries.values()) {
+    if (entry.escapeHatch) escapeHatchCount += 1;
+  }
+  const now = Date.now();
+  // Codex P2 (round 1, 2026-05-04) — trim the recent-pushes ring against
+  // the escape-hatch window before reporting. Without this, a heartbeat
+  // emitted after a quiet idle gap would still show stale pushes from
+  // the last bursty period, falsely suggesting "5 pushes recently"
+  // when those pushes actually fell out of the window minutes ago.
+  // The production code path (`maybeMarkChannelDead`) trims as part of
+  // the dead-mark check; we replicate that here so the snapshot agrees
+  // with what the dead-mark logic would see at this same instant.
+  trimRecentPushes(now);
+  return {
+    channel_dead: channelMarkedDead,
+    channel_dead_age_ms: channelMarkedDead && channelMarkedDeadAt > 0
+      ? now - channelMarkedDeadAt
+      : 0,
+    channel_dead_at_ms: channelMarkedDead && channelMarkedDeadAt > 0 ? channelMarkedDeadAt : null,
+    pending_count: pendingDeliveries.size,
+    pending_escape_hatch_count: escapeHatchCount,
+    recent_pushes_in_window: recentPushes.length,
+  };
 }
 
 /**
@@ -1726,6 +1793,24 @@ export async function replayUndeliveredMessages(): Promise<void> {
     return;
   }
 
+  // 4.0.x — drain-summary counters. Captured across both the
+  // pending-ack handover sweep AND the inbox replay sweep so a single
+  // structured `inbox.drain.summary` event answers post-mortem questions
+  // like "how many messages did this fresh owner inherit and replay?".
+  // Today's debug had to grep for `channel.pending_handover_reinjected`
+  // and count manually — a single summary line is the right shape.
+  const drainStartedAt = Date.now();
+  let handoverReinjected = 0;
+  let handoverSkippedFresh = 0;
+  let handoverFailed = 0;
+  let handoverScanError: string | null = null;
+  let inboxScanned = 0;
+  let inboxQuarantined = 0;
+  let inboxAlreadyDelivered = 0;
+  let inboxEmitted = 0;
+  let inboxStageFailed = 0;
+  let inboxEmitFailed = 0;
+
   // 3.9.0 [CONSUME-RACE] — recover files left in `.pending-ack/<target>/`
   // by a previous lease holder. Anything older than the handover-reinject
   // window goes back into inbox/ so this fresh owner gets a clean retry.
@@ -1747,6 +1832,7 @@ export async function replayUndeliveredMessages(): Promise<void> {
           // still be running (lease handover happens during /reload-plugins
           // and the old peer can briefly co-exist) and the hybrid AC tick
           // there is still authoritative for this entry.
+          handoverSkippedFresh += 1;
           continue;
         }
         const inboxTargetPath = join(getClaudeCodeInboxDir(), ackName);
@@ -1757,6 +1843,7 @@ export async function replayUndeliveredMessages(): Promise<void> {
           // across lease handover and process restart. stagePendingAck()
           // reads it before overwriting fresh push metadata.
           knownFiles.delete(ackName);
+          handoverReinjected += 1;
           logWarn(`Replay: re-injected handover-pending file ${ackName} (age=${age}ms)`);
           logEvent({
             event: 'channel.pending_handover_reinjected',
@@ -1765,19 +1852,57 @@ export async function replayUndeliveredMessages(): Promise<void> {
             context: { file_name: ackName, age_ms: age },
           });
         } catch (err) {
+          handoverFailed += 1;
           logError(`Replay: failed to re-inject handover-pending ${ackName}: ${err}`);
         }
       }
     }
   } catch (err) {
+    // Codex P2 (round 1, 2026-05-04) — surface the handover-scan error
+    // in the drain summary too, not only as a logWarn line. Without
+    // capturing it the summary would falsely imply "no handover work
+    // attempted, no failures" when in fact the entire scan threw.
+    handoverScanError = String(err);
     logWarn(`Replay: failed to scan .pending-ack/${getActiveClaudeCodeTargetOrDefault()}/: ${err}`);
   }
 
+  // Local helper: emit the drain summary exactly once before any return
+  // path. Captured in a closure so all early-return paths converge here.
+  const emitDrainSummary = (extra: Record<string, unknown> = {}) => {
+    logEvent({
+      event: 'inbox.drain.summary',
+      level: handoverScanError ? 'warn' : 'info',
+      msg: `Drain summary: handover_reinjected=${handoverReinjected} inbox_emitted=${inboxEmitted} inbox_quarantined=${inboxQuarantined}`,
+      context: {
+        target: getActiveClaudeCodeTargetOrDefault(),
+        duration_ms: Date.now() - drainStartedAt,
+        handover_reinjected: handoverReinjected,
+        handover_skipped_fresh: handoverSkippedFresh,
+        handover_failed: handoverFailed,
+        handover_scan_error: handoverScanError,
+        inbox_scanned: inboxScanned,
+        inbox_already_delivered: inboxAlreadyDelivered,
+        inbox_quarantined: inboxQuarantined,
+        inbox_emitted: inboxEmitted,
+        inbox_stage_failed: inboxStageFailed,
+        inbox_emit_failed: inboxEmitFailed,
+        ...extra,
+      },
+    });
+  };
+
   try {
-    if (!existsSync(getClaudeCodeInboxDir())) return;
+    if (!existsSync(getClaudeCodeInboxDir())) {
+      emitDrainSummary({ inbox_dir_missing: true });
+      return;
+    }
 
     const files = readdirSync(getClaudeCodeInboxDir()).filter(f => f.endsWith('.json'));
-    if (files.length === 0) return;
+    inboxScanned = files.length;
+    if (files.length === 0) {
+      emitDrainSummary();
+      return;
+    }
 
     // Parse all valid messages, filter to undelivered, sort by timestamp
     const undelivered: { fileName: string; msg: BridgeMessage }[] = [];
@@ -1788,6 +1913,7 @@ export async function replayUndeliveredMessages(): Promise<void> {
         const raw = readFileSync(filePath, 'utf8');
         const msg = JSON.parse(raw) as BridgeMessage;
         if (!msg.id || !msg.timestamp || typeof msg.content !== 'string') {
+          inboxQuarantined += 1;
           quarantineFailed(fileName, 'replay missing required fields: id, timestamp, content');
           continue;
         }
@@ -1796,6 +1922,7 @@ export async function replayUndeliveredMessages(): Promise<void> {
           || !isValidTarget(msg.target)
           || (msg.target !== getActiveClaudeCodeTargetOrDefault() && msg.target !== CLAUDE_CODE_TARGET)
         ) {
+          inboxQuarantined += 1;
           quarantineFailed(
             fileName,
             `replay target ${JSON.stringify(msg.target ?? null)} is not ${getActiveClaudeCodeTargetOrDefault()} `
@@ -1804,17 +1931,20 @@ export async function replayUndeliveredMessages(): Promise<void> {
           continue;
         }
         if (isDelivered(msg.id)) {
+          inboxAlreadyDelivered += 1;
           archiveDeliveredMessage(fileName, msg.id, 'already delivered during replay');
           continue;
         }
         undelivered.push({ fileName, msg });
       } catch (err) {
+        inboxQuarantined += 1;
         quarantineFailed(fileName, `replay failed to parse message: ${err}`);
       }
     }
 
     if (undelivered.length === 0) {
       logInfo('Replay: no undelivered messages found');
+      emitDrainSummary();
       return;
     }
 
@@ -1832,11 +1962,14 @@ export async function replayUndeliveredMessages(): Promise<void> {
         await withChannelNotifyTimeout(Promise.resolve(channelCallback(msg)), msg.id);
         const entry = stagePendingAck(fileName, msg.id, 0);
         if (!entry) {
+          inboxStageFailed += 1;
           leavePendingAfterStageFailure(fileName, msg.id, 'replay_channel_callback_resolve');
           continue;
         }
+        inboxEmitted += 1;
         logPendingStaged(entry);
       } catch (err) {
+        inboxEmitFailed += 1;
         knownFiles.delete(fileName);
         invalidateCache();
         logError(`Replay: failed to push ${fileName}: ${err}; will retry on next poll`);
@@ -1844,8 +1977,10 @@ export async function replayUndeliveredMessages(): Promise<void> {
     }
 
     logInfo(`Replay: completed, ${undelivered.length} message(s) pushed/staged`);
+    emitDrainSummary();
   } catch (err) {
     logError(`Replay: failed to scan inbox for undelivered messages: ${err}`);
+    emitDrainSummary({ scan_error: String(err) });
   }
 }
 
