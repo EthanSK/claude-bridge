@@ -1,5 +1,48 @@
 #!/usr/bin/env node
 
+// =============================================================================
+// agent-bridge chime service — Mini-as-master architecture (2026-05-04)
+// =============================================================================
+//
+// Why chime lives in agent-bridge (not the standalone agent-completion-chime
+// repo): cross-machine completion comms need an SSH transport, and agent-bridge
+// already owns paired-machine SSH plumbing. Co-locating chime here lets us
+// SFTP completion events into a peer's inbox via the same mechanism that
+// powers `bridge_send_message`. (Resolved 2026-05-04, Ethan voice 6283.)
+//
+// Mini-as-master decision (Ethan voice 6286, 2026-05-04):
+//
+//   "the Mac Mini is like the one playing it, so they all have to tell the
+//    Mac Mini or whatever the master one is that they're done, and then the
+//    Mac Mini is like the parent who controls them all."
+//
+// There is only ONE human at the desk. To avoid fan-out chiming from every
+// paired Mac (laptop, mini, etc.) when a single agent completes, we designate
+// ONE host (Mini) as the sole-player. Peers forward their completion events
+// to Mini's chime inbox via SFTP; Mini receives, dedupes, and plays Glass /
+// Hero with the existing cooldown logic.
+//
+//   peer hook fires (Stop / SubagentStop)
+//      ↓
+//   chime.js end --from-claude-... (standalone CLI)
+//      ↓ role=peer? then:
+//   forwardEventToMaster() — SFTP write to Mini's
+//      ~/.agent-bridge/inbox/agent-bridge/chime/<id>.json
+//      ↓
+//   Mini's chime daemon (this file) processInboxOnce()
+//      ↓ apply control event, evaluateFleetState
+//      ↓ playSound(perAgent / allComplete) on Mini ONLY
+//
+// Master does NOT broadcast back to peers. Peers do NOT play locally. Each
+// machine does NOT play its own chime independently. This is the OPPOSITE
+// of the canceled "broadcast snapshots to peers" model that lived here
+// before 2026-05-04 — keep this comment as a "do not re-consolidate" guard.
+//
+// Future-proofing: `masterMachine` is configurable in
+// ~/.agent-bridge/chime/config.json. Set to `null` to opt out and revert to
+// legacy local-play. Set to a different machine name on a different fleet.
+// =============================================================================
+
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -23,10 +66,15 @@ import {
   evaluateFleetState,
   expireChimeState,
   loadChimeConfig,
+  loadChimePeers,
   loadChimeState,
   localMachineName,
   logChimeEvent,
+  masterMachineOf,
   playSound,
+  recordPeerRegistration,
+  roleFor,
+  saveChimePeers,
   saveChimeState,
 } from "./core.mjs";
 import { deliverReply, resolvePairedMachine } from "../openclaw-channel/src/outbound.js";
@@ -34,6 +82,7 @@ import { deliverReply, resolvePairedMachine } from "../openclaw-channel/src/outb
 const COMPONENT = "chime-service";
 const LEASE_STALE_MS = 15_000;
 const POLL_MS = 2_000;
+const CHIME_VERSION = "1.0.0-mini-master";
 
 function logEvent(level, event, msg, context = {}) {
   const logFile = join(BRIDGE_HOME, "logs", "agent-bridge.log");
@@ -197,10 +246,34 @@ function parseBridgeMessage(filePath) {
   }
 }
 
+function recordPeerRegistrationFromPayload(payload, now = Date.now()) {
+  const registry = recordPeerRegistration(loadChimePeers(), payload, now);
+  saveChimePeers(registry);
+  return registry;
+}
+
+/**
+ * Mini-as-master playback policy.
+ *
+ *  role         | per-agent  | all-complete | inbox processing
+ *  -------------+------------+--------------+--------------------
+ *  master       | play local | play local   | always
+ *  peer         | (none)     | (none)       | events should be
+ *                                              forwarded by emitter,
+ *                                              not arrive here. If
+ *                                              they do, we still
+ *                                              update fleet state
+ *                                              for status visibility
+ *                                              but do NOT play.
+ *  standalone   | play local | play local   | always (legacy)
+ *
+ * All three roles still honor `config.enabled === false` and `config.playback === "off"`.
+ */
 async function processInboxOnce() {
   ensureChimeDirs();
   const config = loadChimeConfig();
   if (config.enabled === false) return;
+  const role = roleFor(config);
   const state = loadChimeState();
   const files = readdirSync(CHIME_INBOX_DIR)
     .filter((name) => name.endsWith(".json"))
@@ -208,6 +281,8 @@ async function processInboxOnce() {
   let changed = false;
   let localSnapshotToBroadcast = [];
   let localPerAgent = 0;
+  let remotePerAgent = 0;
+  let registrationsHandled = 0;
 
   for (const name of files) {
     const filePath = join(CHIME_INBOX_DIR, name);
@@ -218,15 +293,33 @@ async function processInboxOnce() {
     }
 
     const now = Date.now();
-    if (parsed.payload.kind === "agent.start" || parsed.payload.kind === "agent.end") {
-      const result = applyControlEvent({ state, config, payload: parsed.payload, now });
-      if (result.changed && result.broadcast) {
-        changed = true;
-        localSnapshotToBroadcast.push(result.broadcast);
-        if (result.perAgent) localPerAgent += 1;
+    const payload = parsed.payload || {};
+    const eventOriginMachine = String(payload.machine || "").trim();
+    const isRemoteEvent = eventOriginMachine && eventOriginMachine !== localMachineName();
+
+    if (payload.kind === "chime.register" || payload.kind === "chime.heartbeat") {
+      // Peer ↔ master registration handshake. Master records; peer ignores
+      // (peers should never receive these, but be tolerant.)
+      if (role === "master") {
+        recordPeerRegistrationFromPayload(payload, now);
+        registrationsHandled += 1;
       }
-    } else if (parsed.payload.kind === "agent.snapshot") {
-      const result = applySnapshotEvent({ state, config, payload: parsed.payload, now });
+      archiveProcessedFile(filePath);
+      continue;
+    }
+
+    if (payload.kind === "agent.start" || payload.kind === "agent.end") {
+      const result = applyControlEvent({ state, config, payload, now });
+      if (result.changed) {
+        changed = true;
+        if (result.broadcast) localSnapshotToBroadcast.push(result.broadcast);
+        if (result.perAgent) {
+          if (isRemoteEvent) remotePerAgent += 1;
+          else localPerAgent += 1;
+        }
+      }
+    } else if (payload.kind === "agent.snapshot") {
+      const result = applySnapshotEvent({ state, config, payload, now });
       if (result.changed) changed = true;
     }
     archiveProcessedFile(filePath);
@@ -240,16 +333,32 @@ async function processInboxOnce() {
     localSnapshotToBroadcast.push(...expiry.broadcasts);
   }
 
-  if (!changed) return;
+  if (!changed && registrationsHandled === 0) return;
 
   const fleet = evaluateFleetState({ state, config, now, localMachine: localMachineName() });
 
-  if (config.enabled !== false && localPerAgent > 0 && config.playback !== "off") {
-    playSound(config.perAgentSound, config.volume);
+  // -------------------------------------------------------------------------
+  // PLAYBACK DECISION — Mini-as-master.
+  // -------------------------------------------------------------------------
+  const shouldPlayHere =
+    config.enabled !== false
+    && config.playback !== "off"
+    && (role === "master" || role === "standalone");
+
+  const totalPerAgentEnded = localPerAgent + remotePerAgent;
+  const remoteRate = Number(config.remotePitchRate ?? 1.0);
+
+  if (shouldPlayHere && totalPerAgentEnded > 0) {
+    // If only remote events landed, pitch slightly up so Ethan can tell.
+    // If any local event landed too, play at normal pitch (it's "his" desk).
+    const rate = (localPerAgent === 0 && remotePerAgent > 0) ? remoteRate : 1.0;
+    playSound(config.perAgentSound, config.volume, rate);
   }
-  if (config.enabled !== false && fleet.allCompletePlayback && config.playback !== "off") {
+  if (shouldPlayHere && fleet.allCompletePlayback) {
+    // All-complete sound plays at normal pitch — it's a "fleet idle" event,
+    // not a per-machine event, so the pitch hint isn't meaningful here.
     setTimeout(() => {
-      playSound(config.allCompleteSound, config.volume);
+      playSound(config.allCompleteSound, config.volume, 1.0);
     }, 350);
   }
 
@@ -257,30 +366,115 @@ async function processInboxOnce() {
   logChimeEvent({
     ts: Date.now(),
     event: "state_update",
+    role,
+    masterMachine: masterMachineOf(config),
     fleetActiveCount: fleet.fleetActiveCount,
     staleBlocking: fleet.staleBlocking,
     expiredSources: fleet.expiredSources,
     playbackHosts: fleet.playbackHosts,
     allCompletePlayback: fleet.allCompletePlayback,
+    playedHere: shouldPlayHere,
+    localPerAgent,
+    remotePerAgent,
+    registrationsHandled,
     localSnapshots: localSnapshotToBroadcast.map((snapshot) => ({
       sourceId: snapshot.sourceId,
       seq: snapshot.seq,
       activeCount: snapshot.activeAgents.length,
     })),
   });
-  for (const snapshot of localSnapshotToBroadcast) {
-    await broadcastSnapshot(snapshot);
-  }
 }
 
 async function sendHeartbeatSnapshots() {
   const config = loadChimeConfig();
   if (config.enabled === false || config.scope === "local") return;
+  const role = roleFor(config);
+
+  // ---- Peer side: send a chime.register heartbeat to master --------------
+  // Establishes / refreshes our presence in master's peers.json registry.
+  // Master uses it to know which machines are wired up; nothing is gated
+  // on registration today (peers can forward events without prior register)
+  // but the registry helps debugging and future fleet UX.
+  if (role === "peer") {
+    const master = masterMachineOf(config);
+    if (!master) return;
+    try {
+      await deliverReply({
+        message: buildBridgeEnvelope(master, {
+          kind: "chime.heartbeat",
+          machine: localMachineName(),
+          chimeVersion: CHIME_VERSION,
+          pid: process.pid,
+          ts: Date.now(),
+        }),
+        toMachine: master,
+        keysDir: BRIDGE_KEYS_DIR,
+        configPath: BRIDGE_CONFIG_FILE,
+        inboxDir: BRIDGE_INBOX_DIR,
+        outboxDir: BRIDGE_OUTBOX_DIR,
+        logger: { info() {}, debug() {}, warn() {}, error() {} },
+      });
+      logEvent("debug", "chime.heartbeat_sent", `Sent chime heartbeat to master ${master}`, { master });
+    } catch (err) {
+      logEvent("warn", "chime.heartbeat_failed", `Failed to send chime heartbeat to master ${master}`, {
+        master,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return;
+  }
+
+  // ---- Master / standalone side: legacy snapshot broadcast disabled ------
+  // The pre-2026-05-04 behavior broadcast snapshots to all peers so each peer
+  // could compute fleet state and play its OWN chimes. Mini-as-master inverts
+  // that — only the master plays, peers don't need fleet state. We keep the
+  // function (and `broadcastSnapshot` / `listPeerMachines` above) for tests
+  // and to allow `scope` overrides, but don't fan out by default.
+  //
+  // To re-enable legacy snapshot fan-out, set
+  // `~/.agent-bridge/chime/config.json` { "scope": "broadcast" } (any value
+  // other than "local" or the new default "fleet" historically triggered
+  // broadcast — we now require an explicit "broadcast" opt-in).
+  if (config.scope !== "broadcast") return;
   const state = loadChimeState();
   const now = Date.now();
   for (const source of Object.values(state.sources)) {
     if (source.machine !== localMachineName()) continue;
     await broadcastSnapshot(buildSnapshotPayload(source, now));
+  }
+}
+
+async function sendInitialRegistration() {
+  // Peers ping the master once at startup with a `chime.register` event so the
+  // master's peers.json registry knows about us. Heartbeats refresh it.
+  const config = loadChimeConfig();
+  if (config.enabled === false) return;
+  const role = roleFor(config);
+  if (role !== "peer") return;
+  const master = masterMachineOf(config);
+  if (!master) return;
+  try {
+    await deliverReply({
+      message: buildBridgeEnvelope(master, {
+        kind: "chime.register",
+        machine: localMachineName(),
+        chimeVersion: CHIME_VERSION,
+        pid: process.pid,
+        ts: Date.now(),
+      }),
+      toMachine: master,
+      keysDir: BRIDGE_KEYS_DIR,
+      configPath: BRIDGE_CONFIG_FILE,
+      inboxDir: BRIDGE_INBOX_DIR,
+      outboxDir: BRIDGE_OUTBOX_DIR,
+      logger: { info() {}, debug() {}, warn() {}, error() {} },
+    });
+    logEvent("info", "chime.registered", `Registered with chime master ${master}`, { master });
+  } catch (err) {
+    logEvent("warn", "chime.register_failed", `Failed to register with chime master ${master}`, {
+      master,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -290,7 +484,17 @@ async function runService() {
     logEvent("info", "chime.lease_busy", "Chime service already running", {});
     return;
   }
-  logEvent("info", "chime.started", "Agent Bridge chime service started", { pid: process.pid });
+  const config = loadChimeConfig();
+  const role = roleFor(config);
+  logEvent("info", "chime.started", "Agent Bridge chime service started", {
+    pid: process.pid,
+    role,
+    masterMachine: masterMachineOf(config),
+    localMachine: localMachineName(),
+  });
+
+  // Peer-side: announce ourselves to master immediately. Best-effort.
+  await sendInitialRegistration();
 
   let stopped = false;
   const stop = () => { stopped = true; };
@@ -302,8 +506,8 @@ async function runService() {
     while (!stopped) {
       if (!heartbeatLease(lease)) break;
       await processInboxOnce();
-      const config = loadChimeConfig();
-      const intervalMs = Math.max(10, Number(config.heartbeatSeconds ?? 30)) * 1000;
+      const cfg = loadChimeConfig();
+      const intervalMs = Math.max(10, Number(cfg.heartbeatSeconds ?? 30)) * 1000;
       if (Date.now() - lastHeartbeatAt >= intervalMs) {
         lastHeartbeatAt = Date.now();
         await sendHeartbeatSnapshots();

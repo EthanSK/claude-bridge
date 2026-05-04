@@ -1,5 +1,35 @@
 # Changelog
 
+## agent-bridge chime 1.0.0 — 2026-05-04
+
+### Mini-as-master architecture — only ONE machine plays chimes
+
+Inverts the chime subsystem's playback model. Pre-2026-05-04 every paired Mac played its own per-agent + all-complete chime independently (with broadcast-snapshot fan-out so each machine could compute fleet state). Voice 6286 reversed that:
+
+> "the Mac Mini is like the one playing it, so they all have to tell the Mac Mini or whatever the master one is that they're done, and then the Mac Mini is like the parent who controls them all."
+
+There is only one human at the desk. With the broadcast model, ANY agent completion on ANY machine fired chimes on EVERY paired Mac — annoying and redundant. Mini-as-master designates a single sole-player; peers SFTP completion events to the master, the master plays the appropriate Glass / Hero with the existing all-complete-cooldown logic.
+
+Co-located with agent-bridge (not the standalone agent-completion-chime repo) per voice 6283: cross-machine completion comms need an SSH transport, which agent-bridge already owns. The two repos coordinate — the standalone hooks fire on Stop / SubagentStop, dynamically import `chime/emitter.mjs` from this repo to forward to master, and the master's `chime/service.mjs` daemon (this repo) processes and plays.
+
+- **`chime/core.mjs`** — added `masterMachine` + `remotePitchRate` config defaults (Mini = `"Ethans-Mac-mini"` by default; pitch rate 1.05 for peer-originated chimes so Ethan can audibly distinguish "from the laptop" from "from the desk"). New helpers: `roleFor(config)` returns `"master" | "peer" | "standalone"`; `masterMachineOf(config)`; peer-registry persistence (`loadChimePeers`, `saveChimePeers`, `recordPeerRegistration`) backed by `~/.agent-bridge/chime/peers.json`. `playSound()` now accepts a `rate` parameter routed to afplay's `-r` flag. `applyControlEvent` now treats an `agent.end` event with no prior `agent.start` as a valid `perAgent` transition (mirrors the standalone chime's `AGENT_COMPLETION_CHIME_FIRE_UNKNOWN_END` friendly default — peer hooks only forward `agent.end`, never `agent.start`).
+- **`chime/service.mjs`** — full rewrite of `processInboxOnce` for the Mini-as-master playback policy. On master, plays per-agent + all-complete locally (peer-originated chimes get `remotePitchRate`, mixed local+remote bursts use normal pitch). On peer, skips playback entirely. New `chime.register` / `chime.heartbeat` event handlers — master records peer registrations into `peers.json`, peer's `runService` loop sends an initial registration on startup and refreshes via the existing `heartbeatSeconds` cycle. Legacy snapshot fan-out now requires explicit `scope: "broadcast"` opt-in (was the default). Architecture-decision comment block at the top of the file documents the rationale + the 2026-05-04 voice notes — explicit "do not re-consolidate" guard for future passes.
+- **`chime/emitter.mjs`** — `emitLifecycleEvent` is now async and role-aware. Master / standalone: writes to local inbox (existing behavior). Peer: SFTPs to master via `deliverReply`. If master is unreachable, falls back to local inbox so the chime still fires somewhere — better to play on the wrong machine than to drop the audio cue silently.
+- **`chime/cli.mjs`** — added `agent-bridge chime peers` (master inspection) and `agent-bridge chime register` (peer one-shot registration). `status` output now includes `role`, `masterMachine`, `localMachine`. CLI is now async-aware so `await emitLifecycle(...)` resolves the SFTP write before the process exits.
+- **`chime/test/chime-mini-master.test.mjs`** — new test file (6 cases): `roleFor` returns master/peer/standalone correctly, `recordPeerRegistration` is idempotent + refreshes `lastSeenAt`, blank-machine names ignored, `playSound` accepts the new rate parameter without throwing.
+- **`AGENTS.md`** — TODO: cross-fleet update on operator stale-daemon recovery doc to reflect the new role + master/peer distinction. Still applies as-is — the lease coordination logic didn't change.
+- **No MCP server / CLI version bump.** This is a chime-subsystem change; agent-bridge top-level remains at 4.0.0 / 3.14.9. Chime is internally tagged at version `1.0.0-mini-master` (CHIME_VERSION constant in `service.mjs`) for peer-registration handshakes.
+
+#### Cross-repo coordination
+
+This release coordinates with `agent-completion-chime@0.3.0` (separate repo). The standalone hook fires `bin/chime.js end --from-claude-{stop,subagent}` per Claude Code's hook config in `~/.claude/settings.json`; on peer hosts that script imports `chime/emitter.mjs` from this repo to forward to master. Both repos must be on these versions for cross-machine flow to work end-to-end.
+
+#### Out of scope
+
+- No UI toggle for "play on which machine". `masterMachine` config is the only knob.
+- No Codex review (Ethan voice 6286: "Even ask Codex. Actually, no, don't ask Codex. Just do it yourself.").
+- No consolidation/merge of the two repos. They stay separate per voice 6283.
+
 ## openclaw-channel 3.0.0 — 2026-05-04
 
 ### Agent-driven reply routing — full rewrite of openclaw-channel routing model

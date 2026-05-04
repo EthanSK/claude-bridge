@@ -13,6 +13,7 @@ export const BRIDGE_OUTBOX_DIR = join(BRIDGE_HOME, "outbox");
 export const CHIME_DIR = join(BRIDGE_HOME, "chime");
 export const CHIME_CONFIG_FILE = join(CHIME_DIR, "config.json");
 export const CHIME_STATE_FILE = join(CHIME_DIR, "state.json");
+export const CHIME_PEERS_FILE = join(CHIME_DIR, "peers.json");
 export const CHIME_LOG_FILE = join(CHIME_DIR, "chime.log");
 export const CHIME_ACTIVE_DIR = join(CHIME_DIR, "active");
 export const CHIME_LOCK_FILE = join(BRIDGE_HOME, "locks", "agent-bridge-chime.lock.json");
@@ -39,6 +40,28 @@ export const DEFAULT_CONFIG = {
   heartbeatSeconds: 30,
   allCompleteCooldownSeconds: 4,
   historyLimit: 200,
+  // ---------------------------------------------------------------------------
+  // Mini-as-master architecture (added 2026-05-04, voice 6286).
+  //
+  // There is only one human at the desk. To avoid the same chime firing on
+  // every paired Mac, ONE machine is designated the "master" and is the only
+  // one that plays sound. Peers forward their completion events over SSH
+  // (via agent-bridge SFTP) into the master's chime inbox; the master's
+  // daemon then plays the appropriate Glass/Hero locally.
+  //
+  // - `masterMachine` — the machine name (per `localMachineName()`) of the
+  //   sole-player. Default `"Ethans-Mac-mini"` because that's the always-on
+  //   workstation in Ethan's fleet. Set to `null` (or to the local machine
+  //   name) on hosts that should keep legacy local-play semantics.
+  // - `remotePitchRate` — afplay `-r` rate applied when the master plays a
+  //   sound that originated from a remote peer. 1.0 = unchanged; 1.05 gives
+  //   a barely-audible higher pitch so Ethan can distinguish "this came from
+  //   the laptop" from "this came from the desk". Set to `1` to disable.
+  //
+  // See chime/service.mjs `roleFor(...)` for how role is resolved at runtime.
+  // ---------------------------------------------------------------------------
+  masterMachine: "Ethans-Mac-mini",
+  remotePitchRate: 1.05,
 };
 
 export const EMPTY_STATE = {
@@ -178,12 +201,21 @@ export function resolveSoundPath(name) {
   return join("/System/Library/Sounds", normalized);
 }
 
-export function playSound(name, volume = 1.0) {
+export function playSound(name, volume = 1.0, rate = 1.0) {
   const soundPath = resolveSoundPath(name);
   if (!soundPath) return false;
   try {
     const vol = Number.isFinite(volume) ? Math.max(0, Math.min(2, volume)) : 1.0;
-    const child = spawn("afplay", ["-v", String(vol), soundPath], {
+    const r = Number.isFinite(rate) ? Math.max(0.25, Math.min(4, rate)) : 1.0;
+    const args = ["-v", String(vol)];
+    // afplay's `-r` rate flag pitches/speeds the sample; we use it to
+    // give peer-originated chimes a slightly higher pitch on the master
+    // so Ethan can distinguish "from the laptop" from "from the desk".
+    if (Math.abs(r - 1.0) > 1e-6) {
+      args.push("-r", String(r));
+    }
+    args.push(soundPath);
+    const child = spawn("afplay", args, {
       detached: true,
       stdio: "ignore",
     });
@@ -193,6 +225,80 @@ export function playSound(name, volume = 1.0) {
   } catch {
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Mini-as-master role resolution (2026-05-04, voice 6286).
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the chime role for THIS machine given a config.
+ *
+ * Returns one of:
+ *   - "master"   — local machine IS the configured masterMachine (or master
+ *                  is unconfigured and this is the historic local-play path).
+ *   - "peer"     — local machine is NOT the master; its hook events should
+ *                  be forwarded to the master, NOT played locally.
+ *   - "standalone" — masterMachine is explicitly null (legacy / opt-out).
+ */
+export function roleFor(config = loadChimeConfig(), localMachine = localMachineName()) {
+  if (config && config.masterMachine === null) return "standalone";
+  const master = (config && typeof config.masterMachine === "string" && config.masterMachine.trim())
+    ? config.masterMachine.trim()
+    : null;
+  if (!master) return "standalone";
+  return master === localMachine ? "master" : "peer";
+}
+
+/** Convenience: which machine is the master (or null if standalone)? */
+export function masterMachineOf(config = loadChimeConfig()) {
+  if (!config || config.masterMachine === null) return null;
+  return typeof config.masterMachine === "string" && config.masterMachine.trim()
+    ? config.masterMachine.trim()
+    : null;
+}
+
+// ---------------------------------------------------------------------------
+// Peer registry (master tracks who has pinged in via chime.register)
+// ---------------------------------------------------------------------------
+
+export function loadChimePeers() {
+  ensureChimeDirs();
+  if (!existsSync(CHIME_PEERS_FILE)) return { peers: {} };
+  try {
+    const parsed = JSON.parse(readFileSync(CHIME_PEERS_FILE, "utf8"));
+    return {
+      peers: parsed?.peers && typeof parsed.peers === "object" ? parsed.peers : {},
+    };
+  } catch {
+    return { peers: {} };
+  }
+}
+
+export function saveChimePeers(registry) {
+  ensureChimeDirs();
+  const tmp = `${CHIME_PEERS_FILE}.tmp`;
+  writeFileSync(tmp, JSON.stringify(registry, null, 2), { mode: 0o600 });
+  renameSync(tmp, CHIME_PEERS_FILE);
+}
+
+/**
+ * Record a peer registration on the master side. Idempotent — duplicate
+ * registrations refresh `lastSeenAt`. Also called from heartbeat handling.
+ */
+export function recordPeerRegistration(registry, payload, now = Date.now()) {
+  if (!registry || !registry.peers) registry = { peers: {} };
+  const machine = String(payload?.machine || "").trim();
+  if (!machine) return registry;
+  const prev = registry.peers[machine] || {};
+  registry.peers[machine] = {
+    machine,
+    registeredAt: prev.registeredAt || now,
+    lastSeenAt: now,
+    chimeVersion: payload?.chimeVersion || prev.chimeVersion || null,
+    pid: payload?.pid ?? prev.pid ?? null,
+  };
+  return registry;
 }
 
 export function makeAgentKey(agentId) {
@@ -328,6 +434,16 @@ export function applyControlEvent({ state, config, payload, now = Date.now() }) 
       if (config.activeLockFiles !== false && machine === localMachineName()) {
         removeActiveAgentLock({ machine, sourceId, agentId: agentKey });
       }
+      changed = true;
+      perAgent = true;
+    } else {
+      // [Mini-as-master flow, 2026-05-04] Peers forward only `agent.end`
+      // events (their Stop / SubagentStop hooks don't pair with a start
+      // emitter — see agent-completion-chime/src/state.js). To still trigger
+      // the per-agent chime on the master, treat an unknown-end as a valid
+      // perAgent event AND seq-bump so evaluateFleetState sees a transition.
+      // This mirrors the standalone chime's `AGENT_COMPLETION_CHIME_FIRE_UNKNOWN_END`
+      // friendly default.
       changed = true;
       perAgent = true;
     }

@@ -6,7 +6,11 @@ import {
   EMPTY_STATE,
   ensureChimeDirs,
   loadChimeConfig,
+  loadChimePeers,
+  localMachineName,
+  masterMachineOf,
   playSound,
+  roleFor,
   saveChimeState,
   statusSnapshot,
   updateChimeConfig,
@@ -65,7 +69,7 @@ function runIdFromClaudePayload(payload, hookKind) {
   return { id: String(id), label: String(label) };
 }
 
-function emitLifecycle(kind, args) {
+async function emitLifecycle(kind, args) {
   ensureChimeDirs();
   const { positional, flags } = parseArgs(args);
   let agentId = positional[0];
@@ -104,7 +108,7 @@ function emitLifecycle(kind, args) {
   }
 
   if (!agentId) die(`agent-bridge chime ${kind} <agent_id> required`);
-  emitLifecycleEvent({
+  await emitLifecycleEvent({
     kind: kind === "start" ? "agent.start" : "agent.end",
     sourceId,
     harness,
@@ -114,7 +118,41 @@ function emitLifecycle(kind, args) {
 }
 
 function cmdStatus() {
-  process.stdout.write(`${JSON.stringify(statusSnapshot(), null, 2)}\n`);
+  const snap = statusSnapshot();
+  const config = loadChimeConfig();
+  const role = roleFor(config);
+  process.stdout.write(`${JSON.stringify({
+    ...snap,
+    role,
+    masterMachine: masterMachineOf(config),
+    localMachine: localMachineName(),
+  }, null, 2)}\n`);
+}
+
+function cmdPeers() {
+  const registry = loadChimePeers();
+  process.stdout.write(`${JSON.stringify(registry, null, 2)}\n`);
+}
+
+async function cmdRegister() {
+  const config = loadChimeConfig();
+  const role = roleFor(config);
+  if (role !== "peer") {
+    process.stdout.write(`${JSON.stringify({
+      ok: true,
+      role,
+      message: `Local machine is the ${role} — nothing to register.`,
+    }, null, 2)}\n`);
+    return;
+  }
+  const result = await emitLifecycleEvent({
+    kind: "chime.register",
+    sourceId: "chime-register",
+    harness: "agent-bridge",
+    agentId: localMachineName(),
+    label: null,
+  });
+  process.stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`);
 }
 
 function cmdReset() {
@@ -166,39 +204,59 @@ Usage:
   agent-bridge chime end   --from-claude-stop
   agent-bridge chime end   --from-claude-subagent
   agent-bridge chime status
+  agent-bridge chime peers           (master-only: list registered peers)
+  agent-bridge chime register        (peer-only: announce to master)
   agent-bridge chime config get
   agent-bridge chime config set <key> <value>
   agent-bridge chime test <per-agent|all-complete>
   agent-bridge chime reset
+
+Mini-as-master architecture (2026-05-04):
+  Set masterMachine in config to designate the sole-player. Peers forward
+  events to master via SFTP; only master plays sounds. See chime/service.mjs
+  for the architecture comment block.
 `);
 }
 
 const [cmd, ...rest] = process.argv.slice(2);
-switch (cmd) {
-  case "start":
-    emitLifecycle("start", rest);
-    break;
-  case "end":
-    emitLifecycle("end", rest);
-    break;
-  case "status":
-    cmdStatus();
-    break;
-  case "config":
-    cmdConfig(rest);
-    break;
-  case "test":
-    cmdTest(rest);
-    break;
-  case "reset":
-    cmdReset();
-    break;
-  case "help":
-  case "--help":
-  case "-h":
-  case undefined:
-    help();
-    break;
-  default:
-    die(`Unknown chime command: ${cmd}`);
+try {
+  switch (cmd) {
+    case "start":
+      await emitLifecycle("start", rest);
+      break;
+    case "end":
+      await emitLifecycle("end", rest);
+      break;
+    case "status":
+      cmdStatus();
+      break;
+    case "peers":
+      cmdPeers();
+      break;
+    case "register":
+      await cmdRegister();
+      break;
+    case "config":
+      cmdConfig(rest);
+      break;
+    case "test":
+      cmdTest(rest);
+      break;
+    case "reset":
+      cmdReset();
+      break;
+    case "help":
+    case "--help":
+    case "-h":
+    case undefined:
+      help();
+      break;
+    default:
+      die(`Unknown chime command: ${cmd}`);
+  }
+} catch (err) {
+  // Hooks must never block the host. Log and exit 0 unless it was an
+  // unparseable user invocation (those throw via die() above and exit 1).
+  process.stderr.write(`agent-bridge chime: ${err instanceof Error ? err.message : String(err)}\n`);
+  process.exit(0);
 }
