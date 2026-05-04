@@ -211,3 +211,107 @@ test("normalizeReplyVia coerces casing/whitespace and unknown values", () => {
   assert.equal(normalizeReplyVia(null, silentLog, "t"), "telegram");
   assert.equal(normalizeReplyVia("foo", silentLog, "t"), "telegram");
 });
+
+// ── isBridgeOnlyReplyVia (target-config peer_id relaxation) ────────────────
+
+test("isBridgeOnlyReplyVia: string 'agent-bridge' is bridge-only", () => {
+  const { isBridgeOnlyReplyVia } = indexTesting;
+  assert.equal(isBridgeOnlyReplyVia("agent-bridge"), true);
+  assert.equal(isBridgeOnlyReplyVia(" Agent-Bridge "), true);
+});
+
+test("isBridgeOnlyReplyVia: string 'telegram' / null / unknown is NOT bridge-only", () => {
+  const { isBridgeOnlyReplyVia } = indexTesting;
+  assert.equal(isBridgeOnlyReplyVia("telegram"), false);
+  assert.equal(isBridgeOnlyReplyVia(null), false);
+  assert.equal(isBridgeOnlyReplyVia(undefined), false);
+  assert.equal(isBridgeOnlyReplyVia("discord"), false);
+});
+
+test("isBridgeOnlyReplyVia: array ['agent-bridge'] is bridge-only", () => {
+  const { isBridgeOnlyReplyVia } = indexTesting;
+  assert.equal(isBridgeOnlyReplyVia(["agent-bridge"]), true);
+  assert.equal(isBridgeOnlyReplyVia(["AGENT-BRIDGE", "agent-bridge"]), true);
+});
+
+test("isBridgeOnlyReplyVia: array containing telegram is NOT bridge-only", () => {
+  const { isBridgeOnlyReplyVia } = indexTesting;
+  assert.equal(isBridgeOnlyReplyVia(["telegram", "agent-bridge"]), false);
+  assert.equal(isBridgeOnlyReplyVia(["agent-bridge", "telegram"]), false);
+  assert.equal(isBridgeOnlyReplyVia(["agent-bridge", "discord"]), false);
+  assert.equal(isBridgeOnlyReplyVia([]), false);
+  assert.equal(isBridgeOnlyReplyVia([null, "agent-bridge"]), false);
+});
+
+// ── normalizeExplicitTargets respects array bridge-only configs ───────────
+
+test("normalizeExplicitTargets keeps bridge-only string config without peer_id", () => {
+  const { normalizeExplicitTargets } = indexTesting;
+  const warnings = [];
+  const targets = normalizeExplicitTargets(
+    {
+      targets: {
+        bridgeOnly: {
+          openclaw_channel: "agent-bridge",
+          account: "default",
+          replyVia: "agent-bridge",
+        },
+      },
+    },
+    {
+      warn(msg) {
+        warnings.push(msg);
+      },
+    },
+  );
+  assert.ok(targets.bridgeOnly, "expected bridgeOnly target to be kept");
+  assert.deepEqual(warnings, []);
+});
+
+test("normalizeExplicitTargets keeps bridge-only ARRAY config without peer_id (P2)", () => {
+  const { normalizeExplicitTargets } = indexTesting;
+  const warnings = [];
+  const targets = normalizeExplicitTargets(
+    {
+      targets: {
+        bridgeOnly: {
+          openclaw_channel: "agent-bridge",
+          account: "default",
+          replyVia: ["agent-bridge"],
+        },
+      },
+    },
+    {
+      warn(msg) {
+        warnings.push(msg);
+      },
+    },
+  );
+  assert.ok(targets.bridgeOnly, "expected bridgeOnly array target to be kept");
+  assert.deepEqual(warnings, []);
+});
+
+test("normalizeExplicitTargets still skips telegram-array config without peer_id", () => {
+  const { normalizeExplicitTargets } = indexTesting;
+  const warnings = [];
+  const targets = normalizeExplicitTargets(
+    {
+      targets: {
+        mixed: {
+          openclaw_channel: "telegram",
+          account: "default",
+          replyVia: ["telegram", "agent-bridge"],
+        },
+      },
+    },
+    {
+      warn(msg) {
+        warnings.push(msg);
+      },
+    },
+  );
+  // No peer_id and replyVia includes "telegram" → still rejected.
+  assert.equal(targets.mixed, undefined);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /missing peer_id/);
+});
