@@ -767,7 +767,7 @@ async function main(): Promise<void> {
         'AGENT-DRIVEN REPLY ROUTING (unified across Claude Code + OpenClaw, openclaw-channel v3.0+):',
         'When you receive an inbound bridge message, YOU decide where the reply goes — the routing layer never auto-fans out replies on your behalf. Two legs are involved:',
         '  1. Bridge leg (implicit, expected when from_target is set): call bridge_send_message with target=<from_target> and machine=<sender machine> to reply over the bridge to the originating peer.',
-        '  2. User-facing leg (additional): if there is also a human user reading this conversation (Telegram, Slack, Discord, etc.), send a 1-2 line summary of the bridge exchange via the harness\'s configured user-facing reply tool. This is what makes cross-harness coordination visible to the user. The "Relay inbound bridge messages to the user" rule (canonical doc: docs/relay-to-user.md) covers the wording / triggers.',
+        '  2. User-facing leg (additional): if there is also a human user reading this conversation (Telegram, Slack, Discord, etc.), send a 1-3 sentence summary of the bridge exchange via the harness\'s configured user-facing reply tool, with the running agent-bridge version appended at the end (e.g. "_(agent-bridge v3.14.9)_") so the user can spot fleet-wide version drift. Read the version from the BRIDGE-CONTEXT `agent_bridge_version` field (OpenClaw) or `claude_code_channel_status` (Claude Code) — do NOT hardcode. This is what makes cross-harness coordination visible to the user. The "Relay inbound bridge messages to the user" rule (canonical doc: docs/relay-to-user.md) covers the wording / triggers.',
         'Both legs are independent tool calls. Pick zero, one, or both depending on context. The same model applies on OpenClaw via openclaw-channel v3.0+: the inbound message is surfaced into the agent\'s session with a [BRIDGE-CONTEXT] block listing from_target + suggested user-facing channels, and the agent calls the appropriate reply tools.',
         '',
         'Available tools:',
@@ -1040,6 +1040,14 @@ async function main(): Promise<void> {
               ...(message.replyTo ? { reply_to: message.replyTo } : {}),
               ...(message.ttl !== undefined ? { ttl: String(message.ttl) } : {}),
               authenticated: 'ssh-key',
+              // [AGENT-BRIDGE-VERSION-IN-RELAY 2026-05-04]
+              // Surface the running agent-bridge version on every inbound
+              // channel push so the agent's user-facing relay summary can
+              // append it (e.g. "(agent-bridge v3.14.9)") without needing
+              // to call claude_code_channel_status. Helps the user spot
+              // fleet-wide version drift at a glance from the relay alone.
+              // Canonical doc: docs/relay-to-user.md.
+              agent_bridge_version: VERSION,
             },
           },
         }).catch((err) => {

@@ -785,3 +785,36 @@ test("normalizeExplicitTargets default target additionalReplyChannels is null (f
   );
   assert.equal(targets.default.additionalReplyChannels, null);
 });
+
+// ── agent_bridge_version in BRIDGE-CONTEXT ──────────────────────────────────
+// [AGENT-BRIDGE-VERSION-IN-RELAY 2026-05-04]
+// Voice 2150: the user-facing relay should carry the running agent-bridge
+// version so the user can spot fleet-wide drift at a glance from the
+// relay alone. The BRIDGE-CONTEXT block is where the agent reads it.
+
+test("formatInboundBody includes agent_bridge_version in BRIDGE-CONTEXT", async () => {
+  const { resolveAgentBridgeVersion, __resetVersionCache } = await import("../src/index.js");
+  __resetVersionCache();
+  const v = resolveAgentBridgeVersion();
+  // Sanity: in this monorepo layout, mcp-server/package.json is at
+  // ../../mcp-server/package.json relative to openclaw-channel/src/.
+  // The version field is a non-empty semver-ish string.
+  assert.ok(typeof v === "string" && v.length > 0, "expected resolveAgentBridgeVersion to return a non-empty string");
+  assert.match(v, /^\d+\.\d+\.\d+/);
+
+  const body = formatInboundBody({
+    msg: makeMsg({
+      fromTarget: "claude-code/default",
+      from: "MacBookPro",
+      content: "hi",
+    }),
+    target: makeTarget(),
+    additionalReplyChannels: ["telegram"],
+    primaryChannel: "telegram",
+  });
+  assert.match(body, /agent_bridge_version: /);
+  assert.ok(body.includes(`agent_bridge_version: ${v}`),
+    `BRIDGE-CONTEXT should embed the resolved version (${v}); got body=\n${body}`);
+  // The line carries an inline hint to the agent about how to use it.
+  assert.match(body, /append to user-facing relay/);
+});

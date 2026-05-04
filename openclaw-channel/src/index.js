@@ -77,7 +77,9 @@
  */
 
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import { makeLogger } from "./log.js";
 import { startInboxWatcher } from "./inbox-watcher.js";
@@ -1482,6 +1484,18 @@ function formatInboundBody({ msg, target, additionalReplyChannels, primaryChanne
     ctxLines.push(`additional_user_channels: ${additionalReplyChannels.join(", ")}`);
   }
   ctxLines.push(`local_target: ${target?.name ?? "?"}`);
+  // [AGENT-BRIDGE-VERSION-IN-RELAY 2026-05-04]
+  // Surface the running agent-bridge version so the agent's user-facing
+  // relay summary can append it (e.g. "(agent-bridge v3.14.9)"). Helps
+  // the user spot fleet-wide version drift at a glance from the relay
+  // alone — no need to ask which build is on the other machine.
+  // Canonical doc: docs/relay-to-user.md.
+  const abVersion = resolveAgentBridgeVersion();
+  if (abVersion) {
+    ctxLines.push(
+      `agent_bridge_version: ${abVersion}  # append to user-facing relay (e.g. "_(agent-bridge v${abVersion})_")`,
+    );
+  }
 
   return `${channelBlock}\n\n${ctxLines.join("\n")}`;
 }
@@ -1489,3 +1503,53 @@ function formatInboundBody({ msg, target, additionalReplyChannels, primaryChanne
 function escapeAttr(v) {
   return String(v ?? "").replace(/"/g, '\\"');
 }
+
+/**
+ * Read the `version` field from `mcp-server/package.json` (the canonical
+ * agent-bridge version source — same field the bash CLI's VERSION constant
+ * tracks via config.ts). Cached after the first successful read so we don't
+ * re-stat per inbound message. Returns "" if the file can't be located /
+ * parsed; callers must handle the empty-string fallback.
+ */
+let _cachedAgentBridgeVersion = null;
+function resolveAgentBridgeVersion() {
+  if (_cachedAgentBridgeVersion !== null) return _cachedAgentBridgeVersion;
+  // From this file (openclaw-channel/src/index.js) the canonical version
+  // lives at ../../mcp-server/package.json. We also walk a few extra
+  // candidate paths to handle weird install layouts (e.g. when the plugin
+  // is loaded from a flattened cache dir).
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    join(here, "..", "..", "mcp-server", "package.json"),
+    join(here, "..", "..", "package.json"),
+    join(here, "..", "package.json"),
+  ];
+  for (const p of candidates) {
+    try {
+      if (!existsSync(p)) continue;
+      const json = JSON.parse(readFileSync(p, "utf8"));
+      if (json && typeof json.version === "string" && json.version.length > 0) {
+        // Only accept if this is the agent-bridge mcp-server package — we
+        // don't want the openclaw-channel package's own 3.0.0 leaking in
+        // as the "agent-bridge version" the user sees in their relay.
+        const name = typeof json.name === "string" ? json.name : "";
+        if (name.includes("agent-bridge-mcp-server") || name === "agent-bridge") {
+          _cachedAgentBridgeVersion = json.version;
+          return _cachedAgentBridgeVersion;
+        }
+      }
+    } catch { /* try next candidate */ }
+  }
+  _cachedAgentBridgeVersion = "";
+  return _cachedAgentBridgeVersion;
+}
+
+// Exposed for tests so they can reset the cache between cases. Attached to
+// the existing `__testing` export below at module-evaluation time via a
+// post-init mutation (the `export const __testing = { ... }` declaration
+// above was already used for other internal helpers; we additively augment
+// rather than reshape it).
+export function __resetVersionCache() {
+  _cachedAgentBridgeVersion = null;
+}
+export { resolveAgentBridgeVersion };
