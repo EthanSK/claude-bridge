@@ -72,6 +72,13 @@ $LockPidFile = Join-Path $LockDir 'pid'
 $StaleLockAgeSec = if ($env:AGENT_BRIDGE_PERIODIC_STALE_LOCK_SEC) { [int]$env:AGENT_BRIDGE_PERIODIC_STALE_LOCK_SEC } else { 1800 }
 
 function Test-LockReclaimable {
+    # Returns $true if lock can be reclaimed / is absent, $false if a
+    # live/recent owner holds it. Mirrors the bash policy:
+    #   - PID alive             -> CONTENDED (never reclaim purely on age)
+    #   - PID dead               -> RECLAIM
+    #   - No pid file:
+    #       - Lock age < threshold -> CONTENDED (race; peer just mkdir'd)
+    #       - Lock age >= threshold -> RECLAIM (orphan)
     if (-not (Test-Path $LockDir)) { return $true }
 
     $existingPid = $null
@@ -83,19 +90,21 @@ function Test-LockReclaimable {
     if ($existingPid) {
         $proc = Get-Process -Id $existingPid -ErrorAction SilentlyContinue
         if ($proc) {
-            # Live owner; reclaim only if lock is hung (older than threshold).
-            $age = [int]((Get-Date) - (Get-Item $LockDir).LastWriteTime).TotalSeconds
-            if ($age -gt $StaleLockAgeSec) {
-                Write-Log "WARN: lock held by live pid=$existingPid for ${age}s (> ${StaleLockAgeSec}s); reclaiming"
-                Remove-Item -Path $LockDir -Recurse -Force -ErrorAction SilentlyContinue
-                return $true
-            }
+            # Live owner; never reclaim purely on age. Codex review 0e763a3 round 2.
             return $false
         }
         Write-Log "stale lock: pid=$existingPid no longer alive; reclaiming"
-    } else {
-        Write-Log "stale lock: missing/malformed pid file; reclaiming"
+        Remove-Item -Path $LockDir -Recurse -Force -ErrorAction SilentlyContinue
+        return $true
     }
+
+    # Pid-less lock: race vs orphan distinguished by age.
+    $age = [int]((Get-Date) - (Get-Item $LockDir).LastWriteTime).TotalSeconds
+    if ($age -lt $StaleLockAgeSec) {
+        # Treat as contended — peer is mid-acquire, pid write imminent.
+        return $false
+    }
+    Write-Log "stale lock: missing/malformed pid file (age ${age}s); reclaiming"
     Remove-Item -Path $LockDir -Recurse -Force -ErrorAction SilentlyContinue
     return $true
 }

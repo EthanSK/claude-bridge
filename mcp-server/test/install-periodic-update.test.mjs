@@ -246,22 +246,89 @@ test('agent-bridge-periodic-update.sh: reclaims stale lock with dead pid', { ski
   }
 });
 
-test('agent-bridge-periodic-update.sh: reclaims stale lock with no pid file', { skip: !hasBash }, () => {
+test('agent-bridge-periodic-update.sh: reclaims pid-less lock once aged past threshold', { skip: !hasBash }, () => {
   const sandboxHome = mkdtempSync(join(tmpdir(), 'periodic-lock-test-'));
   const runDir = join(sandboxHome, '.agent-bridge', 'run');
   const lockDir = join(runDir, 'periodic-update.lock');
   mkdirSync(lockDir, { recursive: true });
-  // No `pid` file — malformed lock from an old version or interrupted write.
+  // No `pid` file — orphan from an old version or interrupted write.
+  // We use AGENT_BRIDGE_PERIODIC_STALE_LOCK_SEC=0 to make ANY age old enough
+  // for reclaim — testing the orphan branch deterministically without
+  // sleep().
+
+  const fakeRepo = mkdtempSync(join(tmpdir(), 'periodic-lock-fakerepo-'));
+
+  try {
+    const env = {
+      ...process.env,
+      HOME: sandboxHome,
+      AGENT_BRIDGE_REPO: fakeRepo,
+      AGENT_BRIDGE_PERIODIC_STALE_LOCK_SEC: '0',
+    };
+    const res = spawnSync('/bin/bash', [BODY_SH], { env, encoding: 'utf8' });
+    assert.equal(res.status, 1);
+
+    const logContents = readFileSync(join(sandboxHome, '.agent-bridge', 'logs', 'periodic-update.log'), 'utf8');
+    assert.match(logContents, /stale lock: missing\/malformed pid file \(age \d+s\); reclaiming/);
+  } finally {
+    teardown(sandboxHome, fakeRepo);
+  }
+});
+
+test('agent-bridge-periodic-update.sh: pid-less lock that is FRESH is treated as contended', { skip: !hasBash }, () => {
+  // Race-window protection: when a peer mkdir's the lock but hasn't yet
+  // written the pid file, a second invocation must NOT reclaim it.
+  const sandboxHome = mkdtempSync(join(tmpdir(), 'periodic-lock-test-'));
+  const runDir = join(sandboxHome, '.agent-bridge', 'run');
+  const lockDir = join(runDir, 'periodic-update.lock');
+  mkdirSync(lockDir, { recursive: true });
+  // Default stale threshold is 1800s; the freshly-created dir is 0s old.
 
   const fakeRepo = mkdtempSync(join(tmpdir(), 'periodic-lock-fakerepo-'));
 
   try {
     const env = { ...process.env, HOME: sandboxHome, AGENT_BRIDGE_REPO: fakeRepo };
     const res = spawnSync('/bin/bash', [BODY_SH], { env, encoding: 'utf8' });
-    assert.equal(res.status, 1);
+    // Should be a graceful skip (rc=0), NOT exit 1 from repo guard.
+    assert.equal(res.status, 0, `expected graceful skip on contended pid-less lock, got rc=${res.status}: ${res.stderr}\n${res.stdout}`);
 
     const logContents = readFileSync(join(sandboxHome, '.agent-bridge', 'logs', 'periodic-update.log'), 'utf8');
-    assert.match(logContents, /stale lock: missing\/malformed pid file; reclaiming/);
+    assert.match(logContents, /already running \(lock (held by live previous invocation|contended)\)/);
+    // Did NOT proceed to repo guard.
+    assert.doesNotMatch(logContents, /ERROR: repo missing/);
+  } finally {
+    teardown(sandboxHome, fakeRepo);
+  }
+});
+
+test('agent-bridge-periodic-update.sh: live PID lock is NEVER reclaimed by age alone', { skip: !hasBash }, () => {
+  // Codex review 0e763a3 round 2: a long-running legitimate update (slow
+  // npm install) must not be evicted purely because the lock is old.
+  const sandboxHome = mkdtempSync(join(tmpdir(), 'periodic-lock-test-'));
+  const runDir = join(sandboxHome, '.agent-bridge', 'run');
+  const lockDir = join(runDir, 'periodic-update.lock');
+  mkdirSync(lockDir, { recursive: true });
+  writeFileSync(join(lockDir, 'pid'), String(process.pid) + '\n');
+
+  const fakeRepo = mkdtempSync(join(tmpdir(), 'periodic-lock-fakerepo-'));
+
+  try {
+    const env = {
+      ...process.env,
+      HOME: sandboxHome,
+      AGENT_BRIDGE_REPO: fakeRepo,
+      // Threshold=0 means "any age qualifies" — but live PID must STILL win.
+      AGENT_BRIDGE_PERIODIC_STALE_LOCK_SEC: '0',
+    };
+    const res = spawnSync('/bin/bash', [BODY_SH], { env, encoding: 'utf8' });
+    assert.equal(res.status, 0, `live PID must win over stale-age threshold, got rc=${res.status}: ${res.stdout}`);
+
+    const logContents = readFileSync(join(sandboxHome, '.agent-bridge', 'logs', 'periodic-update.log'), 'utf8');
+    // Skip reason logged.
+    assert.match(logContents, /already running \(lock (held by live previous invocation|contended)\)/);
+    // Did NOT reclaim, did NOT proceed.
+    assert.doesNotMatch(logContents, /reclaim/i);
+    assert.doesNotMatch(logContents, /ERROR: repo missing/);
   } finally {
     teardown(sandboxHome, fakeRepo);
   }

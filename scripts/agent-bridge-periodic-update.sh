@@ -117,7 +117,15 @@ LOCK_PID_FILE="$LOCK_DIR/pid"
 STALE_LOCK_AGE_SEC="${AGENT_BRIDGE_PERIODIC_STALE_LOCK_SEC:-1800}"  # 30min
 
 reclaim_stale_lock() {
-  # Returns 0 if lock was reclaimed (caller can proceed), 1 if held by live owner.
+  # Returns 0 if lock was reclaimed (caller can proceed) or absent, 1 if a
+  # live/recent owner holds it. Reclaim policy:
+  #   - PID file present + PID alive  -> CONTENDED (never reclaim a live owner;
+  #     a slow npm install / git fetch can legitimately exceed 30min).
+  #   - PID file present + PID dead   -> RECLAIM.
+  #   - PID file missing/malformed:
+  #       - Lock dir age < STALE_LOCK_AGE_SEC -> CONTENDED (race window: a
+  #         peer just created the dir and hasn't written the pid file yet).
+  #       - Lock dir age >= STALE_LOCK_AGE_SEC -> RECLAIM.
   if [[ ! -d "$LOCK_DIR" ]]; then
     return 0
   fi
@@ -127,28 +135,30 @@ reclaim_stale_lock() {
     existing_pid="$(cat "$LOCK_PID_FILE" 2>/dev/null | head -1 | tr -d '[:space:]')"
   fi
 
-  # PID still alive?
   if [[ -n "$existing_pid" ]] && [[ "$existing_pid" =~ ^[0-9]+$ ]]; then
     if kill -0 "$existing_pid" 2>/dev/null; then
-      # Live owner — but if the lock is older than STALE_LOCK_AGE_SEC, that
-      # implies a hung process; reclaim anyway with a warn.
-      now="$(date +%s)"
-      mtime="$(stat -f%m "$LOCK_DIR" 2>/dev/null || stat -c%Y "$LOCK_DIR" 2>/dev/null || printf '%s' "$now")"
-      lock_age=$(( now - mtime ))
-      if (( lock_age > STALE_LOCK_AGE_SEC )); then
-        echo "WARN: lock held by live pid=$existing_pid for ${lock_age}s (> ${STALE_LOCK_AGE_SEC}s); reclaiming"
-        emit warn "lock.reclaim_hung" "{\"pid\":$existing_pid,\"age_sec\":$lock_age}"
-        rm -rf "$LOCK_DIR" 2>/dev/null || true
-        return 0
-      fi
+      # Live owner — never reclaim purely on age. A long-running legitimate
+      # update (slow network, slow npm install) could trip an age-based
+      # heuristic and cause concurrent git/npm. Codex review 0e763a3 round 2.
       return 1
     fi
     echo "stale lock: pid=$existing_pid no longer alive; reclaiming"
     emit warn "lock.reclaim_dead_pid" "{\"pid\":$existing_pid}"
-  else
-    echo "stale lock: missing/malformed pid file; reclaiming"
-    emit warn "lock.reclaim_no_pid" '{}'
+    rm -rf "$LOCK_DIR" 2>/dev/null || true
+    return 0
   fi
+
+  # Pid-less lock: could be a race (peer just mkdir'd and hasn't written pid
+  # yet) OR an orphan from an old crash before pid write. Distinguish by age.
+  now="$(date +%s)"
+  mtime="$(stat -f%m "$LOCK_DIR" 2>/dev/null || stat -c%Y "$LOCK_DIR" 2>/dev/null || printf '%s' "$now")"
+  lock_age=$(( now - mtime ))
+  if (( lock_age < STALE_LOCK_AGE_SEC )); then
+    # Treat as contended — peer is mid-acquire, will write pid imminently.
+    return 1
+  fi
+  echo "stale lock: missing/malformed pid file (age ${lock_age}s); reclaiming"
+  emit warn "lock.reclaim_no_pid" "{\"age_sec\":$lock_age}"
   rm -rf "$LOCK_DIR" 2>/dev/null || true
   return 0
 }
