@@ -144,9 +144,17 @@ test('source-level wiring is present in shipped build', async () => {
     indexSrc.includes("event: 'orphan_suicide.skipped_init_parent'"),
     'orphan_suicide.skipped_init_parent log event must be wired',
   );
+  // The skip gate must use STARTUP_PPID (module-load snapshot), NOT the
+  // late parentPid capture inside main() — otherwise an MCP host that
+  // dies during async startup would set parentPid=1 by the time the
+  // gate runs and erroneously skip suicide on a true orphan.
   assert.ok(
-    /parentPid\s*===\s*1/.test(indexSrc),
-    'orphan-suicide must guard on parentPid === 1 to skip the init-parent-from-boot case',
+    /STARTUP_PPID\s*=\s*process\.ppid/.test(indexSrc),
+    'STARTUP_PPID must be captured at module load (top-level synchronous)',
+  );
+  assert.ok(
+    /STARTUP_PPID\s*===\s*1/.test(indexSrc),
+    'orphan-suicide skip gate must guard on STARTUP_PPID === 1, not the late parentPid',
   );
 });
 
@@ -218,6 +226,63 @@ test('case 2: orphaned child (ppid === 1) AFTER grace exits cleanly', { timeout:
     assert.ok(
       shutdownEvent && /orphan-suicide/.test(shutdownEvent.context?.reason ?? ''),
       `server.shutdown reason must include orphan-suicide — got: ${JSON.stringify(shutdownEvent?.context)}`,
+    );
+  } finally {
+    try { server.kill('SIGKILL'); } catch {}
+    await sleep(100);
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('case 5 (Codex P2 regression): parent dies during startup — late parentPid=1 must NOT mask true orphan', { timeout: 18_000 }, async () => {
+  // Codex P2 follow-up. If the MCP host dies during the multi-await main()
+  // startup window, `process.ppid` will already be 1 by the time main()
+  // captures `parentPid`. The skip gate must NOT use that late capture,
+  // because the process is genuinely orphaned. We use the module-load
+  // snapshot `STARTUP_PPID` (sampled before any await) which still
+  // reflects the real launch-time parent.
+  //
+  // We simulate this with a very-early deferred override (delay=5ms):
+  // ppid stays as the real test-runner pid only for the synchronous
+  // top-level capture of STARTUP_PPID, then flips to 1 well before
+  // main()'s async `parentPid = process.ppid` runs. The late parentPid
+  // observed in the orphan_suicide.detected event is therefore 1, but
+  // STARTUP_PPID is the original test-runner pid > 1 — so suicide MUST
+  // fire after the grace window.
+  const home = await mkdtemp(join(tmpdir(), 'agent-bridge-orphan-suicide-startup-die-'));
+  const preloadPath = await writePpidPreload(home, 'deferred', 5);
+  const server = startServer(
+    home,
+    {
+      AGENT_BRIDGE_ORPHAN_SUICIDE_INTERVAL_MS: '500',
+      AGENT_BRIDGE_ORPHAN_SUICIDE_GRACE_MS: '1000',
+    },
+    ['--import', pathToFileURL(preloadPath).href],
+  );
+  try {
+    const exited = await Promise.race([
+      new Promise((resolve) => server.once('exit', (code, signal) => resolve({ code, signal }))),
+      sleep(8_000).then(() => null),
+    ]);
+    assert.ok(exited !== null, 'true orphan must still exit even when late parentPid=1');
+    assert.equal(exited.code, 0, `clean exit code expected — got ${JSON.stringify(exited)}`);
+    const events = await readEvents(home);
+    // The skip path must NOT have been taken (would have logged
+    // orphan_suicide.skipped_init_parent and never armed the timer).
+    const skipped = events.filter((e) => e.event === 'orphan_suicide.skipped_init_parent');
+    assert.equal(
+      skipped.length,
+      0,
+      `init-parent skip must NOT fire when STARTUP_PPID > 1 — got: ${JSON.stringify(skipped.map((s) => s.context))}`,
+    );
+    const detected = events.filter((e) => e.event === 'orphan_suicide.detected');
+    assert.ok(detected.length >= 1, 'orphan_suicide.detected must fire on true orphan');
+    // STARTUP_PPID logged in the event must be > 1 (the genuine
+    // launch-time parent), proving the gate did not depend on the
+    // late `parentPid` capture which by this point is 1.
+    assert.ok(
+      typeof detected[0].context?.startupPpid === 'number' && detected[0].context.startupPpid > 1,
+      `startupPpid in detected event must be the real parent (>1) — got: ${JSON.stringify(detected[0].context)}`,
     );
   } finally {
     try { server.kill('SIGKILL'); } catch {}

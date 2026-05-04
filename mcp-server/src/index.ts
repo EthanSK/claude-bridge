@@ -93,6 +93,17 @@ import { logEvent } from './log.js';
 // stale-version peer-kill path).
 const VERSION = MCP_SERVER_VERSION;
 
+// 4.0.x — orphan-suicide skip-gate must use the EARLIEST possible parent
+// PID snapshot, not the one captured later in main() after multiple async
+// awaits. If the MCP host dies during startup the child can be reparented
+// before main() runs — and main()-time `process.ppid` would already be 1
+// in that case, which would erroneously activate the
+// init-parent-from-boot skip path and leave a true orphan immortal. By
+// snapshotting at module load (top-level synchronous code, runs before
+// any await), `STARTUP_PPID` reflects the genuine launch-time parent;
+// any later transition to 1 is real reparenting.
+const STARTUP_PPID = process.ppid;
+
 // 3.5.5 — Patch B (mirror of Telegram plugin server.ts:31-51): persistent
 // stderr tee. Claude Code can close diagnostic stderr between tool turns; once
 // that happens, anything we write to stderr disappears. Tee process.stderr to
@@ -1914,17 +1925,24 @@ async function main(): Promise<void> {
         msg: 'Orphan-suicide check disabled (env or watchdog disable)',
         context: { pid: process.pid, parentPid },
       });
-    } else if (parentPid === 1) {
+    } else if (STARTUP_PPID === 1) {
       // Edge case: we were started directly under launchd/init (LaunchAgent,
       // systemd unit, container PID 1, detached diagnostic run, etc.). In
       // that scenario `process.ppid` is 1 from boot — there is no
       // reparenting event to detect, and tripping suicide would kill a
       // healthy process. Skip the check entirely; parent-liveness is moot
       // when the parent IS init.
+      //
+      // Critically, this guard uses the MODULE-LOAD-TIME snapshot
+      // (STARTUP_PPID), NOT the late `parentPid` capture below. If the host
+      // had died during the multi-await main() startup work, the late
+      // capture would already be 1 and we'd skip suicide on a true orphan.
+      // STARTUP_PPID is sampled before any await, so it always reflects
+      // the genuine launch-time parent.
       logEvent({
         event: 'orphan_suicide.skipped_init_parent',
         msg: 'Orphan-suicide check skipped: original parent IS init/launchd (ppid=1 from start)',
-        context: { pid: process.pid, parentPid },
+        context: { pid: process.pid, startupPpid: STARTUP_PPID, latePpid: parentPid },
       });
     } else {
       const orphanSuicide: NodeJS.Timeout = setInterval(() => {
@@ -1940,7 +1958,8 @@ async function main(): Promise<void> {
           syncExitBreadcrumb('orphan_suicide.detected', {
             pid: process.pid,
             uptime_s: Math.floor(process.uptime()),
-            originalParentPid: parentPid,
+            startupPpid: STARTUP_PPID,
+            latePpid: parentPid,
           });
           logEvent({
             event: 'orphan_suicide.detected',
@@ -1949,7 +1968,8 @@ async function main(): Promise<void> {
             context: {
               pid: process.pid,
               ppid: 1,
-              originalParentPid: parentPid,
+              startupPpid: STARTUP_PPID,
+              latePpid: parentPid,
               uptime_s: Math.floor(process.uptime()),
               grace_ms: ORPHAN_SUICIDE_GRACE_MS,
               interval_ms: ORPHAN_SUICIDE_INTERVAL_MS,
