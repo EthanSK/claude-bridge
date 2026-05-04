@@ -14,6 +14,18 @@
 
 ---
 
+## Personal project caveat
+
+This is a personal project, developed and primarily tested against Ethan's own multi-machine setup (macOS Mac-Mini + MacBook Pro + Windows). It may not work out-of-the-box for other people's configurations — different OpenClaw personas, custom agent harnesses, alternate Telegram bot flows, or platform-specific paths can break things in subtle ways.
+
+If you hit issues, you should be up and running fairly quickly with light agent-assisted debugging:
+
+- Ask your local AI agent (Claude Code, OpenClaw, etc.) to debug the failure mode against your specific setup. The bridge writes a structured NDJSON log at `~/.agent-bridge/logs/agent-bridge.log`, and the event names are documented in [`docs/operations.md`](docs/operations.md).
+- Open an issue at <https://github.com/EthanSK/agent-bridge/issues> with the failure mode and your environment details.
+- PRs welcome — small fixes for cross-platform path handling, alternative install paths, or harness-specific quirks are appreciated.
+
+---
+
 ## Quick start
 
 Paste this into your Claude Code session on **each computer** you want to bridge:
