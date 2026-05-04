@@ -77,16 +77,29 @@ async function readEvents(home) {
   }
 }
 
-// Preload module that overrides `process.ppid` to return 1 BEFORE
-// build/index.js runs. We write it into the test home dir so each
-// test gets its own copy and cleanup is straightforward.
-async function writePpidPreload(home) {
+// Preload module that overrides `process.ppid` to 1.
+//
+// `mode === 'sync'`: override at module load time (BEFORE main() runs and
+// BEFORE parentPid is captured). Simulates the legitimate
+// init-parent-from-boot config (LaunchAgent / systemd / detached
+// diagnostic run) where parentPid is 1 from startup — suicide must skip.
+//
+// `mode === 'deferred'`: override after `delayMs` ms. Simulates true
+// reparenting: parentPid is captured as the real test-runner pid (>1)
+// and only LATER does process.ppid flip to 1. Suicide must fire after
+// the grace window.
+//
+// Default deferred delay: 300ms — comfortably after main()'s parentPid
+// capture but well before any sane test grace period.
+async function writePpidPreload(home, mode = 'deferred', delayMs = 300) {
   const preloadPath = join(home, 'ppid-preload.mjs');
-  await writeFile(
-    preloadPath,
-    'Object.defineProperty(process, "ppid", { get: () => 1, configurable: true });\n',
-    'utf8',
-  );
+  const body =
+    mode === 'sync'
+      ? 'Object.defineProperty(process, "ppid", { get: () => 1, configurable: true });\n'
+      : `setTimeout(() => {\n` +
+        `  Object.defineProperty(process, "ppid", { get: () => 1, configurable: true });\n` +
+        `}, ${delayMs});\n`;
+  await writeFile(preloadPath, body, 'utf8');
   return preloadPath;
 }
 
@@ -123,6 +136,17 @@ test('source-level wiring is present in shipped build', async () => {
   assert.ok(
     /orphanSuicide\s*[:.]?\s*[A-Za-z.]*unref\(\)/.test(indexSrc),
     'orphan-suicide interval must be unref()ed',
+  );
+  // Codex P2 — init-parent-from-boot skip: if parentPid===1 at startup
+  // (LaunchAgent / systemd / detached diagnostic run), suicide must
+  // short-circuit without arming the interval.
+  assert.ok(
+    indexSrc.includes("event: 'orphan_suicide.skipped_init_parent'"),
+    'orphan_suicide.skipped_init_parent log event must be wired',
+  );
+  assert.ok(
+    /parentPid\s*===\s*1/.test(indexSrc),
+    'orphan-suicide must guard on parentPid === 1 to skip the init-parent-from-boot case',
   );
 });
 
@@ -194,6 +218,53 @@ test('case 2: orphaned child (ppid === 1) AFTER grace exits cleanly', { timeout:
     assert.ok(
       shutdownEvent && /orphan-suicide/.test(shutdownEvent.context?.reason ?? ''),
       `server.shutdown reason must include orphan-suicide — got: ${JSON.stringify(shutdownEvent?.context)}`,
+    );
+  } finally {
+    try { server.kill('SIGKILL'); } catch {}
+    await sleep(100);
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('case 4: init-parent-from-boot (ppid === 1 at startup) skips suicide entirely', { timeout: 12_000 }, async () => {
+  // Codex P2 fix: when the MCP child is started directly under launchd,
+  // systemd, or a container with PID 1 as its parent (LaunchAgent wrapper,
+  // detached diagnostic run, etc.), `parentPid` is ALREADY 1 at startup
+  // and there is no reparenting event. Suicide must NOT fire — the parent
+  // IS init, that's the legitimate config. We simulate this with a
+  // preload that overrides ppid IMMEDIATELY (delay=0) so the parentPid
+  // capture itself sees 1.
+  const home = await mkdtemp(join(tmpdir(), 'agent-bridge-orphan-suicide-init-parent-'));
+  // 'sync' mode — override is set at module-load time (BEFORE main()
+  // captures parentPid). Exercises the init-parent-from-boot skip path.
+  const preloadPath = await writePpidPreload(home, 'sync');
+  const server = startServer(
+    home,
+    {
+      // Aggressive timing — if the suicide were to fire it would happen
+      // within ~600ms. We wait 3s and assert still alive.
+      AGENT_BRIDGE_ORPHAN_SUICIDE_INTERVAL_MS: '300',
+      AGENT_BRIDGE_ORPHAN_SUICIDE_GRACE_MS: '300',
+    },
+    ['--import', pathToFileURL(preloadPath).href],
+  );
+  try {
+    const exited = await Promise.race([
+      new Promise((resolve) => server.once('exit', (code, signal) => resolve({ code, signal }))),
+      sleep(3_000).then(() => null),
+    ]);
+    assert.equal(
+      exited,
+      null,
+      `init-parented child must remain alive — got ${JSON.stringify(exited)}`,
+    );
+    const events = await readEvents(home);
+    const detected = events.filter((e) => e.event === 'orphan_suicide.detected');
+    assert.equal(detected.length, 0, 'orphan_suicide.detected must NOT fire when ppid=1 from boot');
+    const skipped = events.filter((e) => e.event === 'orphan_suicide.skipped_init_parent');
+    assert.ok(
+      skipped.length >= 1,
+      `orphan_suicide.skipped_init_parent must be logged — got events: ${JSON.stringify(events.map((e) => e.event))}`,
     );
   } finally {
     try { server.kill('SIGKILL'); } catch {}

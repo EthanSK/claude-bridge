@@ -1914,6 +1914,18 @@ async function main(): Promise<void> {
         msg: 'Orphan-suicide check disabled (env or watchdog disable)',
         context: { pid: process.pid, parentPid },
       });
+    } else if (parentPid === 1) {
+      // Edge case: we were started directly under launchd/init (LaunchAgent,
+      // systemd unit, container PID 1, detached diagnostic run, etc.). In
+      // that scenario `process.ppid` is 1 from boot — there is no
+      // reparenting event to detect, and tripping suicide would kill a
+      // healthy process. Skip the check entirely; parent-liveness is moot
+      // when the parent IS init.
+      logEvent({
+        event: 'orphan_suicide.skipped_init_parent',
+        msg: 'Orphan-suicide check skipped: original parent IS init/launchd (ppid=1 from start)',
+        context: { pid: process.pid, parentPid },
+      });
     } else {
       const orphanSuicide: NodeJS.Timeout = setInterval(() => {
         if (shuttingDown) return;
@@ -1921,7 +1933,9 @@ async function main(): Promise<void> {
         // live parent reading our stdout; don't fire during startup.
         if (process.uptime() * 1000 < ORPHAN_SUICIDE_GRACE_MS) return;
         // ppid === 1 (launchd on macOS, init on Linux) means we've been
-        // reparented — original parent is gone. Definitive orphan signal.
+        // reparented since startup — original parent is gone. Definitive
+        // orphan signal. (The init-parent-from-boot case is handled above
+        // and short-circuits this branch entirely.)
         if (process.ppid === 1) {
           syncExitBreadcrumb('orphan_suicide.detected', {
             pid: process.pid,
