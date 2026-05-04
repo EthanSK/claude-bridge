@@ -43,6 +43,8 @@ In particular, you MUST read:
 
 - **[`docs/relay-to-user.md`](docs/relay-to-user.md)** — every inbound bridge message MUST be relayed to the user via the harness's configured user-facing channel (Telegram, Slack, Discord, native UI, etc.) as a brief 1-2 line summary. Reply via bridge first if needed, THEN relay to the user. Don't suppress routine internal coordination — relay it.
 
+- **[`docs/operations.md`](docs/operations.md)** — why disk-fresh agent-bridge code doesn't always equal runtime-fresh, the full inventory of workarounds for stale in-memory plugin code, and the OC↔CC mutual-restart dance for picking up new code on a host when both Claude Code and OpenClaw are stuck on old in-memory state. Read this before debugging "I rebuilt but nothing changed" or shipping a same-version rebuild.
+
 Other docs in `docs/` cover the auto-update lifecycle, channel-plugin migration history, lifecycle history, and known investigation reports — read them for full context, not just the summary above.
 
 ---
@@ -1331,7 +1333,9 @@ Registers `agent-bridge` as a first-class OpenClaw channel (same tier as Telegra
 
 > **Migrating from v1.3.0 (`openclaw-plugin/`)?** That extension plugin has been removed as of v2.0.0. Delete any `plugins.entries["agent-bridge"]` block from your config and point `plugins.load.paths` at the new `openclaw-channel/` directory. The gateway hot-reloads on config change.
 
-> 🚨 **`replyVia: "telegram"` is the right default for Telegram-backed OpenClaw personas.** If a single OpenClaw persona is reachable via both Telegram and agent-bridge and you want bridge-originated turns to land in the SAME Telegram thread the human already sees, set `replyVia: "telegram"` at the plugin level (or per-target). Without it, a `fromTarget`-tagged inbound bridge message defaults to the silent `agent-bridge` back-channel and creates a SECOND, hidden session keyed by `agent:main:agent-bridge:<account>:direct:<encoded-peer>` — replies SFTP back over agent-bridge instead of into the chat. The Telegram-visible session and the bridge-driven session diverge, and the user sees nothing on their phone. This is the bridge↔Telegram session split that surfaced 2026-04-30; the fix is config-only:
+> 🚨 **Reply routing in openclaw-channel v3.0+ is agent-driven.** The plugin no longer auto-fans-out replies across channels. Instead, every inbound bridge message is surfaced into the OC agent's primary session (Telegram by default, when wired) with a `[BRIDGE-CONTEXT]` block listing `from_target` and the suggested user-facing channels — and the agent decides which reply tools to call (`bridge_send_message` for the implicit bridge leg, `telegram_reply` / etc. for additional user-facing legs). This unifies OC's behavior with the Claude Code channel.
+>
+> Configure the user-facing channel hint per-target / plugin-wide / per-message:
 >
 > ```jsonc
 > // ~/.openclaw/openclaw.json
@@ -1340,23 +1344,25 @@ Registers `agent-bridge` as a first-class OpenClaw channel (same tier as Telegra
 >     "agent-bridge": {
 >       "enabled": true,
 >       "config": {
->         "replyVia": "telegram"
+>         "additionalReplyChannels": ["telegram"]
 >       }
 >     }
 >   }
 > }
 > ```
 >
-> Precedence (highest first): per-message `BridgeMessage.replyVia` → `targets.<name>.replyVia` → plugin-level `channels["agent-bridge"].config.replyVia` → sender-derived default. Valid values: `"telegram"` | `"agent-bridge"`. Unknown values fall back to `"telegram"` with a warn log. Use `"agent-bridge"` only if you explicitly want a silent peer-to-peer back-channel for that target. See [`openclaw-channel/README.md`](openclaw-channel/README.md) for the full session-keying model.
+> Default policy: telegram-bound targets → `["telegram"]`; headless targets → `[]`. Set `[]` (or the strings `"none"` / `"silent"` / `"off"`) for quiet mode. Set `"default"` at any level to fall through to the next precedence layer. See [`openclaw-channel/README.md`](openclaw-channel/README.md) "Reply routing in v3.0+" for the full model.
+>
+> 🪦 **Migrating from `replyVia` (≤ v2.4.x):** the field is no longer interpreted. The plugin emits a single deprecation warning listing every offending key and proceeds without crashing. Replace `replyVia` with `additionalReplyChannels` and delete the old field. One-liner: `jq 'del(.channels["agent-bridge"].config.replyVia) | (.channels["agent-bridge"].config.targets // {}) |= with_entries(.value |= del(.replyVia))' ~/.openclaw/openclaw.json | sponge ~/.openclaw/openclaw.json`. Restart OpenClaw afterwards.
 
-> 🛰️ **Relay receipts:** OpenClaw targets also send a short Telegram-visible receipt for every inbound bridge message before the agent turn runs. The first line is `[Agent Bridge relay] 🛰️`, followed by `from/fromTarget → target`, reply path, message id, and a compact preview. This is independent of `replyVia`: even silent back-channel turns can still give the user a glanceable “another harness messaged this OpenClaw” update. Disable with `channels["agent-bridge"].config.relayNotice = false` (or per-target `targets.<name>.relayNotice = false`).
+> 🛰️ **Relay receipts:** OpenClaw targets also send a short Telegram-visible receipt for every inbound bridge message before the agent turn runs. The first line is `[Agent Bridge relay] 🛰️`, followed by `from/fromTarget → target`, reply path, message id, and a compact preview. This is independent of `additionalReplyChannels`: even silent back-channel turns can still give the user a glanceable "another harness messaged this OpenClaw" update. Disable with `channels["agent-bridge"].config.relayNotice = false` (or per-target `targets.<name>.relayNotice = false`).
 
-**How OpenClaw push delivery works:**
+**How OpenClaw push delivery works (v3.0+ agent-driven model):**
 1. Peer's `bridge_send_message` writes a JSON file to `~/.agent-bridge/inbox/openclaw/<target>/` via SFTP over SSH
 2. The channel plugin's file watcher sees the new file
 3. The plugin best-effort sends the `[Agent Bridge relay] 🛰️` receipt to the target's configured chat unless `relayNotice` is disabled
-4. The plugin resolves the canonical session route via `runtime.channel.routing.resolveAgentRoute(...)`, builds a synthetic inbound ctxPayload with `Provider: "telegram"` + `OriginatingChannel: "telegram"` + `OriginatingTo: "telegram:<peerId>"`, and calls `dispatchInboundReplyWithBase` — a synchronous agent turn runs in the target session and the agent's reply is sent out through `runtime.channel.telegram.sendMessageTelegram(...)`, landing in the matching Telegram chat
-5. For cross-harness replies (peer is ALSO agent-bridge-aware), the plugin SFTP-delivers a reply `BridgeMessage` back to the sender's inbox via the native `agent-bridge` channel's outbound adapter
+4. The plugin resolves a primary session via `runtime.channel.routing.resolveAgentRoute(...)`, builds a synthetic inbound ctxPayload whose body is the original message wrapped in `<channel source="agent-bridge" ...>` followed by a `[BRIDGE-CONTEXT]` block (from_target, primary_user_channel, additional_user_channels), and calls `dispatchInboundReplyWithBase`. ONE agent turn runs in the resolved session.
+5. The agent's natural turn output flows through the primary session's outbound (Telegram chat by default). To reply over the bridge, the agent calls `bridge_send_message` with `target=<from_target>` — that's the implicit bridge leg. The plugin no longer auto-fans out; everything is tool-driven.
 
 ### Codex (OpenAI) (MCP server -- tools-only / manual fallback)
 
@@ -2246,7 +2252,7 @@ tailscale ip -4
 5. Check the target-specific inbox, e.g. `ls ~/.agent-bridge/inbox/claude-code/default/`, `ls ~/.agent-bridge/inbox/claude-code/<persona>/`, or `ls ~/.agent-bridge/inbox/openclaw/default/`. Also check `inbox/.pending-ack/<target>/` — messages staged here have been pushed to stdout but await alive-evidence.
 6. Check delivered archives: `ls ~/.agent-bridge/inbox/.archive/claude-code/default/` and `ls ~/.agent-bridge/archive/openclaw/`
 7. Check for quarantined messages: `find ~/.agent-bridge/inbox/.failed -maxdepth 3 -type f -name '*.json'` — look for `.failed/.exhausted/` (retry cap exceeded, channel presumed dead) and `.failed/_unrouted/` (target subdir routing failed).
-8. **OpenClaw "agent received message but Telegram chat saw nothing" → bridge↔Telegram session split.** A `fromTarget`-tagged bridge message defaults to the silent `agent-bridge` back-channel, creating a hidden session that replies via SFTP instead of into the Telegram chat. Set `channels["agent-bridge"].config.replyVia = "telegram"` in `~/.openclaw/openclaw.json`. See the OpenClaw section above for the precedence chain.
+8. **OpenClaw "agent received message but Telegram chat saw nothing" → check `additionalReplyChannels` (v3.0+).** With openclaw-channel v3.0+, the plugin injects the inbound bridge message into a primary session — Telegram (your phone) when `additionalReplyChannels` includes `"telegram"` AND the target has a Telegram peer_id wired up; otherwise the silent agent-bridge back-channel. Default policy already handles this for telegram-bound targets. If you DON'T see a Telegram echo, verify (a) `target.config.openclaw_channel === "telegram"`, (b) `target.config.peer_id` is set, (c) `additionalReplyChannels` is not overridden to `[]` / `"none"`. Migrating from `replyVia`? See the migration note in the OpenClaw section above.
 9. The watcher polls the inbox every 2 s — no external dependencies (fswatch/inotifywait removed in 3.4.3).
 
 ### `paired machine "..." not found` (label mismatch)
@@ -2272,6 +2278,10 @@ If the alias section is missing, add it and mirror the canonical entry fields. U
 1. Ensure Node.js >= 18 is installed: `node --version`
 2. Build the server: `cd mcp-server && npm install && npm run build`
 3. Check the log file: `~/.agent-bridge/logs/mcp-server.log`
+
+### "I rebuilt but the runtime didn't change"
+
+Disk-fresh ≠ runtime-fresh. Once an MCP child or OpenClaw gateway has loaded a plugin into memory, that code stays in process memory until the process exits. `/reload-plugins` reloads descriptors but does NOT respawn MCP children. See [`docs/operations.md`](docs/operations.md) for the full workaround inventory and the OC↔CC mutual-restart dance.
 
 ---
 
