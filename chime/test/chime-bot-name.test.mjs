@@ -79,15 +79,18 @@ test("resolveBotNameSync ignores stale cache entries", async () => {
   }
 });
 
-test("speechForChime builds correct strings", async () => {
+test("speechForChime returns just the name (no suffix)", async () => {
+  // Voice 6317 (2026-05-04): "don't you have to say sub agent complete?
+  // Just the name and the chime." Drop the "all complete" / "subagent
+  // complete" suffix entirely — let the chime audio carry the meaning.
   const botName = await import(`../bot-name.mjs?bn=${Date.now()}-speech`);
   assert.equal(
-    botName.speechForChime({ kind: "all_complete", bot_name: "Realclaude4bot", machine_fallback: "Mini" }),
-    "Realclaude4bot all complete",
+    botName.speechForChime({ kind: "all_complete", bot_name: "Claude Code 4", machine_fallback: "Mini" }),
+    "Claude Code 4",
   );
   assert.equal(
-    botName.speechForChime({ kind: "per_agent", bot_name: "Lemaciboi5bot", machine_fallback: "MBP" }),
-    "Lemaciboi5bot subagent complete",
+    botName.speechForChime({ kind: "per_agent", bot_name: "Claude Code 4", machine_fallback: "MBP" }),
+    "Claude Code 4",
   );
 });
 
@@ -95,11 +98,11 @@ test("speechForChime falls back to machine name when bot_name absent", async () 
   const botName = await import(`../bot-name.mjs?bn=${Date.now()}-fallback`);
   assert.equal(
     botName.speechForChime({ kind: "all_complete", bot_name: null, machine_fallback: "Mac mini" }),
-    "Mac mini all complete",
+    "Mac mini",
   );
   assert.equal(
     botName.speechForChime({ kind: "per_agent", bot_name: "", machine_fallback: "MacBookPro" }),
-    "MacBookPro subagent complete",
+    "MacBookPro",
   );
 });
 
@@ -119,18 +122,20 @@ test("shortenMachineNameForSpeech normalizes machine names", async () => {
   assert.equal(botName.shortenMachineNameForSpeech(null), "");
 });
 
-test("fetchBotUsernameFromTelegram returns username from getMe-like response", async () => {
+test("fetchBotUsernameFromTelegram returns first_name from getMe-like response", async () => {
+  // Voice 6317 (2026-05-04): use chat-display first_name (e.g. "Claude
+  // Code 4") instead of username ("Realclaude4bot").
   const botName = await import(`../bot-name.mjs?bn=${Date.now()}-fetch`);
   let calledUrl = null;
   const fakeFetch = async (url) => {
     calledUrl = url;
     return {
       ok: true,
-      json: async () => ({ ok: true, result: { id: 123, username: "TestBot" } }),
+      json: async () => ({ ok: true, result: { id: 123, first_name: "Claude Code 4", username: "Realclaude4bot" } }),
     };
   };
   const name = await botName.fetchBotUsernameFromTelegram("fake-token", { fetchImpl: fakeFetch });
-  assert.equal(name, "TestBot");
+  assert.equal(name, "Claude Code 4");
   assert.ok(calledUrl.includes("getMe"));
 });
 

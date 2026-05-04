@@ -29,7 +29,11 @@ export const BUILTIN_SOUNDS = [
 ];
 
 export const DEFAULT_CONFIG = {
-  enabled: true,
+  // Default OFF for new setups (Ethan voice 6328, 2026-05-04: "don't have
+  // it on by default for new setups of Agent Bridge. But if I want to enable
+  // it, it should be able to be enabled.") Flip to true via the chime CLI
+  // or by editing ~/.agent-bridge/chime/config.json.
+  enabled: false,
   scope: "fleet",
   playback: "local",
   perAgentSound: "Glass",
@@ -84,10 +88,11 @@ export const DEFAULT_CONFIG = {
   // Resolution detail lives in chime/bot-name.mjs.
   // ---------------------------------------------------------------------------
   sayBotName: true,
-  botNamesByMachine: {
-    "Ethans-Mac-mini": "Realclaude4bot",
-    "MacBookPro": "Lemaciboi5bot",
-  },
+  // Static map maps machine → chat-display name (Telegram first_name, e.g.
+  // "Real Claude 4"). Leave empty by default so each host auto-derives its
+  // own via getMe.first_name. Peer entries (MBP/Dell from Mini's POV) can
+  // be hand-populated here when auto-derive can't reach a peer's token.
+  botNamesByMachine: {},
 };
 
 export const EMPTY_STATE = {

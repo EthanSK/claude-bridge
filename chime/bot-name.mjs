@@ -105,8 +105,10 @@ export async function fetchBotUsernameFromTelegram(token, { fetchImpl = globalTh
     }
     if (!resp || !resp.ok) return null;
     const data = await resp.json();
-    if (data && data.ok === true && data.result && typeof data.result.username === "string") {
-      return data.result.username;
+    if (data && data.ok === true && data.result && typeof data.result.first_name === "string") {
+      // Use first_name (chat-display label like "Claude Code 4") instead of
+      // username ("Realclaude4bot"). Voice 6317 (2026-05-04).
+      return data.result.first_name;
     }
   } catch {}
   return null;
@@ -165,8 +167,10 @@ export async function refreshLocalBotNameCache({
 export function speechForChime({ kind, bot_name, machine_fallback }) {
   const name = (bot_name && bot_name.trim()) || (machine_fallback && machine_fallback.trim()) || "";
   if (!name) return null;
-  const suffix = kind === "all_complete" ? "all complete" : "subagent complete";
-  return `${name} ${suffix}`;
+  // Just speak the name — let the chime audio carry the per-agent vs
+  // all-complete meaning. Voice 6317 (2026-05-04): "don't you have to say
+  // sub agent complete? Just the name and the chime."
+  return name;
 }
 
 export function shortenMachineNameForSpeech(machine) {
