@@ -994,6 +994,7 @@ async function loadDispatchRuntime(log) {
     const { createRequire } = await import("node:module");
     const { dirname, resolve: resolvePath } = await import("node:path");
     const { existsSync, realpathSync } = await import("node:fs");
+    const { pathToFileURL } = await import("node:url");
 
     const hostCandidates = [];
     if (process.argv[1]) {
@@ -1024,7 +1025,15 @@ async function loadDispatchRuntime(log) {
             for (const sub of subpaths) {
               try {
                 const modPath = req.resolve(`openclaw/${sub}`);
-                const mod = await import(modPath);
+                // `req.resolve()` returns an absolute filesystem path. On
+                // Windows that path starts with a drive letter (e.g.
+                // `C:\Users\...\index.js`); Node's ESM `import()` interprets
+                // the leading `C:` as a URL scheme and rejects it with
+                // ERR_UNSUPPORTED_ESM_URL_SCHEME. Convert to a `file://` URL
+                // first — `pathToFileURL` is a no-op-ish on POSIX (still
+                // produces `file:///abs/path`) so the fix is cross-platform.
+                const modUrl = pathToFileURL(modPath).href;
+                const mod = await import(modUrl);
                 if (isValid(mod)) return mergeExports(mod);
                 errors.push(`resolved ${modPath}: missing dispatchInboundReplyWithBase`);
               } catch (err) {
