@@ -1,12 +1,8 @@
 # agent-bridge
 
-**Bridge running Claude Code and OpenClaw sessions across machines. Agent-to-agent push comms over SSH.**
+**Let your AI agents on different machines talk to each other.**
 
-> 🚨 **First diagnostic: make sure every machine is actually running the current Agent Bridge code.** A common cause of confusing failures is stale runtime code: the repo may have been pulled, but the installed `agent-bridge` CLI, `mcp-server/build/` bundle, Claude Code plugin process, OpenClaw channel plugin, or long-running agent session may still be on an older version. Before debugging deeper, pull the repo on both sides, rebuild/reinstall where needed, restart or resume the affected host/plugin, and verify the live version/commit from that machine.
->
-> ✅ **Tested end-to-end with Claude Code and OpenClaw.** They use different host models over the same SSH/file transport: Claude Code uses a unified MCP + experimental `claude/channel` plugin over stdio; OpenClaw uses the separate native `openclaw-channel/` plugin plus the MCP server, including cross-machine agent-driven bridge replies and optional user-facing relays. Codex CLI, Gemini CLI, Aider, and other MCP hosts remain scaffolded/manual-polling integrations until verified in their own harnesses.
->
-> ⚠️ **Breaking change in 3.0.0:** the `--claude`, `--codex`, and `--agent` flags on `agent-bridge run` have been removed. Agent-to-agent communication is channel-mode only (`bridge_send_message` → inbox drop → running remote agent's context). See [CHANGELOG.md](CHANGELOG.md) for details. The plain-shell `agent-bridge run <machine> "<cmd>"` is still supported for diagnostics.
+agent-bridge connects running Claude Code and OpenClaw sessions across your own computers using SSH and local inboxes. Send a task to the agent already sitting on another laptop, ask your always-on desktop to run a diagnostic, or let OpenClaw and Claude Code coordinate without copy-pasting between chats.
 
 [![Claude Code](https://img.shields.io/badge/Claude_Code-channel_plugin-blueviolet)](https://github.com/EthanSK/agent-bridge)
 
@@ -14,15 +10,19 @@
 
 ---
 
-## Setup caveat
+## Why use it?
 
-agent-bridge is meant to be usable by other people, but it sits on top of SSH, local agent plugins, and harness-specific channel behaviour, so first-time setup can still be environment-specific.
+- **Agent-to-agent messages** — push work to a live agent on another machine and get a reply in context.
+- **No cloud relay** — peer-to-peer over SSH; config, keys, inboxes, and logs live on your machines.
+- **Works across harnesses** — Claude Code and OpenClaw are tested end-to-end, with the same bridge tools shared through MCP.
+- **Remote diagnostics when needed** — run plain shell commands on a paired machine for status checks, logs, tests, and one-off troubleshooting.
+- **Explicit routing** — target Claude Code personas, OpenClaw accounts, or other named sessions directly instead of relying on fuzzy defaults.
 
-If something does not work first try:
+## What works today
 
-- Ask your local AI agent (Claude Code, OpenClaw, etc.) to inspect the setup and logs for your machine. The bridge writes structured NDJSON logs at `~/.agent-bridge/logs/agent-bridge.log`, and event names are documented in [`docs/operations.md`](docs/operations.md).
-- Open an issue at <https://github.com/EthanSK/agent-bridge/issues> with the failure mode and your environment details.
-- PRs are welcome — especially small fixes for cross-platform paths, alternate install locations, and harness-specific quirks.
+- **Claude Code:** tested end-to-end with a unified MCP/channel plugin.
+- **OpenClaw:** tested end-to-end with a native channel plugin plus the shared MCP tools.
+- **Other MCP hosts:** scaffolded for manual receive/polling flows; empirical reports and PRs are welcome.
 
 ---
 
@@ -45,19 +45,25 @@ Then photograph the pairing screen on one machine and send it to the Claude Code
 
 ---
 
-## First-time setup — read these docs before sending your first bridge message
+## Setup notes
 
-If you are an AI agent (Claude Code, OpenClaw, or any other harness) being onboarded onto a new machine, **read the full `README.md` AND every file under `docs/` before sending your first bridge message**. The docs contain canonical rules for routing and user-relay behavior that are easy to get wrong without context.
+agent-bridge is designed for people to use, but first-time setup still depends on SSH, local agent plugins, and the agent harness you run. If something does not work first try:
 
-In particular, you MUST read:
+- Ask your local AI agent (Claude Code, OpenClaw, etc.) to inspect the setup and logs for your machine. The bridge writes structured NDJSON logs at `~/.agent-bridge/logs/agent-bridge.log`, and event names are documented in [`docs/operations.md`](docs/operations.md).
+- Open an issue at <https://github.com/EthanSK/agent-bridge/issues> with the failure mode and your environment details.
+- PRs are welcome — especially small fixes for cross-platform paths, alternate install locations, and harness-specific quirks.
 
-- **[`docs/named-target-routing.md`](docs/named-target-routing.md)** — when the user names a specific target alias (a persona, a session, a per-account bot, etc.), match the alias literally. Do NOT silently default to `<harness>/default` when a specific alias was named. Voice transcripts often mis-hear short proper-noun aliases; re-read the source twice if a specific name is involved.
+---
 
-- **[`docs/relay-to-user.md`](docs/relay-to-user.md)** — every inbound bridge message MUST be relayed to the user via the harness's configured user-facing channel (Telegram, Slack, Discord, native UI, etc.) as a brief 1-3 sentence summary, with the running **agent-bridge version appended at the end** so the user can spot fleet-wide version drift. Reply via bridge first if needed, THEN relay to the user. Don't suppress routine internal coordination — relay it.
+## For agents setting this up
 
-- **[`docs/operations.md`](docs/operations.md)** — why disk-fresh agent-bridge code doesn't always equal runtime-fresh, the full inventory of workarounds for stale in-memory plugin code, and the OC↔CC mutual-restart dance for picking up new code on a host when both Claude Code and OpenClaw are stuck on old in-memory state. Read this before debugging "I rebuilt but nothing changed" or shipping a same-version rebuild.
+If you are an AI agent onboarding agent-bridge onto a new machine, read the setup docs before sending your first bridge message. The three most important docs are:
 
-Other docs in `docs/` cover the auto-update lifecycle, channel-plugin migration history, lifecycle history, and known investigation reports — read them for full context, not just the summary above.
+- **[`docs/named-target-routing.md`](docs/named-target-routing.md)** — when the user names a specific target alias, match that alias literally.
+- **[`docs/relay-to-user.md`](docs/relay-to-user.md)** — inbound bridge messages should be relayed to the user with a short summary and the running agent-bridge version.
+- **[`docs/operations.md`](docs/operations.md)** — stale runtime recovery, plugin reloads, and the practical checks for "I rebuilt but nothing changed."
+
+Other docs in `docs/` cover auto-update, channel-plugin history, lifecycle notes, and investigation reports.
 
 ---
 
