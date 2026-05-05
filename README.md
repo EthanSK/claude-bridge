@@ -14,15 +14,15 @@
 
 ---
 
-## Personal project caveat
+## Setup caveat
 
-This is a personal project, developed and primarily tested against Ethan's own multi-machine setup (macOS Mac-Mini + MacBook Pro + Windows). It may not work out-of-the-box for other people's configurations — different OpenClaw personas, custom agent harnesses, alternate Telegram bot flows, or platform-specific paths can break things in subtle ways.
+agent-bridge is meant to be usable by other people, but it sits on top of SSH, local agent plugins, and harness-specific channel behaviour, so first-time setup can still be environment-specific.
 
-If you hit issues, you should be up and running fairly quickly with light agent-assisted debugging:
+If something does not work first try:
 
-- Ask your local AI agent (Claude Code, OpenClaw, etc.) to debug the failure mode against your specific setup. The bridge writes a structured NDJSON log at `~/.agent-bridge/logs/agent-bridge.log`, and the event names are documented in [`docs/operations.md`](docs/operations.md).
+- Ask your local AI agent (Claude Code, OpenClaw, etc.) to inspect the setup and logs for your machine. The bridge writes structured NDJSON logs at `~/.agent-bridge/logs/agent-bridge.log`, and event names are documented in [`docs/operations.md`](docs/operations.md).
 - Open an issue at <https://github.com/EthanSK/agent-bridge/issues> with the failure mode and your environment details.
-- PRs welcome — small fixes for cross-platform path handling, alternative install paths, or harness-specific quirks are appreciated.
+- PRs are welcome — especially small fixes for cross-platform paths, alternate install locations, and harness-specific quirks.
 
 ---
 
