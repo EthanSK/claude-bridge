@@ -29,10 +29,13 @@ This enables SSH, generates an ED25519 key pair, and displays a pairing screen. 
 | `agent-bridge status [machine]` | Check if machine(s) are reachable |
 | `agent-bridge run <machine> "cmd"` | Run a PLAIN shell command on a paired machine (diagnostics only — no agent wrapping) |
 | `agent-bridge connect <machine>` | Open an interactive SSH session |
+| `agent-bridge relay-expand <id>` | Expand a compact OpenClaw relay notice by `expand id` |
 | `agent-bridge pair` | Pair with another machine (interactive or flags) |
 | `agent-bridge unpair <machine>` | Remove a pairing |
 
 > To communicate with the **running agent** on another machine, use the `bridge_send_message` MCP tool with an explicit `target` (for example `claude-code/default`, `claude-code/<persona>`, or `openclaw/default`). `agent-bridge run` does not spawn or invoke an agent. The `--claude` / `--codex` / `--agent` flags were removed in 3.0.0.
+>
+> OpenClaw `[Agent Bridge relay]` receipts use compact `expand id: NN` values instead of long message previews. If the user asks to expand one, run `agent-bridge relay-expand NN` on the machine that produced the notice and send the retrieved full content subject to normal privacy/channel rules.
 
 ## Pairing from a photo
 
