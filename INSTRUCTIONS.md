@@ -10,6 +10,7 @@ agent-bridge pair --name "X" --host IP --port 22 --user U --token T --pubkey "ss
 agent-bridge list                               # List paired machines
 agent-bridge status [machine]                   # Check reachability
 agent-bridge run <machine> "command"            # Run a PLAIN shell command remotely (diagnostics only)
+agent-bridge relay-expand <id>                  # Expand a compact OpenClaw relay notice by expand id
 agent-bridge connect <machine>                  # Open interactive SSH session
 agent-bridge unpair <machine>                   # Remove a pairing
 ```
@@ -68,6 +69,18 @@ Calls without `target` are rejected. Legacy flat-file messages that land at the 
 
 There is no fresh-spawn / `--print` equivalent. The old `agent-bridge run ... --claude` flag was removed in 3.0.0.
 
+## Compact relay expansion (4.1.0+ / openclaw-channel 3.1.0+)
+
+OpenClaw `[Agent Bridge relay] 🛰️` receipts deliberately stay compact: they show sender/target metadata, message id, and an `expand id: NN` rather than pasting the full bridge body into Telegram/user channels. The full inbound BridgeMessage is stored locally under `~/.agent-bridge/relay-expand/` with a bounded 00-99 rolling id map and 7-day TTL by default.
+
+When the user asks to “expand Agent Bridge relay message NN”, run this on the same machine that produced the receipt:
+
+```bash
+agent-bridge relay-expand NN
+```
+
+Then send the retrieved full content through the current user-facing channel, applying normal privacy/channel-safety rules. Use `agent-bridge relay-expand --json NN` only when you need raw metadata for tooling.
+
 ## Same-machine delivery (3.5.0+)
 
 `bridge_send_message` accepts the **local machine name** (or one of the reserved aliases `local`, `self`, `localhost`) as its `machine` parameter. When the target is local, the message JSON is written directly to `~/.agent-bridge/inbox/<target>/<id>.json` using the same atomic write pattern as the SSH path — no SSH hop, no loopback round-trip.
@@ -92,6 +105,7 @@ Design notes:
 - Config directory: `~/.agent-bridge/`
 - Config file: `~/.agent-bridge/config` (INI-style, one `[section]` per machine)
 - Keys: `~/.agent-bridge/keys/` (ED25519, mode 600)
+- Relay-expand store: `~/.agent-bridge/relay-expand/` — bounded local map from compact OpenClaw relay `expand id` values to the full recent BridgeMessage.
 - Inbox: `~/.agent-bridge/inbox/` — per-harness/per-target subdirs (3.4.0+; Claude Code personas in 4.0.0+):
   - `inbox/claude-code/default/` — watched by the default Claude Code persona
   - `inbox/claude-code/<persona>/` — watched by a named Claude Code persona
