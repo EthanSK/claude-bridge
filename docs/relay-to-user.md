@@ -39,6 +39,13 @@ OC channel-plugin emits this byte-identical for every inbound bridge message. CC
 
 **Summary blockquote on relays.** Every bridge-relay user-facing message ends with a `<blockquote><b>Summary:</b> 1-3 sentence summary</blockquote>` block — distilling the actionable ask + the action you took. Goes AFTER the structured `[Agent Bridge relay] 🛰️` field block (not inside it). The body's natural summary line + action line do NOT replace this — the Summary blockquote is its own colored block on Telegram, visually distinct from the body. Same shape as the regular per-message Summary rule the user follows for non-relay replies. Established 2026-05-09 (Ethan voice 2335: "The summary for Agent Bridge should be 1 to 3 sentences max, and in a Telegram block quote, similar to the summary for normal messages").
 
+**MANDATORY: send the completed scaffold via the harness's user-facing reply tool — do NOT just leave it in the conversation.** When the routing layer emits a structured scaffold into the inbound `<channel>` block (or you compose one yourself), your job is to **relay it to the user**. After filling in the Summary blockquote placeholder (and any other empty fields), you MUST send the completed scaffold as a fresh user-facing message via the harness's configured user-facing channel reply tool:
+- **Claude Code (Telegram channel)** — call the Telegram plugin's `reply` tool (`mcp__plugin_telegram_telegram__reply`) with the completed scaffold as the `text` argument and the active `chat_id`.
+- **OpenClaw** — call the equivalent user-facing channel reply tool (e.g. the OC Telegram channel reply tool, or whatever user-facing channel is bound to the running OC session).
+- **Any other harness** — call its user-facing reply tool (Slack post, Discord send, native UI emit, email send, etc.).
+
+The agent's role is to RELAY the scaffold to the user, not to acknowledge it in-conversation and stop. Acknowledgement-without-send means the user sees nothing; the scaffold sat in the agent's transcript only. Sending via the reply tool is the entire point of the relay rule. Established 2026-05-09 (Ethan voice 2348: "This also needs to say to relay it to the Telegram so the agent can do that").
+
 ## Why this matters
 
 Without this rule, cross-harness traffic is invisible to the user unless they open a session and read the channel block themselves. Bridge messages are an internal coordination layer; without an outward relay the user has no idea what their fleet is doing. The relay turns the bridge from a hidden side-channel into a glance-able activity feed.

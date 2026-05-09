@@ -115,6 +115,25 @@ bridge_send_message({
 })
 ```
 
+## Relay inbound bridge messages to the user — send via the harness's reply tool
+
+When a `<channel source="agent-bridge" ...>` block lands in this session, you MUST relay a brief 1-3 sentence summary to the user via the harness's configured user-facing channel (Telegram, Slack, Discord, native UI, etc.). The relay matches the canonical structured shape OC's openclaw-channel plugin emits programmatically (`openclaw-channel/src/relay-notice.js` → `formatRelayNotice`) so the user's chat looks identical across the fleet:
+
+- Header (literal): `[Agent Bridge relay] 🛰️` — NOT 📡, NOT a free-form prefix.
+- `agent-bridge: v<X.Y.Z>` — read from `[BRIDGE-CONTEXT]` block (OC) or `claude_code_channel_status` (CC). Never hardcode.
+- `received: <from-machine>[/<from-target>] → <target>`
+- `reply path: <comma-joined channels>` (typically `agent-bridge`, or `agent-bridge, telegram` when relaying to a user).
+- `message id: <msg-id>` (the `message_id` attribute on the inbound `<channel>` tag).
+- `expand id: NN` + `expand: agent-bridge relay-expand NN` (OC only — has the relay-expand store).
+- Blank line, then 1-3 sentence summary of the actionable ask, then one line of action (`Replied via bridge with X` / `No reply needed, FYI` / `Holding for user input`).
+- Trailing `<blockquote><b>Summary:</b> 1-3 sentence summary</blockquote>` block — same shape as the regular per-message Summary rule.
+
+**One relay = one user-facing message.** Don't bundle multiple bridge relays into one outbound. Don't bundle a relay with unrelated content. Each inbound `<channel>` block becomes exactly one outbound message containing only the structured `[Agent Bridge relay] 🛰️` block.
+
+**MANDATORY: send the completed scaffold via the harness's user-facing reply tool — do NOT just leave it in the conversation.** When the routing layer emits a structured scaffold into the inbound `<channel>` block (or you compose one yourself), your job is to **relay it to the user**. After filling in the Summary blockquote placeholder (and any other empty fields), you MUST send the completed scaffold as a fresh user-facing message via the harness's configured user-facing channel reply tool — for the OC Telegram channel that's the OC Telegram reply tool; for any other harness it's whatever user-facing reply tool is bound to the running session. The agent's role is to RELAY the scaffold to the user, not to acknowledge it in-conversation and stop. Acknowledgement-without-send means the user sees nothing on their phone; the scaffold only sat in the agent's transcript. Sending via the reply tool is the entire point of this rule. Established 2026-05-09 (Ethan voice 2348: "This also needs to say to relay it to the Telegram so the agent can do that").
+
+Canonical full-text reference: [`docs/relay-to-user.md`](../../docs/relay-to-user.md).
+
 ## OC persona routing
 
 When the user names an OpenClaw persona, route to the matching `target` LITERALLY — do not default to `openclaw/default` when a specific persona was named:
