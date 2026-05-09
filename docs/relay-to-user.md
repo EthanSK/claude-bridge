@@ -10,9 +10,28 @@ When a harness (Claude Code, OpenClaw, or any other paired agent) receives an in
 
 The 1-3 sentence band is intentional: 1 sentence is fine for trivial pings ("ack"), but a denser paragraph block is preferred when the inbound message has real context the user needs to follow (multi-step plans, decisions, errors, version-bump coordination). The previous spec was 1-2 lines; loosened to 1-3 sentences on 2026-05-04 (voice 2150) so the relay isn't artificially terse when the message warrants more.
 
-**Format example (Telegram-style, but adapt to your channel):**
+**Format — match the structured shape OC's openclaw-channel plugin emits programmatically (`openclaw-channel/src/relay-notice.js` → `formatRelayNotice`):**
 
-> 📡 Bridge from <sender-machine> (target=<routed-target>): <compact 1-3 sentence summary of the actionable ask>. Replied via bridge with <action>. _(agent-bridge v<X.Y.Z>)_
+```
+[Agent Bridge relay] 🛰️
+agent-bridge: v<X.Y.Z>
+received: <from-machine>[/<from-target>] → <target>
+reply path: <comma-joined channels>
+message id: <msg-id>
+expand id: <NN>           # OC-only, has relay-expand store
+expand: agent-bridge relay-expand <NN>   # OC-only
+
+<1-3 sentence summary of the actionable ask>
+<one line of action — "Replied via bridge with X" / "No reply needed, FYI" / "Holding for user input">
+```
+
+OC channel-plugin emits this byte-identical for every inbound bridge message. CC and other agent-driven harnesses MUST hand-compose the same shape so the user's chat list looks consistent across the fleet — the user navigates Telegram by glance, and divergent formats from different harnesses defeat that. CC and other harnesses without a `relay-expand` store omit the `expand id:` and `expand:` lines.
+
+**Header is literal `[Agent Bridge relay] 🛰️`** — NOT 📡, NOT a free-form `[BRIDGE]` prefix, NOT a custom emoji per harness. The satellite emoji ties the user-visible relay back to the OC implementation that's the source of truth.
+
+**Single-line legacy form** (still acceptable for harnesses with severe length constraints, e.g. SMS bridges; not recommended for Telegram or any chat-style channel):
+
+> 🛰️ Bridge from <sender-machine> (target=<routed-target>): <compact 1-3 sentence summary>. Replied via bridge with <action>. _(agent-bridge v<X.Y.Z>)_
 
 **Exception:** pure-noise heartbeats / liveness pings with no actionable content (e.g. `bridge_status` polls). Those can be silent.
 
@@ -48,7 +67,7 @@ If the message is purely informational and needs no bridge reply, skip step 2 an
 ## Format guidance
 
 - **Lead with whatever tag/header convention your harness uses** for user-facing messages (project tag, status emoji, etc.).
-- **Use a distinctive inline indicator** for bridge-relay messages so the user can scan-filter them. The radar emoji 📡 is a good default but pick whatever fits your channel.
+- **Use the satellite emoji 🛰️** as the inline indicator for bridge-relay messages — that's what OC's `formatRelayNotice` emits programmatically, and the fleet should match. Earlier guidance suggested 📡 (radar) was acceptable; that's now considered legacy. New harnesses + agent-driven relays should standardize on 🛰️.
 - **Sender + target are mandatory** in the summary line — the user needs to know which harness asked and which target it routed to.
 - **Summarize the actionable ask** in 1-3 sentences. Quote short identifiers or critical wording when useful, but do not paste long/full message bodies by default. Trivial pings stay 1 sentence; messages with real coordination context can use the full 3 sentences as a paragraph block (see voice 2150 — "improve the formatting maybe so it's one massive paragraph block").
 - **State your action** after the quote ("Replied via bridge with X" / "No reply needed, FYI" / "Holding for user input").

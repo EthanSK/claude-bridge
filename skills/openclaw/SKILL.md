@@ -13,6 +13,21 @@ metadata:
 
 You are an AI coding agent with agent-bridge installed. This machine is a **peer** in a bidirectional bridge -- it can both send commands to and receive commands from other paired machines.
 
+## Discovery first — consult config + bridge_list_machines BEFORE making claims
+
+Before answering ANY question about which machines are paired, which harnesses are running on which machine, or whether a specific target (e.g. `openclaw/default`, `claude-code/<persona>`) exists, you MUST first run `bridge_list_machines` and/or read `~/.agent-bridge/config`. Do NOT answer from memory.
+
+Specifically required for:
+- "Does <machine> have an OpenClaw / Claude Code session / a <persona> persona?"
+- "Is <machine> paired?" / "How many machines are paired?"
+- "Where should I route this message?" — re-check the registered targets before routing.
+- "Which target should I use to reply?" — read `from_target` off the inbound `<channel>` block, then verify it's a known target via list.
+- Any time the user names a target or a machine, before committing to an answer.
+
+The check is cheap (single MCP tool call) and the cost of guessing wrong is being told off and re-doing the work. Re-check at the start of every relevant turn — pairings can change mid-session via `agent-bridge pair`/`unpair`. If `bridge_list_machines` is not loaded, fall back to `cat ~/.agent-bridge/config` via shell. Both must agree before you answer.
+
+Established 2026-05-09 (cross-fleet rule — agents kept guessing wrong about which harnesses existed on which machines).
+
 ## When to activate
 
 Activate when the user says things like:

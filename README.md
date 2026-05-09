@@ -28,12 +28,14 @@ agent-bridge connects running Claude Code and OpenClaw sessions across your own 
 
 ## Quick start
 
-Paste this into your Claude Code session on **each computer** you want to bridge:
+Paste this into your **Claude Code or OpenClaw** session on **each computer** you want to bridge:
 
 ```
 Read the README at https://github.com/EthanSK/agent-bridge and follow the setup instructions
-for this computer. Install agent-bridge, run the setup command, and install the Claude Code
-plugin. Do everything automatically -- don't ask me questions.
+for this computer. Install agent-bridge, run the setup command, and install the appropriate
+channel plugin (Claude Code's `mcp-server/` plugin OR OpenClaw's `openclaw-channel/`,
+matching whichever harness you're running). Do everything automatically — don't ask me
+questions.
 ```
 
 **Prereqs (once per machine):**
@@ -41,7 +43,7 @@ plugin. Do everything automatically -- don't ask me questions.
 - **Linux:** `sudo systemctl enable --now sshd`
 - **Windows 10/11:** OpenSSH Server is an optional feature, not on by default. See the [Windows setup](#windows-setup) section below for the consolidated install + firewall + admin-key script.
 
-Then photograph the pairing screen on one machine and send it to the Claude Code session on the other. That's the pair step; the agents handle the rest.
+Then photograph the pairing screen on one machine and send it to the Claude Code or OpenClaw session on the other. That's the pair step; the agents handle the rest. Either harness can pair with either harness — Claude Code↔OpenClaw, OpenClaw↔OpenClaw, etc.
 
 ---
 
