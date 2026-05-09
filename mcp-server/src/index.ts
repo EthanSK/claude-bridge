@@ -97,6 +97,7 @@ import { registerTools } from './tools.js';
 import { startWatcher, stopWatcher, replayUndeliveredMessages, registerAliveSignals, subscribeToPromotion, recordHarnessAck, getChannelHealthSnapshot } from './watcher.js';
 import { logInfo, logError, logWarn } from './logger.js';
 import { logEvent } from './log.js';
+import { formatRelayScaffold } from './relay-notice.js';
 
 // 3.7.1 — version is sourced from config.ts (single source of truth shared
 // with watcher.ts so lease files carry our build version for Patch F's
@@ -1025,10 +1026,34 @@ async function main(): Promise<void> {
           },
         });
 
+        // [RELAY-SCAFFOLD 2026-05-09 — agent-bridge 4.2.0]
+        // Build the structural relay-notice scaffold via the shared formatter
+        // (`lib/relay-notice.js`, also used by openclaw-channel). The scaffold
+        // is prepended to the channel content inside `[RELAY-SCAFFOLD-START]`
+        // / `[RELAY-SCAFFOLD-END]` fences, with a `{{SUMMARY_PLACEHOLDER}}`
+        // sentinel where the agent fills in a 1-3 sentence Summary blockquote
+        // before forwarding to the user-facing channel (Telegram on CC).
+        // This replaces the previous "agent hand-composes the entire relay
+        // from prose guidance" pattern, which drifted from OC's programmatic
+        // shape over time. Canonical user-facing format: docs/relay-to-user.md.
+        const relayScaffold = formatRelayScaffold(
+          {
+            id: message.id,
+            from: message.from,
+            fromTarget: message.fromTarget,
+            target: message.target,
+          },
+          {
+            replyVia: message.fromTarget ? 'agent-bridge' : undefined,
+            agentBridgeVersion: VERSION,
+          },
+        );
+        const contentWithScaffold = `${relayScaffold}\n\n${message.content}`;
+
         return server.server.notification({
           method: 'notifications/claude/channel',
           params: {
-            content: message.content,
+            content: contentWithScaffold,
             meta: {
               from: message.from,
               to: message.to,
@@ -1048,6 +1073,13 @@ async function main(): Promise<void> {
               // fleet-wide version drift at a glance from the relay alone.
               // Canonical doc: docs/relay-to-user.md.
               agent_bridge_version: VERSION,
+              // [RELAY-SCAFFOLD-IN-META 2026-05-09]
+              // Same scaffold also exposed as a meta field so harnesses /
+              // tooling that prefer parsing meta over scanning content can
+              // lift it directly. The content-embedded copy remains the
+              // primary delivery path so the agent sees it inline with the
+              // bridge body.
+              relay_scaffold: relayScaffold,
             },
           },
         }).catch((err) => {

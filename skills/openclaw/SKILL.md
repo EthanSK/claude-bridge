@@ -117,9 +117,13 @@ bridge_send_message({
 
 ## Relay inbound bridge messages to the user — send via the harness's reply tool
 
-When a `<channel source="agent-bridge" ...>` block lands in this session, you MUST relay a brief 1-3 sentence summary to the user via the harness's configured user-facing channel (Telegram, Slack, Discord, native UI, etc.). The relay matches the canonical structured shape OC's openclaw-channel plugin emits programmatically (`openclaw-channel/src/relay-notice.js` → `formatRelayNotice`) so the user's chat looks identical across the fleet:
+When a `<channel source="agent-bridge" ...>` block lands in this session, you MUST relay a brief 1-3 sentence summary to the user via the harness's configured user-facing channel (Telegram, Slack, Discord, native UI, etc.).
 
-- Header (literal): `[Agent Bridge relay] 🛰️` — NOT 📡, NOT a free-form prefix.
+**As of openclaw-channel 3.2.0 / agent-bridge 4.2.0** the structural fields below are **emitted programmatically by the plugin** via the shared `lib/relay-notice.js` formatter (re-exported by `openclaw-channel/src/relay-notice.js`). On OC the channel plugin sends the completed receipt directly via the gateway bus to the configured Telegram chat — your structural responsibility is just to fill in the Summary blockquote when composing the user-facing reply (the plugin's gateway-side receipt arrives separately as a "this message landed" pre-notice).
+
+Format reference (kept here as a fallback for cases where the plugin-emitted receipt isn't available — older plugin version, custom harness, scaffold stripped by an intermediate layer):
+
+- Header (literal): `[Agent Bridge relay] 🛰️` — NOT 📡, NOT a free-form prefix. Hard-coded in the shared formatter.
 - `agent-bridge: v<X.Y.Z>` — read from `[BRIDGE-CONTEXT]` block (OC) or `claude_code_channel_status` (CC). Never hardcode.
 - `received: <from-machine>[/<from-target>] → <target>`
 - `reply path: <comma-joined channels>` (typically `agent-bridge`, or `agent-bridge, telegram` when relaying to a user).

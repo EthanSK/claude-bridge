@@ -10,7 +10,7 @@ When a harness (Claude Code, OpenClaw, or any other paired agent) receives an in
 
 The 1-3 sentence band is intentional: 1 sentence is fine for trivial pings ("ack"), but a denser paragraph block is preferred when the inbound message has real context the user needs to follow (multi-step plans, decisions, errors, version-bump coordination). The previous spec was 1-2 lines; loosened to 1-3 sentences on 2026-05-04 (voice 2150) so the relay isn't artificially terse when the message warrants more.
 
-**Format — match the structured shape OC's openclaw-channel plugin emits programmatically (`openclaw-channel/src/relay-notice.js` → `formatRelayNotice`):**
+**Format — emitted programmatically by both harnesses' channel plugins via the shared formatter at `lib/relay-notice.js` (`formatRelayNotice` / `formatRelayScaffold`).** OC's `openclaw-channel/src/relay-notice.js` and CC's `mcp-server/src/relay-notice.ts` are thin re-export shims around that single source of truth (agent-bridge 4.2.0 / openclaw-channel 3.2.0 onward). The agent's only job is to fill in the Summary blockquote — the structural fields below are produced for you:
 
 ```
 [Agent Bridge relay] 🛰️
@@ -25,9 +25,16 @@ expand: agent-bridge relay-expand <NN>   # OC-only
 <one line of action — "Replied via bridge with X" / "No reply needed, FYI" / "Holding for user input">
 ```
 
-OC channel-plugin emits this byte-identical for every inbound bridge message. CC and other agent-driven harnesses MUST hand-compose the same shape so the user's chat list looks consistent across the fleet — the user navigates Telegram by glance, and divergent formats from different harnesses defeat that. CC and other harnesses without a `relay-expand` store omit the `expand id:` and `expand:` lines.
+Both OC and CC channel plugins emit this byte-identical structural shape via the shared `lib/relay-notice.js` formatter — OC sends the completed receipt directly through its gateway bus, while CC delivers a `[RELAY-SCAFFOLD-START] ... [RELAY-SCAFFOLD-END]` fenced block prepended to the inbound `<channel source="agent-bridge">` content (also exposed as `meta.relay_scaffold`). The fenced block contains all structural fields plus a `{{SUMMARY_PLACEHOLDER}}` sentinel that the agent replaces with `<blockquote><b>Summary:</b> 1-3 sentences</blockquote>` before forwarding via the harness's user-facing reply tool. Third-party agent-driven harnesses without a channel plugin can hand-compose the same shape, but the canonical path is to import the shared formatter. CC and other harnesses without a `relay-expand` store omit the `expand id:` and `expand:` lines.
 
-**Header is literal `[Agent Bridge relay] 🛰️`** — NOT 📡, NOT a free-form `[BRIDGE]` prefix, NOT a custom emoji per harness. The satellite emoji ties the user-visible relay back to the OC implementation that's the source of truth.
+**Header is literal `[Agent Bridge relay] 🛰️`** — NOT 📡, NOT a free-form `[BRIDGE]` prefix, NOT a custom emoji per harness. The satellite emoji is hard-coded in the shared `formatRelayNotice` helper at `lib/relay-notice.js`, so every harness that imports it gets exactly the same header.
+
+**Where the structural scaffold comes from on each harness:**
+- **OpenClaw** — `openclaw-channel/` calls `formatRelayNotice(msg, opts)` at gateway-relay time and pushes the completed text (with its own `[BRIDGE-CONTEXT]` block separate from the receipt) through the configured Telegram channel.
+- **Claude Code** — `mcp-server/src/index.ts` calls `formatRelayScaffold(msg, opts)` at inbound-channel-push time and prepends the fenced scaffold to `message.content`. The agent reads it inside the `<channel source="agent-bridge">` block, fills in the `{{SUMMARY_PLACEHOLDER}}`, and sends via the Telegram plugin's `reply` tool.
+- **Other harnesses** — fall back to hand-composing the same shape (or, ideally, import the shared formatter directly).
+
+**Fallback if the scaffold isn't delivered.** If for some reason the structural scaffold is absent (older agent-bridge / openclaw-channel version, custom harness, channel-content stripped by some intermediate layer), the agent must hand-compose the same format from the inbound channel meta — the literal example block above remains the contract.
 
 **Single-line legacy form** (still acceptable for harnesses with severe length constraints, e.g. SMS bridges; not recommended for Telegram or any chat-style channel):
 

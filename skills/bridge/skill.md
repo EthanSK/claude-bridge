@@ -179,9 +179,13 @@ agent-bridge run MacBook-Pro "cd ~/Projects/myapp && nohup npm run dev > /tmp/de
 
 ## Relay inbound bridge messages to the user — send via the harness's reply tool
 
-When a `<channel source="agent-bridge" ...>` block lands in this session, you MUST relay a brief 1-3 sentence summary to the user via the harness's configured user-facing channel (Telegram, Slack, Discord, native UI, etc.). The relay matches the canonical structured shape OC's openclaw-channel plugin emits programmatically (`openclaw-channel/src/relay-notice.js` → `formatRelayNotice`) so the user's chat looks identical across the fleet:
+When a `<channel source="agent-bridge" ...>` block lands in this session, you MUST relay a brief 1-3 sentence summary to the user via the harness's configured user-facing channel (Telegram, Slack, Discord, native UI, etc.).
 
-- Header (literal): `[Agent Bridge relay] 🛰️` — NOT 📡, NOT a free-form prefix.
+**As of agent-bridge 4.2.0 / openclaw-channel 3.2.0** the structural fields below are **emitted programmatically by the plugin** via the shared `lib/relay-notice.js` formatter — both `mcp-server/src/relay-notice.ts` (CC) and `openclaw-channel/src/relay-notice.js` (OC) re-export it. **CC inbound channel pushes prepend a fenced `[RELAY-SCAFFOLD-START] ... [RELAY-SCAFFOLD-END]` block to the channel content** (also exposed as the `meta.relay_scaffold` attribute on the `<channel>` tag). Lift that scaffold verbatim, replace the `{{SUMMARY_PLACEHOLDER}}` line with a `<blockquote><b>Summary:</b> 1-3 sentences</blockquote>` block, and send it via the harness's reply tool. The agent's only structural responsibility is the Summary blockquote — every other field is pre-filled.
+
+Format reference (kept here as a fallback for cases where the scaffold isn't delivered — older plugin version, custom harness, scaffold stripped by an intermediate layer):
+
+- Header (literal): `[Agent Bridge relay] 🛰️` — NOT 📡, NOT a free-form prefix. Hard-coded in the shared formatter.
 - `agent-bridge: v<X.Y.Z>` — read from `[BRIDGE-CONTEXT]` block (OC), `claude_code_channel_status` (CC), or `agent_bridge_version` channel attribute. Never hardcode.
 - `received: <from-machine>[/<from-target>] → <target>`
 - `reply path: <comma-joined channels>` (typically `agent-bridge`, or `agent-bridge, telegram` when also relaying to a user).

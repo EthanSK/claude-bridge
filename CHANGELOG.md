@@ -1,5 +1,15 @@
 # Changelog
 
+## agent-bridge 4.2.0 / openclaw-channel 3.2.0 — 2026-05-09
+
+Ethan asked for the structural shape of bridge-relay user-facing notices to be deduplicated across harnesses. Before 4.2.0, OpenClaw's `openclaw-channel/` plugin emitted the structured `[Agent Bridge relay] 🛰️` block programmatically via `formatRelayNotice`, while Claude Code's `mcp-server/` channel plugin had no equivalent — every CC relay was hand-composed by the LLM from skill / doc prose, which drifted from OC's shape over time. This release extracts the shared formatter into a single source of truth and wires CC's channel push to embed an agent-fillable scaffold.
+
+- **Shared `lib/relay-notice.js` formatter.** Canonical implementation moved to `lib/relay-notice.js` (plain ESM JS, with a sibling `.d.ts` for TS consumers). The function builds the deterministic structural part — header, agent-bridge version, `received` line, reply path, message id, optional expand id — leaving the Summary blockquote agent-driven. Pass `summary` (string) to embed `<blockquote><b>Summary:</b> ...</blockquote>`, `summary: null` to embed a `{{SUMMARY_PLACEHOLDER}}` sentinel for the agent to fill, or omit `summary` for the legacy byte-identical OC output.
+- **Re-export shims.** `openclaw-channel/src/relay-notice.js` and `mcp-server/src/relay-notice.ts` are thin re-exports of the shared module — no code duplication, single source of truth. OC's existing gateway-side relay receipt path is unchanged in behaviour.
+- **Claude Code scaffold delivery.** `mcp-server/src/index.ts` now calls `formatRelayScaffold(message, opts)` on every inbound bridge push and prepends the result inside `[RELAY-SCAFFOLD-START] ... [RELAY-SCAFFOLD-END]` fences to `message.content`. The same scaffold is also exposed as `meta.relay_scaffold` on the channel notification. The agent lifts the scaffold verbatim, replaces the `{{SUMMARY_PLACEHOLDER}}` line with a 1–3 sentence Summary blockquote, and forwards via the Telegram `reply` tool (or whichever user-facing reply tool the harness exposes). No Telegram-direct-HTTP from the bridge plugin — delivery still routes through the agent + the Telegram MCP plugin.
+- **Skill + doc updates.** `skills/bridge/skill.md`, `skills/openclaw/SKILL.md`, and `docs/relay-to-user.md` now describe the structural fields as plugin-emitted and call out the agent's only structural responsibility (the Summary blockquote). The literal format example is retained as a fallback for harnesses without the shared formatter.
+- **Version bumps.** CLI / MCP server / Claude plugin metadata moved to `4.2.0`; OpenClaw channel package moved to `3.2.0`. No breaking changes to the BridgeMessage wire format or the existing `formatRelayNotice` call sites — `summary` is an additive optional opt.
+
 ## agent-bridge 4.1.0 / openclaw-channel 3.1.0 — 2026-05-08
 
 Ethan asked for Agent Bridge relay notices to stop pasting long/full message bodies into Telegram/user channels and instead show a short human-referenceable expand id. This release replaces the 4.0.1 large-preview behavior with compact receipts plus a local expansion path.
