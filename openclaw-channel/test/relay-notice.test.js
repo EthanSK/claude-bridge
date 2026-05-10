@@ -127,6 +127,22 @@ test("formatRelayNotice with summary string embeds a Summary blockquote", () => 
   );
 });
 
+test("formatRelayNotice uses source-authored relaySummary from the message", () => {
+  const text = formatRelayNotice(
+    {
+      id: "msg-1",
+      from: "MacBookPro",
+      target: "openclaw/default",
+      relaySummary: "MBP wants <OpenClaw> to post the receipt from code.",
+    },
+    {},
+  );
+  assert.match(
+    text,
+    /<blockquote><b>Summary:<\/b> MBP wants &lt;OpenClaw&gt; to post the receipt from code\.<\/blockquote>$/,
+  );
+});
+
 test("formatRelayScaffold wraps the notice in scaffold fences with placeholder", () => {
   const text = formatRelayScaffold(
     {
@@ -147,4 +163,22 @@ test("formatRelayScaffold wraps the notice in scaffold fences with placeholder",
   assert.match(text, /received: MacBookPro\/claude-code → MacMini\/claude-code\/default/);
   assert.match(text, /message id: msg-99/);
   assert.ok(text.includes(SUMMARY_PLACEHOLDER), "carries the summary placeholder for the agent to fill");
+});
+
+test("formatRelayScaffold embeds source-authored summary when provided", () => {
+  const text = formatRelayScaffold(
+    {
+      id: "msg-100",
+      from: "MacBookPro",
+      to: "MacMini",
+      fromTarget: "claude-code/default",
+      target: "openclaw/default",
+      relaySummary: "Source already summarized this bridge handoff.",
+    },
+    { destinationAgentBridgeVersion: "4.5.2", replyVia: "agent-bridge" },
+  );
+
+  assert.ok(text.startsWith(`${RELAY_SCAFFOLD_START}\n`));
+  assert.doesNotMatch(text, /\{\{SUMMARY_PLACEHOLDER\}\}/);
+  assert.match(text, /<blockquote><b>Summary:<\/b> Source already summarized this bridge handoff\.<\/blockquote>/);
 });

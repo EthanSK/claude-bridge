@@ -25,6 +25,9 @@
  * This unifies the OC behavior with the Claude Code channel: both surface
  * inbound messages to the running agent and let the agent's tool calls drive
  * the actual reply legs. No more harness-specific auto-routing logic.
+ * OC does still post the compact user-visible relay receipt from code when
+ * the source message carries `relaySummary`; that receipt is observability,
+ * not a substantive reply leg.
  *
  * Config (per-target OR plugin-level):
  *
@@ -304,23 +307,14 @@ export default {
             const account = target.config.account ?? target.name;
             const telegramPeerId = target.config.peer_id;
 
-            // [RELAY-SCAFFOLD-IN-OC 2026-05-09 — agent-bridge 4.3.0]
-            // Pre-4.3.0 the OC plugin emitted the user-facing relay receipt
-            // BEFORE the agent turn ran ("pre-flight" sendBridgeRelayNotice
-            // → gateway-direct sendText to Telegram). That path produced a
-            // structurally-correct receipt but had NO Summary blockquote
-            // (the gateway has no LLM in the loop, and the formatter's
-            // `summary` opt was never wired through), which Ethan flagged
-            // as inconsistent with CC's agent-fill-Summary behavior.
-            //
-            // We now mirror CC's pattern: build the scaffold here, populate
-            // the relay-expand store as before, then INJECT the scaffold
-            // into the agent's session via `formatInboundBody` so the agent
-            // fills `{{SUMMARY_PLACEHOLDER}}` and emits the completed relay
-            // through its natural turn output to the primary channel
-            // (Telegram when wired up). The agent now owns the entire
-            // user-facing relay emission — single source of Summary
-            // judgment across CC + OC.
+            // [RELAY-CODE-NOTICE-IN-OC 2026-05-10 — agent-bridge 4.5.2]
+            // Build relay metadata once: relay-expand store, reply-path
+            // display, source/destination runtime versions, and optional
+            // source-authored `relaySummary`. If the selected primary channel
+            // is user-facing, we now post the compact relay receipt from code
+            // before the agent turn runs. The Summary comes from the source
+            // message when available; otherwise the agent-scaffold fallback is
+            // kept so the destination agent can fill it.
             const relayCtx = prepareBridgeRelayContext({
               hostCfg,
               pluginCfg,
@@ -380,6 +374,16 @@ export default {
               );
               throw err;
             }
+
+            await sendBridgeRelayNotice({
+              primary,
+              msg,
+              target,
+              relayCtx,
+              runtime,
+              hostCfg,
+              log,
+            });
 
             await dispatchAgentTurn({
               primary,
@@ -972,6 +976,7 @@ function prepareBridgeRelayContext({ hostCfg, pluginCfg, target, msg, additional
       ?? msg?.agentBridgeVersion
       ?? msg?.agent_bridge_version,
   );
+  const relaySummary = cleanSummary(msg?.relaySummary ?? msg?.relay_summary);
   let expandRecord = null;
   try {
     expandRecord = storeRelayExpandMessage(msg, {
@@ -993,8 +998,66 @@ function prepareBridgeRelayContext({ hostCfg, pluginCfg, target, msg, additional
     sourceAgentBridgeVersion,
     destinationAgentBridgeVersion: agentBridgeVersion,
     agentBridgeVersion,
+    relaySummary,
     targetName: target.name,
+    codePosted: false,
   };
+}
+
+async function sendBridgeRelayNotice({ primary, msg, target, relayCtx, runtime, hostCfg, log }) {
+  if (!relayCtx) return false;
+  const targetChannel = primary?.targetChannel;
+  if (!targetChannel || targetChannel === AGENT_BRIDGE_CHANNEL_ID) return false;
+  const peerId = primary?.peerId;
+  if (!peerId) return false;
+
+  const deliverFn = resolveProviderDeliver({ runtime, targetChannel });
+  if (!deliverFn) {
+    log?.warn?.(
+      `bridge relay notice skipped for ${msg?.id}: no outbound delivery function for channel="${targetChannel}"`,
+    );
+    return false;
+  }
+
+  const sourceSummary = cleanSummary(relayCtx.relaySummary);
+  if (!sourceSummary) return false;
+
+  let text;
+  try {
+    text = formatRelayNotice(msg, {
+      targetName: relayCtx.targetName ?? target?.name,
+      replyVia: relayCtx.replyPathDisplay,
+      sourceAgentBridgeVersion: relayCtx.sourceAgentBridgeVersion,
+      destinationAgentBridgeVersion: relayCtx.destinationAgentBridgeVersion,
+      expandId: relayCtx.expandId ?? undefined,
+      summary: sourceSummary,
+    });
+  } catch (err) {
+    log?.warn?.(
+      `bridge relay notice formatting failed for ${msg?.id}: ${err?.message ?? err}`,
+    );
+    return false;
+  }
+
+  try {
+    await deliverFn({
+      to: String(peerId),
+      text,
+      cfg: hostCfg,
+      accountId: primary?.route?.accountId ?? null,
+      replyToId: null,
+    });
+    relayCtx.codePosted = true;
+    log?.info?.(
+      `bridge relay notice sent for ${msg?.id} channel=${targetChannel} target=${target?.name}`,
+    );
+    return true;
+  } catch (err) {
+    log?.warn?.(
+      `bridge relay notice send failed for ${msg?.id} channel=${targetChannel}: ${err?.message ?? err}`,
+    );
+    return false;
+  }
 }
 
 /**
@@ -1079,6 +1142,7 @@ export const __testing = {
   warnOnLegacyReplyVia,
   isLegacyBridgeOnlyReplyVia,
   pickPrimaryChannel,
+  sendBridgeRelayNotice,
   formatInboundBody,
   formatReplyPathForNotice,
   buildInboundContextPayloadInput,
@@ -1571,16 +1635,16 @@ function formatInboundBody({ msg, target, additionalReplyChannels, primaryChanne
       `agent_bridge_version: ${destinationAgentBridgeVersion}  # legacy alias for destination_agent_bridge_version`,
     );
   }
+  const relaySummary = cleanSummary(msg?.relaySummary ?? msg?.relay_summary);
+  if (relaySummary) {
+    ctxLines.push(`relay_summary: ${relaySummary}`);
+  }
 
-  // [RELAY-SCAFFOLD-IN-OC 2026-05-09 — agent-bridge 4.3.0]
-  // When the primary channel is a user-facing channel (Telegram, Slack,
-  // Discord, etc.), the agent's natural turn output flows there — that's
-  // the user-facing relay leg. Prepend a `formatRelayScaffold` block so
-  // the agent sees the deterministic structural fields and a
-  // `{{SUMMARY_PLACEHOLDER}}` it must replace with a 1-3 sentence Summary
-  // blockquote before sending. This mirrors CC's pattern (mcp-server
-  // prepends the same scaffold to the inbound `<channel>` push) and
-  // gives OC + CC a single source of Summary judgment in the agent.
+  // [RELAY-CODE-NOTICE-IN-OC 2026-05-10 — agent-bridge 4.5.2]
+  // The normal OC path now posts the user-facing relay notice from code
+  // before dispatching the destination-agent turn. If that code-post was
+  // skipped or failed, keep the scaffold fallback so the destination agent
+  // still has a structured receipt to fill and send naturally.
   //
   // When the primary channel is the silent agent-bridge back-channel,
   // there is no user reading the output — no scaffold injection needed.
@@ -1591,7 +1655,7 @@ function formatInboundBody({ msg, target, additionalReplyChannels, primaryChanne
     primaryChannel !== AGENT_BRIDGE_CHANNEL_ID;
 
   let scaffoldPrefix = "";
-  if (isUserFacingPrimary && relayCtx) {
+  if (isUserFacingPrimary && relayCtx && relayCtx.codePosted !== true) {
     try {
       const scaffold = formatRelayScaffold(msg, {
         targetName: relayCtx.targetName ?? target?.name,
@@ -1599,6 +1663,7 @@ function formatInboundBody({ msg, target, additionalReplyChannels, primaryChanne
         sourceAgentBridgeVersion: relayCtx.sourceAgentBridgeVersion,
         destinationAgentBridgeVersion: relayCtx.destinationAgentBridgeVersion,
         expandId: relayCtx.expandId ?? undefined,
+        summary: relaySummary || null,
       });
       scaffoldPrefix = `${scaffold}\n\n`;
     } catch {
@@ -1616,6 +1681,10 @@ function escapeAttr(v) {
 
 function cleanString(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function cleanSummary(value) {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
 }
 
 /**

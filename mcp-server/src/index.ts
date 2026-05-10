@@ -1044,6 +1044,7 @@ async function main(): Promise<void> {
             fromTarget: message.fromTarget,
             target: message.target,
             sourceAgentBridgeVersion: message.sourceAgentBridgeVersion,
+            relaySummary: message.relaySummary,
           },
           {
             replyVia: message.fromTarget ? 'agent-bridge' : undefined,
@@ -1074,6 +1075,9 @@ async function main(): Promise<void> {
               // for agents that have not learned the split fields yet.
               ...(message.sourceAgentBridgeVersion
                 ? { source_agent_bridge_version: message.sourceAgentBridgeVersion }
+                : {}),
+              ...(message.relaySummary
+                ? { relay_summary: message.relaySummary }
                 : {}),
               destination_agent_bridge_version: VERSION,
               agent_bridge_version: VERSION,

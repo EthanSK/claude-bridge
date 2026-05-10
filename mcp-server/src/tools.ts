@@ -44,6 +44,12 @@ import { logEvent } from './log.js';
 const LONG_POLL_DEFAULT_TIMEOUT_S = 30;
 const LONG_POLL_MAX_TIMEOUT_S = 60;
 
+function normalizeRelaySummary(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const cleaned = value.replace(/\s+/g, ' ').trim();
+  return cleaned || undefined;
+}
+
 /**
  * Register all agent-bridge tools on the MCP server.
  */
@@ -213,7 +219,7 @@ export function registerTools(server: McpServer): void {
         + '  • target="openclaw/default"            — example: an OpenClaw running Telegram session (the "default" account)\n'
         + '  • target="<harness>/<account-alias>"   — any other configured harness/per-account session, e.g. "openclaw/<your-account-alias>"\n\n'
         + 'Named-target routing rule: when the user names a specific target alias (a persona, a session, a per-account bot, etc.), match the alias LITERALLY — do NOT silently default to "<harness>/default" when a specific alias was named. Voice transcripts often mis-hear short proper-noun aliases; re-read the source twice if a specific name was mentioned. Canonical rule + rationale: docs/named-target-routing.md.\n\n'
-        + '**Recipient relay rule**: when YOU receive an inbound bridge message via the `<channel source="agent-bridge">` block, relay a compact 1-3 sentence summary (source machine + source target + destination machine + destination target + actionable ask) to the user via your harness\'s configured user-facing channel (Telegram, Slack, Discord, native UI, etc.) so the user has live visibility into cross-harness coordination without dumping the full bridge body. Use the generated relay scaffold when present: it labels both the source endpoint + source agent-bridge version and the destination endpoint + destination agent-bridge version. If composing a fallback manually, read `source_agent_bridge_version` / `destination_agent_bridge_version` from metadata or call `claude_code_channel_status` for the local destination version; do NOT hardcode. If the user asks to expand an OpenClaw `[Agent Bridge relay]` notice by its `expand id`, run `agent-bridge relay-expand <id>` on that same machine and send the retrieved full content subject to normal privacy/channel rules. Reply via bridge first if needed, THEN relay to the user. Don\'t suppress routine messages except pure-noise heartbeats / `bridge_status` polls. See AGENTS.md "Relay inbound bridge messages to the user" + canonical doc docs/relay-to-user.md.\n\n'
+        + '**Recipient relay rule**: when YOU receive an inbound bridge message via the `<channel source="agent-bridge">` block, relay a compact 1-3 sentence summary (source machine + source target + destination machine + destination target + actionable ask) to the user via your harness\'s configured user-facing channel (Telegram, Slack, Discord, native UI, etc.) so the user has live visibility into cross-harness coordination without dumping the full bridge body. When YOU send a bridge message and user-facing visibility matters, pass `relay_summary` / `relaySummary` with a source-authored 1-3 sentence summary; OpenClaw destinations can use that to code-post the visible relay receipt before the destination agent turn. Use the generated relay scaffold when present: it labels both the source endpoint + source agent-bridge version and the destination endpoint + destination agent-bridge version. If composing a fallback manually, read `source_agent_bridge_version` / `destination_agent_bridge_version` from metadata or call `claude_code_channel_status` for the local destination version; do NOT hardcode. If the user asks to expand an OpenClaw `[Agent Bridge relay]` notice by its `expand id`, run `agent-bridge relay-expand <id>` on that same machine and send the retrieved full content subject to normal privacy/channel rules. Reply via bridge first if needed, THEN relay to the user. Don\'t suppress routine messages except pure-noise heartbeats / `bridge_status` polls. See AGENTS.md "Relay inbound bridge messages to the user" + canonical doc docs/relay-to-user.md.\n\n'
         + 'The `machine` parameter accepts either a paired remote machine name OR the local machine name (or one of the aliases "local", "self", "localhost"). Same-machine delivery is first-class (3.5.0+): the message JSON is written directly to ~/.agent-bridge/inbox/<target>/<id>.json with no SSH hop. Useful for routing to embedded agents (e.g. target="<harness>/<account-alias>") on the same host.\n\n'
         + 'The target field is REQUIRED as of agent-bridge 3.4.0 — there is intentionally no default delivery routing. '
         + 'Messages without a target are rejected at the sender. Legacy messages that land at the root of the inbox on the receiver are moved to .failed/_unrouted/ on next startup. '
@@ -253,6 +259,16 @@ export function registerTools(server: McpServer): void {
           .string()
           .optional()
           .describe('Message ID this is a reply to'),
+        relay_summary: z
+          .string()
+          .optional()
+          .describe(
+            'Optional source-authored 1-3 sentence summary for the user-facing Agent Bridge relay receipt. Use this when the destination harness should code-post the visible relay notice without asking the destination agent to summarize.',
+          ),
+        relaySummary: z
+          .string()
+          .optional()
+          .describe('CamelCase alias for `relay_summary`. Same meaning.'),
         ttl: z
           .number()
           .optional()
@@ -261,7 +277,18 @@ export function registerTools(server: McpServer): void {
           ),
       },
     },
-    async ({ machine: machineName, message, target, from_target, fromTarget, one_way, reply_to, ttl }) => {
+    async ({
+      machine: machineName,
+      message,
+      target,
+      from_target,
+      fromTarget,
+      one_way,
+      reply_to,
+      relay_summary,
+      relaySummary,
+      ttl,
+    }) => {
       const localName = getLocalMachineName();
       const isLocal = isLocalMachineName(machineName);
       const machine = isLocal ? null : getMachine(machineName);
@@ -358,6 +385,8 @@ export function registerTools(server: McpServer): void {
         };
       }
 
+      const resolvedRelaySummary = normalizeRelaySummary(relay_summary ?? relaySummary);
+
       // Always record the human-readable destination name. For local sends we
       // use the real local machine name even when the caller passed an alias,
       // so receivers (and the outbox copy) see a stable identifier.
@@ -371,6 +400,8 @@ export function registerTools(server: McpServer): void {
         ttl ?? DEFAULT_TTL_SECONDS,
         target,
         resolvedFromTarget,
+        undefined,
+        resolvedRelaySummary,
       );
 
       try {

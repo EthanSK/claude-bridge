@@ -20,6 +20,7 @@ const {
   normalizeUserFacingChannel,
   warnOnLegacyReplyVia,
   pickPrimaryChannel,
+  sendBridgeRelayNotice,
   formatInboundBody,
   formatReplyPathForNotice,
   buildInboundContextPayloadInput,
@@ -866,4 +867,89 @@ test("formatInboundBody relay scaffold labels source and destination endpoint ve
   assert.match(body, /destination: MacMini\/openclaw\/default \(agent-bridge v4\.5\.0\)/);
   assert.match(body, /received: MacBookPro\/claude-code\/default → MacMini\/openclaw\/default/);
   assert.match(body, /expand id: 07/);
+});
+
+test("formatInboundBody skips relay scaffold after code-posted notice", () => {
+  const body = formatInboundBody({
+    msg: makeMsg({
+      fromTarget: "claude-code/default",
+      from: "MacBookPro",
+      to: "MacMini",
+      target: "openclaw/default",
+      content: "hi",
+      sourceAgentBridgeVersion: "4.5.1",
+      relaySummary: "Source supplied the visible relay summary.",
+    }),
+    target: makeTarget(),
+    additionalReplyChannels: ["telegram"],
+    primaryChannel: "telegram",
+    relayCtx: {
+      targetName: "default",
+      replyPathDisplay: ["agent-bridge", "telegram"],
+      sourceAgentBridgeVersion: "4.5.1",
+      destinationAgentBridgeVersion: "4.5.2",
+      expandId: "08",
+      relaySummary: "Source supplied the visible relay summary.",
+      codePosted: true,
+    },
+  });
+
+  assert.doesNotMatch(body, /\[RELAY-SCAFFOLD-START\]/);
+  assert.match(body, /relay_summary: Source supplied the visible relay summary\./);
+});
+
+test("sendBridgeRelayNotice posts source-summary relay receipt from code", async () => {
+  const sent = [];
+  const runtime = {
+    channel: {
+      outbound: {
+        loadAdapter: async (channel) => ({
+          async sendText(args) {
+            sent.push({ channel, ...args });
+          },
+        }),
+      },
+    },
+  };
+  const relayCtx = {
+    targetName: "default",
+    replyPathDisplay: ["agent-bridge", "telegram"],
+    sourceAgentBridgeVersion: "4.5.1",
+    destinationAgentBridgeVersion: "4.5.2",
+    expandId: "09",
+    relaySummary: "Source says this should be visible immediately.",
+    codePosted: false,
+  };
+
+  const ok = await sendBridgeRelayNotice({
+    primary: {
+      targetChannel: "telegram",
+      peerId: "6164541473",
+      route: { accountId: "default" },
+    },
+    msg: makeMsg({
+      id: "msg-9",
+      fromTarget: "claude-code/default",
+      to: "MacMini",
+      target: "openclaw/default",
+      sourceAgentBridgeVersion: "4.5.1",
+      relaySummary: "Source says this should be visible immediately.",
+    }),
+    target: makeTarget(),
+    relayCtx,
+    runtime,
+    hostCfg: { channels: {} },
+    log: silentLog,
+  });
+
+  assert.equal(ok, true);
+  assert.equal(relayCtx.codePosted, true);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].channel, "telegram");
+  assert.equal(sent[0].to, "6164541473");
+  assert.equal(sent[0].accountId, "default");
+  assert.match(sent[0].text, /\[Agent Bridge relay\] 🛰️/);
+  assert.match(sent[0].text, /source: MacBookPro\/claude-code\/default \(agent-bridge v4\.5\.1\)/);
+  assert.match(sent[0].text, /destination: MacMini\/openclaw\/default \(agent-bridge v4\.5\.2\)/);
+  assert.match(sent[0].text, /<blockquote><b>Summary:<\/b> Source says this should be visible immediately\.<\/blockquote>/);
 });

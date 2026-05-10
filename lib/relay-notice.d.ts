@@ -16,6 +16,10 @@ export interface RelayNoticeMessage {
   /** Back-compat sender-side aliases accepted from custom/older peers. */
   agentBridgeVersion?: string | null;
   agent_bridge_version?: string | null;
+  /** Optional source-authored relay summary. */
+  relaySummary?: string | null;
+  /** Snake-case alias accepted from custom harnesses. */
+  relay_summary?: string | null;
 }
 
 export interface RelayNoticeOpts {
@@ -37,7 +41,7 @@ export interface RelayNoticeOpts {
    * 1-3 sentence Summary string.
    * - non-empty string: embedded as `<blockquote><b>Summary:</b> ...</blockquote>`.
    * - null: a `{{SUMMARY_PLACEHOLDER}}` sentinel is appended.
-   * - undefined: omitted (legacy OC behaviour, byte-identical pre-4.2.0).
+   * - undefined: msg.relaySummary is used when present, otherwise omitted.
    */
   summary?: string | null;
 }
@@ -63,13 +67,12 @@ export function formatRelayNotice(
 
 /**
  * Wraps `formatRelayNotice` output with `[RELAY-SCAFFOLD-START]` /
- * `[RELAY-SCAFFOLD-END]` fences and a `{{SUMMARY_PLACEHOLDER}}` sentinel.
- * Used by the CC channel plugin to embed an agent-fillable scaffold in
- * each inbound `<channel source="agent-bridge">` push.
+ * `[RELAY-SCAFFOLD-END]` fences. Uses msg.relaySummary / opts.summary when
+ * present; otherwise emits a `{{SUMMARY_PLACEHOLDER}}` sentinel.
  */
 export function formatRelayScaffold(
   msg: RelayNoticeMessage | null | undefined,
-  opts?: Omit<RelayNoticeOpts, 'summary'>,
+  opts?: RelayNoticeOpts,
 ): string;
 
 export const __testing: {

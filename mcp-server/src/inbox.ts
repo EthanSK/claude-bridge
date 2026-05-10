@@ -97,6 +97,12 @@ export interface BridgeMessage {
    * versions separately during rolling upgrades. Older peers omit it.
    */
   sourceAgentBridgeVersion?: string;
+  /**
+   * Optional source-authored user-facing relay summary. When present,
+   * receiving harnesses can post the Agent Bridge relay receipt from code
+   * without asking the destination agent to synthesize a summary.
+   */
+  relaySummary?: string;
 }
 
 export interface InboxStats {
@@ -645,6 +651,7 @@ export function createMessage(
   target?: string,
   fromTarget?: string,
   sourceAgentBridgeVersion: string = MCP_SERVER_VERSION,
+  relaySummary?: string,
 ): BridgeMessage {
   const msg: BridgeMessage = {
     id: `msg-${randomUUID()}`,
@@ -659,7 +666,13 @@ export function createMessage(
   if (target) msg.target = target;
   if (fromTarget) msg.fromTarget = fromTarget;
   if (sourceAgentBridgeVersion) msg.sourceAgentBridgeVersion = sourceAgentBridgeVersion;
+  const cleanedRelaySummary = cleanRelaySummary(relaySummary);
+  if (cleanedRelaySummary) msg.relaySummary = cleanedRelaySummary;
   return msg;
+}
+
+function cleanRelaySummary(value: unknown): string {
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
 }
 
 /**

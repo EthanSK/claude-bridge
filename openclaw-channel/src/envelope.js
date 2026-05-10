@@ -14,6 +14,7 @@
  *   target?: "claude-code",              // where the RECEIVER should deliver this
  *   fromTarget?: "openclaw/clawdiboi2",  // where the SENDER wants replies routed
  *   sourceAgentBridgeVersion?: "4.5.0",  // sender-side Agent Bridge runtime
+ *   relaySummary?: string,               // optional source-authored relay summary
  *   replyVia?: "telegram" | "agent-bridge" // per-message override for how the
  *                                          // openclaw target should route its
  *                                          // reply (v2.3.0+). Ignored by the
@@ -87,6 +88,10 @@ export function parseBridgeMessage(raw) {
  * `sourceAgentBridgeVersion` is populated by current senders so receivers can
  * render source and destination versions separately in relay notices. Older
  * peers omit it and receivers display the source version as unknown.
+ *
+ * `relaySummary` is optional source-authored text for the user-facing relay
+ * receipt. Receivers can use it to post a complete notice from code before the
+ * destination agent turn runs.
  */
 export function buildReply({
   fromMachine,
@@ -97,6 +102,7 @@ export function buildReply({
   incoming,
   ownTarget,
   sourceAgentBridgeVersion,
+  relaySummary,
 }) {
   const resolvedTarget = target ?? incoming?.fromTarget;
   /** @type {Record<string, unknown>} */
@@ -119,5 +125,13 @@ export function buildReply({
   if (typeof sourceAgentBridgeVersion === "string" && sourceAgentBridgeVersion) {
     reply.sourceAgentBridgeVersion = sourceAgentBridgeVersion;
   }
+  const cleanedRelaySummary = cleanRelaySummary(relaySummary);
+  if (cleanedRelaySummary) {
+    reply.relaySummary = cleanedRelaySummary;
+  }
   return reply;
+}
+
+function cleanRelaySummary(value) {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
 }

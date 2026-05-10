@@ -88,7 +88,7 @@ test('sendLocalMessage with legacy claude-code target lands at flat inbox/claude
   assert.equal(parsed.id, msg.id);
   assert.equal(parsed.target, 'claude-code', 'legacy `claude-code` target preserved on the wire');
   assert.equal(parsed.fromTarget, 'claude-code', 'legacy fromTarget preserved on the wire');
-  assert.equal(parsed.sourceAgentBridgeVersion, '4.5.1', 'sender-side Agent Bridge version stamped on the wire');
+  assert.equal(parsed.sourceAgentBridgeVersion, '4.5.2', 'sender-side Agent Bridge version stamped on the wire');
   assert.equal(parsed.content, 'hello local world');
   assert.equal(parsed.from, 'TestMachine');
   assert.equal(parsed.to, 'TestMachine');
@@ -107,6 +107,30 @@ test('sendLocalMessage with legacy claude-code target lands at flat inbox/claude
   const outboxParsed = JSON.parse(outboxRaw);
   assert.equal(outboxParsed.id, msg.id);
   assert.equal(outboxParsed.target, 'claude-code', 'outbox copy mirrors the wire target');
+});
+
+test('sendLocalMessage preserves source-authored relaySummary on the wire', () => {
+  const msg = inbox.createMessage(
+    'TestMachine',
+    'TestMachine',
+    'message',
+    'please check the bridge receipt',
+    null,
+    60,
+    'openclaw/default',
+    'claude-code/default',
+    undefined,
+    '  Source wants OpenClaw to code-post this receipt.  ',
+  );
+
+  inbox.sendLocalMessage(msg);
+
+  const expectedPath = join(sandbox, '.agent-bridge', 'inbox', 'openclaw', 'default', `${msg.id}.json`);
+  const raw = readFileSync(expectedPath, 'utf8');
+  const parsed = JSON.parse(raw);
+
+  assert.equal(parsed.sourceAgentBridgeVersion, '4.5.2', 'default sender version still stamped');
+  assert.equal(parsed.relaySummary, 'Source wants OpenClaw to code-post this receipt.');
 });
 
 test('sendLocalMessage with explicit claude-code/foo target writes to claude-code/foo/ (no rewrite for already-scoped target)', () => {
