@@ -6,7 +6,7 @@ When a harness (Claude Code, OpenClaw, or any other paired agent) receives an in
 
 ## The rule
 
-**Relay every inbound bridge message to the user via your harness's configured user-facing channel** as a brief 1-3 sentence summary covering **sender machine + target + the actionable ask**, with the running **agent-bridge version** appended at the end so the user can see at a glance which build produced the message. Reply via bridge first if a response is needed; THEN summarize on the user-facing channel. Don't paste the whole body unless the user explicitly asks to expand it. Don't suppress the relay just because the message looks like routine internal coordination — the user generally wants to see all of it.
+**Relay every inbound bridge message to the user via your harness's configured user-facing channel** as a brief 1-3 sentence summary covering **sender machine + source target + destination machine + destination target + the actionable ask**, with **both source-side and destination-side agent-bridge versions** shown when available so the user can spot fleet-wide drift at a glance. Reply via bridge first if a response is needed; THEN summarize on the user-facing channel. Don't paste the whole body unless the user explicitly asks to expand it. Don't suppress the relay just because the message looks like routine internal coordination — the user generally wants to see all of it.
 
 The 1-3 sentence band is intentional: 1 sentence is fine for trivial pings ("ack"), but a denser paragraph block is preferred when the inbound message has real context the user needs to follow (multi-step plans, decisions, errors, version-bump coordination). The previous spec was 1-2 lines; loosened to 1-3 sentences on 2026-05-04 (voice 2150) so the relay isn't artificially terse when the message warrants more.
 
@@ -14,8 +14,9 @@ The 1-3 sentence band is intentional: 1 sentence is fine for trivial pings ("ack
 
 ```
 [Agent Bridge relay] 🛰️
-agent-bridge: v<X.Y.Z>
-received: <from-machine>[/<from-target>] → <target>
+source: <from-machine>[/<from-target>] (agent-bridge v<X.Y.Z>|unknown)
+destination: <to-machine>/<target> (agent-bridge v<A.B.C>|unknown)
+received: <from-machine>[/<from-target>] → <to-machine>/<target>
 reply path: <comma-joined channels>
 message id: <msg-id>
 expand id: <NN>           # OC-only, has relay-expand store
@@ -38,7 +39,7 @@ Both OC and CC channel plugins emit this byte-identical structural shape via the
 
 **Single-line legacy form** (still acceptable for harnesses with severe length constraints, e.g. SMS bridges; not recommended for Telegram or any chat-style channel):
 
-> 🛰️ Bridge from <sender-machine> (target=<routed-target>): <compact 1-3 sentence summary>. Replied via bridge with <action>. _(agent-bridge v<X.Y.Z>)_
+> 🛰️ Bridge from <sender-machine>/<source-target> (source v<X.Y.Z|unknown>) to <destination-machine>/<destination-target> (destination v<A.B.C|unknown>): <compact 1-3 sentence summary>. Replied via bridge with <action>.
 
 **Exception:** pure-noise heartbeats / liveness pings with no actionable content (e.g. `bridge_status` polls). Those can be silent.
 
@@ -86,13 +87,13 @@ If the message is purely informational and needs no bridge reply, skip step 2 an
 
 - **Lead with whatever tag/header convention your harness uses** for user-facing messages (project tag, status emoji, etc.).
 - **Use the satellite emoji 🛰️** as the inline indicator for bridge-relay messages — that's what OC's `formatRelayNotice` emits programmatically, and the fleet should match. Earlier guidance suggested 📡 (radar) was acceptable; that's now considered legacy. New harnesses + agent-driven relays should standardize on 🛰️.
-- **Sender + target are mandatory** in the summary line — the user needs to know which harness asked and which target it routed to.
+- **Sender/source target + destination machine/target are mandatory** in the summary line — the user needs to know which harness asked, which source persona/account it came from, and which destination persona/account received it.
 - **Summarize the actionable ask** in 1-3 sentences. Quote short identifiers or critical wording when useful, but do not paste long/full message bodies by default. Trivial pings stay 1 sentence; messages with real coordination context can use the full 3 sentences as a paragraph block (see voice 2150 — "improve the formatting maybe so it's one massive paragraph block").
 - **State your action** after the quote ("Replied via bridge with X" / "No reply needed, FYI" / "Holding for user input").
-- **Append the agent-bridge version** at the end of the relay, e.g. `_(agent-bridge v3.14.9)_`. Read the version from:
-  - **Claude Code** — the `agent_bridge_version` attribute on the inbound `<channel>` block (4.0.0+ inlines it on every push), or fall back to `claude_code_channel_status` (returns the same `version` field).
-  - **OpenClaw** — the `agent_bridge_version` line inside the `[BRIDGE-CONTEXT]` block.
-  Do NOT hardcode the version — both surfaces emit the running build number, so a stale hardcoded literal would lie about fleet drift exactly when the user needs to spot it. The version helps the user spot fleet-wide version drift at a glance ("MBP is on 3.14.5 but Mini just relayed from 3.14.9").
+- **Show both source and destination agent-bridge versions** in the structural fields. The shared scaffold already renders this as `source: ... (agent-bridge vX)` and `destination: ... (agent-bridge vY)`. If the scaffold is missing and you must compose manually, read:
+  - **Claude Code** — `source_agent_bridge_version` and `destination_agent_bridge_version` attributes on the inbound `<channel>` meta; fall back to legacy `agent_bridge_version` as the destination/local version or call `claude_code_channel_status`.
+  - **OpenClaw** — `source_agent_bridge_version` and `destination_agent_bridge_version` lines inside `[BRIDGE-CONTEXT]`; legacy `agent_bridge_version` remains a destination/local alias.
+  Older peers may not send a source version; write `agent-bridge unknown` for that side rather than guessing. Do NOT hardcode versions — stale literals would hide exactly the fleet drift the relay is meant to expose.
 - **OpenClaw automatic relay notices use expand ids.** v3.1+ OpenClaw channel receipts show `expand id: NN` and `expand: agent-bridge relay-expand NN` instead of a `message:` preview. The full inbound BridgeMessage is stored locally under `~/.agent-bridge/relay-expand/` with a bounded/TTL-pruned rolling id map.
 - **When the user says “expand Agent Bridge relay message NN”**, run `agent-bridge relay-expand NN` on the same machine that produced the relay notice, then send the retrieved full content through the current user-facing channel, applying only normal privacy/channel-safety rules. Use `--json` only when you need machine-readable metadata.
 

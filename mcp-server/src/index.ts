@@ -768,7 +768,7 @@ async function main(): Promise<void> {
         'AGENT-DRIVEN REPLY ROUTING (unified across Claude Code + OpenClaw, openclaw-channel v3.0+):',
         'When you receive an inbound bridge message, YOU decide where the reply goes — the routing layer never auto-fans out replies on your behalf. Two legs are involved:',
         '  1. Bridge leg (implicit, expected when from_target is set): call bridge_send_message with target=<from_target> and machine=<sender machine> to reply over the bridge to the originating peer.',
-        '  2. User-facing leg (additional): if there is also a human user reading this conversation (Telegram, Slack, Discord, etc.), send a compact 1-3 sentence summary of the bridge exchange via the harness\'s configured user-facing reply tool, with the running agent-bridge version appended at the end (e.g. "_(agent-bridge v4.1.0)_") so the user can spot fleet-wide version drift without seeing the full bridge body. Read the version from the BRIDGE-CONTEXT `agent_bridge_version` field (OpenClaw) or `claude_code_channel_status` (Claude Code) — do NOT hardcode. If the user asks to expand an OpenClaw `[Agent Bridge relay]` notice by its `expand id`, run `agent-bridge relay-expand <id>` on that same machine and send the retrieved full content subject to normal privacy/channel rules. The "Relay inbound bridge messages to the user" rule (canonical doc: docs/relay-to-user.md) covers the wording / triggers.',
+        '  2. User-facing leg (additional): if there is also a human user reading this conversation (Telegram, Slack, Discord, etc.), send a compact 1-3 sentence summary of the bridge exchange via the harness\'s configured user-facing reply tool. Use the relay scaffold when present: it already labels the source endpoint + source agent-bridge version and the destination endpoint + destination agent-bridge version so the user can spot fleet-wide version drift without seeing the full bridge body. If you must compose a fallback manually, read source_agent_bridge_version and destination_agent_bridge_version from channel metadata (or call claude_code_channel_status for the local destination version); do NOT hardcode. If the user asks to expand an OpenClaw `[Agent Bridge relay]` notice by its `expand id`, run `agent-bridge relay-expand <id>` on that same machine and send the retrieved full content subject to normal privacy/channel rules. The "Relay inbound bridge messages to the user" rule (canonical doc: docs/relay-to-user.md) covers the wording / triggers.',
         'Both legs are independent tool calls. Pick zero, one, or both depending on context. The same model applies on OpenClaw via openclaw-channel v3.0+: the inbound message is surfaced into the agent\'s session with a [BRIDGE-CONTEXT] block listing from_target + suggested user-facing channels, and the agent calls the appropriate reply tools.',
         '',
         'Available tools:',
@@ -1040,12 +1040,14 @@ async function main(): Promise<void> {
           {
             id: message.id,
             from: message.from,
+            to: message.to,
             fromTarget: message.fromTarget,
             target: message.target,
+            sourceAgentBridgeVersion: message.sourceAgentBridgeVersion,
           },
           {
             replyVia: message.fromTarget ? 'agent-bridge' : undefined,
-            agentBridgeVersion: VERSION,
+            destinationAgentBridgeVersion: VERSION,
           },
         );
         const contentWithScaffold = `${relayScaffold}\n\n${message.content}`;
@@ -1065,13 +1067,15 @@ async function main(): Promise<void> {
               ...(message.replyTo ? { reply_to: message.replyTo } : {}),
               ...(message.ttl !== undefined ? { ttl: String(message.ttl) } : {}),
               authenticated: 'ssh-key',
-              // [AGENT-BRIDGE-VERSION-IN-RELAY 2026-05-04]
-              // Surface the running agent-bridge version on every inbound
-              // channel push so the agent's user-facing relay summary can
-              // append it (e.g. "(agent-bridge v3.14.9)") without needing
-              // to call claude_code_channel_status. Helps the user spot
-              // fleet-wide version drift at a glance from the relay alone.
-              // Canonical doc: docs/relay-to-user.md.
+              // [AGENT-BRIDGE-DUAL-VERSION-RELAY 2026-05-10]
+              // Surface both sides of the relay version identity. Older
+              // senders omit sourceAgentBridgeVersion, so keep the legacy
+              // agent_bridge_version alias as the destination/local version
+              // for agents that have not learned the split fields yet.
+              ...(message.sourceAgentBridgeVersion
+                ? { source_agent_bridge_version: message.sourceAgentBridgeVersion }
+                : {}),
+              destination_agent_bridge_version: VERSION,
               agent_bridge_version: VERSION,
               // [RELAY-SCAFFOLD-IN-META 2026-05-09]
               // Same scaffold also exposed as a meta field so harnesses /

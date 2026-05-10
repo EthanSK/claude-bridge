@@ -109,10 +109,18 @@ export function formatRelayExpandEntry(entry) {
 
   if (message.id) lines.push(`message_id: ${message.id}`);
   if (message.from) lines.push(`from: ${message.from}`);
+  if (message.to) lines.push(`to: ${message.to}`);
   if (message.fromTarget) lines.push(`from_target: ${message.fromTarget}`);
   if (message.target) lines.push(`target: ${message.target}`);
   if (metadata.replyVia) lines.push(`reply_path: ${formatList(metadata.replyVia)}`);
   if (metadata.targetName) lines.push(`openclaw_target: ${metadata.targetName}`);
+  const sourceVersion = metadata.sourceAgentBridgeVersion || message.sourceAgentBridgeVersion;
+  if (sourceVersion) {
+    lines.push(`source_agent_bridge_version: ${sourceVersion}`);
+  }
+  if (metadata.destinationAgentBridgeVersion) {
+    lines.push(`destination_agent_bridge_version: ${metadata.destinationAgentBridgeVersion}`);
+  }
   if (metadata.agentBridgeVersion) lines.push(`agent_bridge_version: ${metadata.agentBridgeVersion}`);
   if (message.timestamp) lines.push(`message_timestamp: ${message.timestamp}`);
   if (message.replyTo) lines.push(`reply_to: ${message.replyTo}`);
@@ -172,8 +180,14 @@ function normalizeBridgeMessage(msg) {
   return {
     id: clean(msg?.id),
     from: clean(msg?.from),
+    to: clean(msg?.to),
     fromTarget: clean(msg?.fromTarget),
     target: clean(msg?.target),
+    sourceAgentBridgeVersion: clean(
+      msg?.sourceAgentBridgeVersion
+        ?? msg?.agentBridgeVersion
+        ?? msg?.agent_bridge_version,
+    ),
     type: clean(msg?.type),
     content: String(msg?.content ?? ""),
     timestamp: clean(msg?.timestamp),
@@ -188,7 +202,17 @@ function normalizeMetadata(metadata) {
     replyVia: Array.isArray(metadata?.replyVia)
       ? metadata.replyVia.map((v) => clean(v)).filter(Boolean)
       : clean(metadata?.replyVia),
-    agentBridgeVersion: clean(metadata?.agentBridgeVersion ?? metadata?.version),
+    sourceAgentBridgeVersion: clean(metadata?.sourceAgentBridgeVersion),
+    destinationAgentBridgeVersion: clean(
+      metadata?.destinationAgentBridgeVersion
+        ?? metadata?.agentBridgeVersion
+        ?? metadata?.version,
+    ),
+    agentBridgeVersion: clean(
+      metadata?.agentBridgeVersion
+        ?? metadata?.destinationAgentBridgeVersion
+        ?? metadata?.version,
+    ),
   };
 }
 

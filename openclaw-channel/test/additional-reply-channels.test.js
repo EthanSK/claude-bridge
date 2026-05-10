@@ -786,13 +786,12 @@ test("normalizeExplicitTargets default target additionalReplyChannels is null (f
   assert.equal(targets.default.additionalReplyChannels, null);
 });
 
-// ── agent_bridge_version in BRIDGE-CONTEXT ──────────────────────────────────
-// [AGENT-BRIDGE-VERSION-IN-RELAY 2026-05-04]
-// Voice 2150: the user-facing relay should carry the running agent-bridge
-// version so the user can spot fleet-wide drift at a glance from the
-// relay alone. The BRIDGE-CONTEXT block is where the agent reads it.
+// ── source/destination agent-bridge versions in BRIDGE-CONTEXT ──────────────
+// [AGENT-BRIDGE-DUAL-VERSION-RELAY 2026-05-10]
+// Relay scaffolds/context carry both the sender's version (when the peer
+// included it on the BridgeMessage) and this destination's local version.
 
-test("formatInboundBody includes agent_bridge_version in BRIDGE-CONTEXT", async () => {
+test("formatInboundBody includes source and destination versions in BRIDGE-CONTEXT", async () => {
   const { resolveAgentBridgeVersion, __resetVersionCache } = await import("../src/index.js");
   __resetVersionCache();
   const v = resolveAgentBridgeVersion();
@@ -807,14 +806,44 @@ test("formatInboundBody includes agent_bridge_version in BRIDGE-CONTEXT", async 
       fromTarget: "claude-code/default",
       from: "MacBookPro",
       content: "hi",
+      sourceAgentBridgeVersion: "4.4.9",
     }),
     target: makeTarget(),
     additionalReplyChannels: ["telegram"],
     primaryChannel: "telegram",
   });
-  assert.match(body, /agent_bridge_version: /);
+  assert.match(body, /source_agent_bridge_version: 4\.4\.9/);
+  assert.ok(body.includes(`destination_agent_bridge_version: ${v}`),
+    `BRIDGE-CONTEXT should embed the resolved destination version (${v}); got body=\n${body}`);
   assert.ok(body.includes(`agent_bridge_version: ${v}`),
-    `BRIDGE-CONTEXT should embed the resolved version (${v}); got body=\n${body}`);
-  // The line carries an inline hint to the agent about how to use it.
-  assert.match(body, /append to user-facing relay/);
+    `BRIDGE-CONTEXT should keep the legacy destination alias (${v}); got body=\n${body}`);
+});
+
+test("formatInboundBody relay scaffold labels source and destination endpoint versions", () => {
+  const body = formatInboundBody({
+    msg: makeMsg({
+      fromTarget: "claude-code/default",
+      from: "MacBookPro",
+      to: "MacMini",
+      target: "openclaw/default",
+      content: "hi",
+      sourceAgentBridgeVersion: "4.4.9",
+    }),
+    target: makeTarget(),
+    additionalReplyChannels: ["telegram"],
+    primaryChannel: "telegram",
+    relayCtx: {
+      targetName: "default",
+      replyPathDisplay: ["agent-bridge", "telegram"],
+      sourceAgentBridgeVersion: "4.4.9",
+      destinationAgentBridgeVersion: "4.5.0",
+      expandId: "07",
+    },
+  });
+
+  assert.match(body, /\[RELAY-SCAFFOLD-START\]/);
+  assert.match(body, /source: MacBookPro\/claude-code\/default \(agent-bridge v4\.4\.9\)/);
+  assert.match(body, /destination: MacMini\/openclaw\/default \(agent-bridge v4\.5\.0\)/);
+  assert.match(body, /received: MacBookPro\/claude-code\/default → MacMini\/openclaw\/default/);
+  assert.match(body, /expand id: 07/);
 });

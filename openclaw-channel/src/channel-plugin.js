@@ -60,11 +60,13 @@ function waitUntilAbort(signal) {
  *   Lookup for which machine to SFTP-deliver a reply to, keyed by sessionKey.
  *   Populated by index.js when an inbound message is injected.
  * @param {() => object} [opts.getPluginConfig]
+ * @param {() => string} [opts.getAgentBridgeVersion]
  */
 export function createAgentBridgeChannelPlugin(opts) {
   const log = opts.logger;
   const getReplyTargets = opts.getReplyTargets;
   const getPluginConfig = opts.getPluginConfig ?? (() => ({}));
+  const getAgentBridgeVersion = opts.getAgentBridgeVersion ?? (() => "");
 
   return {
     id: CHANNEL_ID,
@@ -228,6 +230,7 @@ export function createAgentBridgeChannelPlugin(opts) {
           target: returnTarget,
           incoming: hit?.incoming,
           ownTarget,
+          sourceAgentBridgeVersion: getAgentBridgeVersion(),
         });
         await deliverReply({
           message: msg,

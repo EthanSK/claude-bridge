@@ -26,6 +26,7 @@ test("agent-bridge relay-expand prints the stored full relay message", () => {
         message: {
           id: "msg-cli",
           from: "MacBookPro",
+          to: "MacMini",
           fromTarget: "claude-code/default",
           target: "openclaw/default",
           content: "full message body from compact relay",
@@ -33,7 +34,9 @@ test("agent-bridge relay-expand prints the stored full relay message", () => {
         metadata: {
           targetName: "default",
           replyVia: ["agent-bridge", "telegram"],
-          agentBridgeVersion: "4.1.0",
+          sourceAgentBridgeVersion: "4.4.9",
+          destinationAgentBridgeVersion: "4.5.0",
+          agentBridgeVersion: "4.5.0",
         },
       },
     ],
@@ -46,7 +49,10 @@ test("agent-bridge relay-expand prints the stored full relay message", () => {
 
   assert.match(output, /Agent Bridge relay expand 07/);
   assert.match(output, /message_id: msg-cli/);
+  assert.match(output, /to: MacMini/);
   assert.match(output, /reply_path: agent-bridge, telegram/);
+  assert.match(output, /source_agent_bridge_version: 4\.4\.9/);
+  assert.match(output, /destination_agent_bridge_version: 4\.5\.0/);
   assert.match(output, /--- message ---\nfull message body from compact relay/);
 });
 

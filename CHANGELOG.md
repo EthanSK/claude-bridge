@@ -1,5 +1,15 @@
 # Changelog
 
+## agent-bridge 4.5.0 / openclaw-channel 3.4.0 — 2026-05-10
+
+Ethan asked for relay notices to stop showing one ambiguous Agent Bridge version and instead show both the source-side and destination-side runtime identity, including the source/destination target labels.
+
+- **Dual endpoint/version relay scaffolds.** The shared relay formatter now emits `source: <machine>/<target> (agent-bridge vX|unknown)` and `destination: <machine>/<target> (agent-bridge vY|unknown)` lines, plus a `received` line that includes both endpoint labels. The old one-line `agent-bridge: vX` field is no longer used in new scaffolds.
+- **Wire metadata propagation.** Current MCP/Claude Code sends and OpenClaw bridge replies stamp `sourceAgentBridgeVersion` on outbound `BridgeMessage` JSON. Receivers combine that sender version with their local runtime version (`destinationAgentBridgeVersion`) when building the relay scaffold and metadata.
+- **Backwards compatibility.** Older peers that do not send `sourceAgentBridgeVersion` render the source version as `agent-bridge unknown`; legacy `agentBridgeVersion` / `agent_bridge_version` aliases are still accepted, and the receiver still exposes legacy `agent_bridge_version` as a destination/local alias for older agents.
+- **Tests and docs.** Focused formatter, OpenClaw BRIDGE-CONTEXT, relay-expand, envelope, and MCP meta tests now cover source/destination version propagation. Relay docs and skills now describe the dual-version format.
+- **Version bumps.** CLI / MCP server / Claude plugin metadata moved to `4.5.0`; OpenClaw channel package moved to `3.4.0`.
+
 ## agent-bridge 4.4.0 — 2026-05-10
 
 Real bug observed earlier today: an OpenClaw/Codex agent subprocess on the MBP ran with `HOME=/Users/ethansarif-kattan/.openclaw/agents/main/agent/codex-home/home` (a sandboxed home, not the real user home). `agent-bridge list` and `agent-bridge status` from that subprocess silently reported "No paired machines" because the CLI reads its config at `$HOME/.agent-bridge/config` — and the sandbox home has no such file. The real config lives under the user's actual home. This release auto-detects that pattern and falls back transparently.

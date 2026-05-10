@@ -13,6 +13,7 @@
  *   ttl?: 86400,
  *   target?: "claude-code",              // where the RECEIVER should deliver this
  *   fromTarget?: "openclaw/clawdiboi2",  // where the SENDER wants replies routed
+ *   sourceAgentBridgeVersion?: "4.5.0",  // sender-side Agent Bridge runtime
  *   replyVia?: "telegram" | "agent-bridge" // per-message override for how the
  *                                          // openclaw target should route its
  *                                          // reply (v2.3.0+). Ignored by the
@@ -83,6 +84,9 @@ export function parseBridgeMessage(raw) {
  *
  * `fromTarget` on the OUTGOING reply is also populated (optional) from the
  * `ownTarget` argument so the peer on the other end can reply back in turn.
+ * `sourceAgentBridgeVersion` is populated by current senders so receivers can
+ * render source and destination versions separately in relay notices. Older
+ * peers omit it and receivers display the source version as unknown.
  */
 export function buildReply({
   fromMachine,
@@ -92,6 +96,7 @@ export function buildReply({
   target,
   incoming,
   ownTarget,
+  sourceAgentBridgeVersion,
 }) {
   const resolvedTarget = target ?? incoming?.fromTarget;
   /** @type {Record<string, unknown>} */
@@ -110,6 +115,9 @@ export function buildReply({
   }
   if (typeof ownTarget === "string" && ownTarget) {
     reply.fromTarget = ownTarget;
+  }
+  if (typeof sourceAgentBridgeVersion === "string" && sourceAgentBridgeVersion) {
+    reply.sourceAgentBridgeVersion = sourceAgentBridgeVersion;
   }
   return reply;
 }

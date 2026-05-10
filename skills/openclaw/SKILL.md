@@ -124,8 +124,9 @@ When a `<channel source="agent-bridge" ...>` block lands in this session, you MU
 Format reference (kept here as a fallback for cases where the plugin-emitted scaffold isn't available — older plugin version, custom harness, scaffold stripped by an intermediate layer):
 
 - Header (literal): `[Agent Bridge relay] 🛰️` — NOT 📡, NOT a free-form prefix. Hard-coded in the shared formatter.
-- `agent-bridge: v<X.Y.Z>` — read from `[BRIDGE-CONTEXT]` block (OC) or `claude_code_channel_status` (CC). Never hardcode.
-- `received: <from-machine>[/<from-target>] → <target>`
+- `source: <from-machine>[/<from-target>] (agent-bridge v<X.Y.Z>|unknown)` — read from `source_agent_bridge_version` when available; never hardcode.
+- `destination: <to-machine>/<target> (agent-bridge v<A.B.C>|unknown)` — read from `destination_agent_bridge_version`; legacy `agent_bridge_version` is a destination/local alias.
+- `received: <from-machine>[/<from-target>] → <to-machine>/<target>`
 - `reply path: <comma-joined channels>` (typically `agent-bridge`, or `agent-bridge, telegram` when relaying to a user).
 - `message id: <msg-id>` (the `message_id` attribute on the inbound `<channel>` tag).
 - `expand id: NN` + `expand: agent-bridge relay-expand NN` (OC only — has the relay-expand store).

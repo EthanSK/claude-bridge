@@ -9,7 +9,7 @@ set -euo pipefail
 
 INVOKED_AS="$(basename "$0")"
 
-VERSION="4.4.0"
+VERSION="4.5.0"
 
 # -- Colours (ANSI) ----------------------------------------------------------
 RED='\033[0;31m'
@@ -2378,10 +2378,14 @@ function formatEntry(entry) {
   ];
   if (message.id) lines.push(`message_id: ${message.id}`);
   if (message.from) lines.push(`from: ${message.from}`);
+  if (message.to) lines.push(`to: ${message.to}`);
   if (message.fromTarget) lines.push(`from_target: ${message.fromTarget}`);
   if (message.target) lines.push(`target: ${message.target}`);
   if (metadata.replyVia) lines.push(`reply_path: ${formatList(metadata.replyVia)}`);
   if (metadata.targetName) lines.push(`openclaw_target: ${metadata.targetName}`);
+  const sourceVersion = metadata.sourceAgentBridgeVersion || message.sourceAgentBridgeVersion;
+  if (sourceVersion) lines.push(`source_agent_bridge_version: ${sourceVersion}`);
+  if (metadata.destinationAgentBridgeVersion) lines.push(`destination_agent_bridge_version: ${metadata.destinationAgentBridgeVersion}`);
   if (metadata.agentBridgeVersion) lines.push(`agent_bridge_version: ${metadata.agentBridgeVersion}`);
   if (message.timestamp) lines.push(`message_timestamp: ${message.timestamp}`);
   if (message.replyTo) lines.push(`reply_to: ${message.replyTo}`);

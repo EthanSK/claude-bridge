@@ -141,7 +141,7 @@ shape without a peer_id).
 
 - **Breaking: agent-driven reply routing.** The plugin no longer auto-fans-out replies via `replyVia`. It injects the inbound bridge message into one OpenClaw agent turn with a `[BRIDGE-CONTEXT]` block, then the agent chooses whether to reply over the bridge and/or user-facing channels.
 - **`additionalReplyChannels` replaces `replyVia`.** Use it only as a hint for user-facing channels (`["telegram"]`, `[]`, or sentinels like `"none"` / `"default"`). The old `replyVia` key is deprecated and ignored after one startup warning.
-- **Single-turn dispatch hardening.** Inbound bridge messages now drive exactly one `dispatchInboundReplyWithBase` call, bridge-only array configs are handled explicitly, Windows ESM import paths use `pathToFileURL`, and relay notices include the running agent-bridge version so stale fleet members are visible.
+- **Single-turn dispatch hardening.** Inbound bridge messages now drive exactly one `dispatchInboundReplyWithBase` call, bridge-only array configs are handled explicitly, Windows ESM import paths use `pathToFileURL`, and relay notices include source-side and destination-side agent-bridge versions so stale fleet members are visible.
 
 ## What's new in v2.4.1
 
@@ -245,7 +245,7 @@ Senders on the other machine address a specific target with the new `target` fie
 - On each new `BridgeMessage`:
   1. Parse + dedup against `~/.agent-bridge/.openclaw-v2-delivered`.
   2. Format as `<channel source="agent-bridge" from=... to=... target=... ts=...>content</channel>` (parity with the Claude Code channel plugin).
-  3. Store the full BridgeMessage in the local relay-expand store (`~/.agent-bridge/relay-expand/`) and best-effort send a Telegram-visible compact relay receipt beginning `[Agent Bridge relay] 🛰️` unless `relayNotice` is disabled. The receipt includes `expand id: NN` and `expand: agent-bridge relay-expand NN` instead of the full message body.
+  3. Store the full BridgeMessage in the local relay-expand store (`~/.agent-bridge/relay-expand/`) and prepare an agent-fillable relay scaffold beginning `[Agent Bridge relay] 🛰️` unless `relayNotice` is disabled. The scaffold includes source/destination endpoint version lines plus `expand id: NN` and `expand: agent-bridge relay-expand NN` instead of the full message body.
   4. Resolve the canonical session route via `runtime.channel.routing.resolveAgentRoute(...)`.
   5. Build a synthetic inbound `ctxPayload` via `runtime.channel.reply.finalizeInboundContext({...})`, pinned either to Telegram (`Provider/OriginatingChannel/OriginatingTo = telegram`) or to the native `agent-bridge` channel with an encoded bridge peer id according to the selected primary channel.
   6. `await dispatchInboundReplyWithBase({cfg, channel, accountId, route, storePath, ctxPayload, core: runtime, deliver, onRecordError, onDispatchError})`. This runs a synchronous agent turn in the target session.

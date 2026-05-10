@@ -11,12 +11,14 @@ test("buildReply preserves message id threading and explicit return target", () 
     content: "done",
     target: "claude-code",
     ownTarget: "openclaw/clordlethird",
+    sourceAgentBridgeVersion: "4.5.0",
   });
 
   assert.match(reply.id, /^msg-/);
   assert.equal(reply.replyTo, "msg-incoming");
   assert.equal(reply.target, "claude-code");
   assert.equal(reply.fromTarget, "openclaw/clordlethird");
+  assert.equal(reply.sourceAgentBridgeVersion, "4.5.0");
 });
 
 test("buildReply can derive return target from incoming.fromTarget", () => {

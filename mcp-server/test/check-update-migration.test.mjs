@@ -206,20 +206,26 @@ test(
   },
 );
 
-test('agent_bridge_version is included in the channel notification meta', () => {
-  // [AGENT-BRIDGE-VERSION-IN-RELAY 2026-05-04]
-  // Voice 2150: the inline relay summary the agent sends to the user
-  // should carry the running agent-bridge version so the user can
-  // spot fleet-wide drift. The MCP server inlines `agent_bridge_version`
-  // into every channel-push meta object so the agent can read it from
-  // the inbound `<channel>` block without a separate tool call.
+test('source/destination agent-bridge versions are included in channel notification meta', () => {
+  // [AGENT-BRIDGE-DUAL-VERSION-RELAY 2026-05-10]
+  // Relay scaffolds should expose both the sender-side version, when the peer
+  // included it, and this receiver's local version. The legacy
+  // `agent_bridge_version` alias remains as the destination/local version.
   const indexSrc = readFileSync(
     resolve(__dirname, '..', 'src', 'index.ts'),
     'utf8',
   );
   assert.ok(
+    indexSrc.includes('source_agent_bridge_version: message.sourceAgentBridgeVersion'),
+    "channel notification meta must include source_agent_bridge_version when known",
+  );
+  assert.ok(
+    indexSrc.includes('destination_agent_bridge_version: VERSION'),
+    "channel notification meta must include destination_agent_bridge_version: VERSION",
+  );
+  assert.ok(
     indexSrc.includes('agent_bridge_version: VERSION'),
-    "channel notification meta must include `agent_bridge_version: VERSION`",
+    "channel notification meta must keep legacy `agent_bridge_version: VERSION`",
   );
   // The doc reference should still point at the relay-to-user doc.
   assert.ok(

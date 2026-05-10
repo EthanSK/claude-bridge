@@ -19,8 +19,10 @@ function makeMsg(overrides = {}) {
   return {
     id: overrides.id ?? "msg-abc",
     from: "MacBookPro",
+    to: "MacMini",
     fromTarget: "claude-code/default",
     target: "openclaw/default",
+    sourceAgentBridgeVersion: "4.4.9",
     type: "message",
     content: overrides.content ?? "full bridge message\nwith multiple lines\nand private context",
     timestamp: "2026-05-08T21:00:00.000Z",
@@ -40,7 +42,9 @@ test("storeRelayExpandMessage stores full content and writes companion files", (
   const record = storeRelayExpandMessage(makeMsg(), {
     targetName: "default",
     replyVia: ["agent-bridge", "telegram"],
-    agentBridgeVersion: "4.1.0",
+    sourceAgentBridgeVersion: "4.4.9",
+    destinationAgentBridgeVersion: "4.5.0",
+    agentBridgeVersion: "4.5.0",
   }, { storePath, now });
 
   assert.equal(record.expandId, "00");
@@ -51,7 +55,10 @@ test("storeRelayExpandMessage stores full content and writes companion files", (
   const rendered = formatRelayExpandEntry(fetched);
   assert.match(rendered, /Agent Bridge relay expand 00/);
   assert.match(rendered, /message_id: msg-abc/);
+  assert.match(rendered, /to: MacMini/);
   assert.match(rendered, /reply_path: agent-bridge, telegram/);
+  assert.match(rendered, /source_agent_bridge_version: 4\.4\.9/);
+  assert.match(rendered, /destination_agent_bridge_version: 4\.5\.0/);
   assert.match(rendered, /--- message ---\nfull bridge message\nwith multiple lines/);
 
   const txtPath = join(dirname(storePath), "00.txt");

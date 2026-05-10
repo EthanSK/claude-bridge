@@ -8,8 +8,14 @@
 export interface RelayNoticeMessage {
   id?: string | null;
   from?: string | null;
+  to?: string | null;
   fromTarget?: string | null;
   target?: string | null;
+  /** Sender-side Agent Bridge version, when carried on the BridgeMessage. */
+  sourceAgentBridgeVersion?: string | null;
+  /** Back-compat sender-side aliases accepted from custom/older peers. */
+  agentBridgeVersion?: string | null;
+  agent_bridge_version?: string | null;
 }
 
 export interface RelayNoticeOpts {
@@ -19,9 +25,13 @@ export interface RelayNoticeOpts {
   expandId?: string;
   /** Reply-path channels (string or array). */
   replyVia?: string | string[];
-  /** Running plugin version (e.g. "4.1.0"). */
+  /** Sender-side Agent Bridge version, when known. */
+  sourceAgentBridgeVersion?: string;
+  /** Receiver-side Agent Bridge version, when known. */
+  destinationAgentBridgeVersion?: string;
+  /** Back-compat alias for destinationAgentBridgeVersion. */
   agentBridgeVersion?: string;
-  /** Alias for agentBridgeVersion. */
+  /** Alias for destinationAgentBridgeVersion. */
   version?: string;
   /**
    * 1-3 sentence Summary string.

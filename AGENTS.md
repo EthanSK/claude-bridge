@@ -165,13 +165,13 @@ Voice transcripts often mis-hear short proper-noun aliases. Re-read the transcri
 
 ### Relay inbound bridge messages to the user
 
-**Relay every inbound bridge message to the user via your harness's configured user-facing channel** (Telegram, Slack, Discord, native UI, etc.) as a brief 1-3 sentence summary (sender machine + target + the actionable ask), with the running **agent-bridge version appended at the end**, so the user has live visibility into what other harnesses are asking AND which build produced the message. Keep it compact: do **not** paste the full bridge body into Telegram/user channels by default. Reply via bridge first if a response is needed; THEN relay to the user. Don't suppress the relay just because the message looks like routine internal coordination — the user generally wants to see all of it.
+**Relay every inbound bridge message to the user via your harness's configured user-facing channel** (Telegram, Slack, Discord, native UI, etc.) as a brief 1-3 sentence summary (sender machine + source target + destination machine + destination target + the actionable ask), with **both source-side and destination-side agent-bridge versions** shown when available, so the user has live visibility into what other harnesses are asking AND which builds produced/received the message. Keep it compact: do **not** paste the full bridge body into Telegram/user channels by default. Reply via bridge first if a response is needed; THEN relay to the user. Don't suppress the relay just because the message looks like routine internal coordination — the user generally wants to see all of it.
 
 Format example (Telegram-style, adapt to your channel):
 
-> 📡 Bridge from <sender-machine> (target=<routed-target>): <compact 1-3 sentence summary of the actionable ask>. Replied via bridge with <action>. _(agent-bridge v<X.Y.Z>)_
+> 🛰️ Bridge from <sender-machine>/<source-target> (source v<X.Y.Z|unknown>) to <destination-machine>/<destination-target> (destination v<A.B.C|unknown>): <compact 1-3 sentence summary of the actionable ask>. Replied via bridge with <action>.
 
-The 1-3 sentence band lets you keep trivial pings short while letting denser coordination context (multi-step plans, decisions, errors) flow as a paragraph block when warranted. Read the version from the BRIDGE-CONTEXT block's `agent_bridge_version` field (OpenClaw) or `claude_code_channel_status` (Claude Code) — don't hardcode.
+The 1-3 sentence band lets you keep trivial pings short while letting denser coordination context (multi-step plans, decisions, errors) flow as a paragraph block when warranted. Prefer the generated relay scaffold: it includes `source:` and `destination:` endpoint/version lines. If composing manually, read `source_agent_bridge_version` and `destination_agent_bridge_version` from BRIDGE-CONTEXT/channel metadata; legacy `agent_bridge_version` is a destination/local alias. Don't hardcode.
 
 OpenClaw v3.1+ relay receipts show `expand id: NN` plus `expand: agent-bridge relay-expand NN` instead of a long `message:` preview. If the user says “expand Agent Bridge relay message NN”, run `agent-bridge relay-expand NN` on the same machine that produced the notice and send the retrieved full content, subject only to normal privacy/channel rules.
 

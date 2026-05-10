@@ -39,6 +39,7 @@ import {
   DEFAULT_TTL_SECONDS,
   OUTBOX_MAX_AGE_MS,
   CLAUDE_CODE_TARGET,
+  MCP_SERVER_VERSION,
   DEFAULT_PERSONA,
   claudeCodeTargetForPersona,
   inboxSubdir,
@@ -90,6 +91,12 @@ export interface BridgeMessage {
    * that Claude Code persona's inbox subdir.
    */
   fromTarget?: string;
+  /**
+   * Agent Bridge/runtime version of the sender that created this message.
+   * Added in 4.5.0 so relay notices can display source and destination
+   * versions separately during rolling upgrades. Older peers omit it.
+   */
+  sourceAgentBridgeVersion?: string;
 }
 
 export interface InboxStats {
@@ -637,6 +644,7 @@ export function createMessage(
   ttl: number = DEFAULT_TTL_SECONDS,
   target?: string,
   fromTarget?: string,
+  sourceAgentBridgeVersion: string = MCP_SERVER_VERSION,
 ): BridgeMessage {
   const msg: BridgeMessage = {
     id: `msg-${randomUUID()}`,
@@ -650,6 +658,7 @@ export function createMessage(
   };
   if (target) msg.target = target;
   if (fromTarget) msg.fromTarget = fromTarget;
+  if (sourceAgentBridgeVersion) msg.sourceAgentBridgeVersion = sourceAgentBridgeVersion;
   return msg;
 }
 

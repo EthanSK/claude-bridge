@@ -172,6 +172,7 @@ export default {
         logger: log,
         getReplyTargets: () => replyTargets,
         getPluginConfig: () => pluginCfg,
+        getAgentBridgeVersion: resolveAgentBridgeVersion,
       });
 
       if (typeof api?.registerChannel === "function") {
@@ -939,11 +940,18 @@ function prepareBridgeRelayContext({ hostCfg, pluginCfg, target, msg, additional
   });
 
   const agentBridgeVersion = resolveAgentBridgeVersion();
+  const sourceAgentBridgeVersion = cleanString(
+    msg?.sourceAgentBridgeVersion
+      ?? msg?.agentBridgeVersion
+      ?? msg?.agent_bridge_version,
+  );
   let expandRecord = null;
   try {
     expandRecord = storeRelayExpandMessage(msg, {
       targetName: target.name,
       replyVia: replyPathDisplay,
+      sourceAgentBridgeVersion,
+      destinationAgentBridgeVersion: agentBridgeVersion,
       agentBridgeVersion,
     });
   } catch (err) {
@@ -955,6 +963,8 @@ function prepareBridgeRelayContext({ hostCfg, pluginCfg, target, msg, additional
   return {
     expandId: expandRecord?.expandId ?? null,
     replyPathDisplay,
+    sourceAgentBridgeVersion,
+    destinationAgentBridgeVersion: agentBridgeVersion,
     agentBridgeVersion,
     targetName: target.name,
   };
@@ -1503,16 +1513,34 @@ function formatInboundBody({ msg, target, additionalReplyChannels, primaryChanne
     ctxLines.push(`additional_user_channels: ${additionalReplyChannels.join(", ")}`);
   }
   ctxLines.push(`local_target: ${target?.name ?? "?"}`);
-  // [AGENT-BRIDGE-VERSION-IN-RELAY 2026-05-04]
-  // Surface the running agent-bridge version so the agent's user-facing
-  // relay summary can append it (e.g. "(agent-bridge v3.14.9)"). Helps
-  // the user spot fleet-wide version drift at a glance from the relay
-  // alone — no need to ask which build is on the other machine.
-  // Canonical doc: docs/relay-to-user.md.
-  const abVersion = resolveAgentBridgeVersion();
-  if (abVersion) {
+  // [AGENT-BRIDGE-DUAL-VERSION-RELAY 2026-05-10]
+  // Surface both source and destination version identity. Older senders omit
+  // sourceAgentBridgeVersion, so keep the legacy agent_bridge_version alias
+  // as the destination/local version for agents that have not learned the
+  // split fields yet. Canonical doc: docs/relay-to-user.md.
+  const sourceAgentBridgeVersion = cleanString(
+    msg?.sourceAgentBridgeVersion
+      ?? msg?.agentBridgeVersion
+      ?? msg?.agent_bridge_version,
+  );
+  const destinationAgentBridgeVersion = relayCtx?.destinationAgentBridgeVersion
+    ?? relayCtx?.agentBridgeVersion
+    ?? resolveAgentBridgeVersion();
+  if (sourceAgentBridgeVersion) {
     ctxLines.push(
-      `agent_bridge_version: ${abVersion}  # append to user-facing relay (e.g. "_(agent-bridge v${abVersion})_")`,
+      `source_agent_bridge_version: ${sourceAgentBridgeVersion}  # source-side Agent Bridge/runtime version from the sender`,
+    );
+  } else {
+    ctxLines.push(
+      `source_agent_bridge_version: <unknown — sender did not include sourceAgentBridgeVersion>`,
+    );
+  }
+  if (destinationAgentBridgeVersion) {
+    ctxLines.push(
+      `destination_agent_bridge_version: ${destinationAgentBridgeVersion}  # local destination-side Agent Bridge/runtime version`,
+    );
+    ctxLines.push(
+      `agent_bridge_version: ${destinationAgentBridgeVersion}  # legacy alias for destination_agent_bridge_version`,
     );
   }
 
@@ -1540,7 +1568,8 @@ function formatInboundBody({ msg, target, additionalReplyChannels, primaryChanne
       const scaffold = formatRelayScaffold(msg, {
         targetName: relayCtx.targetName ?? target?.name,
         replyVia: relayCtx.replyPathDisplay,
-        agentBridgeVersion: relayCtx.agentBridgeVersion,
+        sourceAgentBridgeVersion: relayCtx.sourceAgentBridgeVersion,
+        destinationAgentBridgeVersion: relayCtx.destinationAgentBridgeVersion,
         expandId: relayCtx.expandId ?? undefined,
       });
       scaffoldPrefix = `${scaffold}\n\n`;
@@ -1555,6 +1584,10 @@ function formatInboundBody({ msg, target, additionalReplyChannels, primaryChanne
 
 function escapeAttr(v) {
   return String(v ?? "").replace(/"/g, '\\"');
+}
+
+function cleanString(value) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 /**
