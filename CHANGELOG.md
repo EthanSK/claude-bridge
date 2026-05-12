@@ -1,5 +1,12 @@
 # Changelog
 
+## agent-bridge 4.7.0 / openclaw-channel 4.7.0 — 2026-05-12
+
+Real bug: the Windows periodic-update Scheduled Task kept the dev clone at `%USERPROFILE%\.openclaw\workspace\agent-bridge` (or `%USERPROFILE%\Projects\agent-bridge`) current, but never refreshed the packaged CLI shim copied into `%LOCALAPPDATA%\agent-bridge\bin\` by `install.ps1`. That layout difference is Windows-specific — macOS's `install.sh` symlinks `/usr/local/bin/agent-bridge` straight at the dev clone, so a `git pull` already updates the CLI in place. On Windows, `.cmd` shims don't have symlink semantics, so `install.ps1` COPIES the two CLI files — and from then on they drift forever. SHITTYWINDOWS stayed at 4.5.0 for days while Mini + MBP advanced to 4.6.0; users had to download both files manually from `raw.githubusercontent.com` to recover.
+
+- **`scripts/agent-bridge-periodic-update.ps1` Step 5** — new bin-refresh step. After the dev clone has been pulled + rebuilt (Steps 1-3) and the plugin registry rewired (Step 4), Step 5 reads `VERSION="…"` from the dev clone's `agent-bridge` bash script and from `%LOCALAPPDATA%\agent-bridge\bin\agent-bridge`. If the strings differ, both `agent-bridge` and `agent-bridge.cmd` are copied from the dev clone into `%LOCALAPPDATA%\agent-bridge\bin\` and the new VERSION is verified post-copy. Source of truth is the freshly-pulled dev clone (`--ff-only` against origin/main makes its files byte-equal to the published commit), so no extra `Invoke-WebRequest` to `raw.githubusercontent.com` is needed. The step is a no-op when versions match, when the install dir doesn't exist (no packaged install), or when the dev clone is missing the CLI files. The Mac/Linux script needs no equivalent — its symlink layout already covers this.
+- **CLI / MCP server / OpenClaw channel adapter all moved to `4.7.0`.** No breaking changes to the `BridgeMessage` wire format or any existing exports.
+
 ## agent-bridge 4.6.0 / openclaw-channel 4.6.0 — 2026-05-11
 
 After every auto-update / rebuild, the running Claude Code session is still attached to its OLD agent-bridge MCP child until CC is fully restarted (`/reload-plugins` reloads descriptors but does not respawn MCP children — Patch F's channel-owner lease prefers continuity). Per Ethan's CLAUDE.md, the canonical fix is to bridge the local OpenClaw and ask it to drive a clean CC restart via its `restart-claude-yolo` skill. This release automates that hand-off so the user doesn't have to ask each time.

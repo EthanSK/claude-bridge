@@ -15,6 +15,12 @@
 #   3. If pulled OR mcp-server\build\index.js missing OR HEAD changed
 #      since last build → npm install + npm run build
 #   4. agent-bridge plugin-registry-rewire (self-heal)
+#   5. Refresh packaged CLI at %LOCALAPPDATA%\agent-bridge\bin\ when the
+#      dev clone's VERSION exceeds the installed VERSION. Windows-specific:
+#      install.ps1 COPIES the two CLI files into %LOCALAPPDATA%, so without
+#      this step the packaged CLI drifts forever while the dev clone tracks
+#      main. (macOS install.sh symlinks straight at the dev clone, so a
+#      `git pull` updates the CLI in place — no equivalent needed there.)
 #
 # OpenClaw repair is macOS/Linux-only (OC doesn't ship Windows binaries).
 #
@@ -221,6 +227,68 @@ try {
         }
     } else {
         Write-Log "WARN: $abShim not found; skipping plugin-registry-rewire"
+    }
+
+    # ---------- Step 5: refresh packaged CLI bin (Windows-specific) ---------
+    #
+    # The Windows install layout is separate from the dev clone:
+    #   - Dev clone: $Repo (this script keeps it current via Steps 1-3)
+    #   - Packaged CLI: %LOCALAPPDATA%\agent-bridge\bin\{agent-bridge,agent-bridge.cmd}
+    #
+    # macOS doesn't need this — `install.sh` symlinks /usr/local/bin/agent-bridge
+    # directly at the dev clone, so a `git pull` updates the CLI in place. On
+    # Windows, `install.ps1` COPIES the two CLI files into %LOCALAPPDATA% (no
+    # symlink semantics for `.cmd` shims under cmd.exe), so without this step
+    # the packaged CLI drifts forever while the dev clone tracks main.
+    #
+    # We compare VERSION strings (not file hashes) so cosmetic dev-clone edits
+    # don't trigger spurious copies. Bumping VERSION in the bash CLI is the
+    # canonical version-shipped signal.
+    #
+    # Source of truth: the freshly-pulled dev clone (Step 2 ran `--ff-only`
+    # against origin/main, so $Repo's files are byte-equal to whatever shipped
+    # in that commit). No need to re-fetch from raw.githubusercontent.com.
+
+    $InstallBinDir = Join-Path $env:LOCALAPPDATA 'agent-bridge\bin'
+    $InstalledCli  = Join-Path $InstallBinDir 'agent-bridge'
+    $InstalledShim = Join-Path $InstallBinDir 'agent-bridge.cmd'
+    $SourceCli     = Join-Path $Repo 'agent-bridge'
+    $SourceShim    = Join-Path $Repo 'agent-bridge.cmd'
+
+    function Get-CliVersion {
+        param([string]$Path)
+        if (-not (Test-Path $Path)) { return $null }
+        $line = Select-String -Path $Path -Pattern '^VERSION="([^"]+)"' -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($line) { return $line.Matches[0].Groups[1].Value }
+        return $null
+    }
+
+    if (-not (Test-Path $InstallBinDir)) {
+        Write-Log "no packaged CLI install detected at $InstallBinDir; skipping bin refresh"
+    } elseif (-not (Test-Path $SourceCli) -or -not (Test-Path $SourceShim)) {
+        Write-Log "WARN: source CLI files missing in dev clone; skipping bin refresh"
+    } else {
+        $installedVer = Get-CliVersion -Path $InstalledCli
+        $sourceVer    = Get-CliVersion -Path $SourceCli
+        if (-not $sourceVer) {
+            Write-Log "WARN: could not parse VERSION from $SourceCli; skipping bin refresh"
+        } elseif ($installedVer -eq $sourceVer) {
+            Write-Log "packaged CLI already at v$sourceVer; no refresh needed"
+        } else {
+            Write-Log "refreshing packaged CLI: $installedVer -> $sourceVer"
+            try {
+                Copy-Item -Path $SourceCli  -Destination $InstalledCli  -Force -ErrorAction Stop
+                Copy-Item -Path $SourceShim -Destination $InstalledShim -Force -ErrorAction Stop
+                $verifyVer = Get-CliVersion -Path $InstalledCli
+                if ($verifyVer -eq $sourceVer) {
+                    Write-Log "packaged CLI refreshed to v$verifyVer at $InstallBinDir"
+                } else {
+                    Write-Log "ERROR: copy completed but installed VERSION=$verifyVer != source $sourceVer"
+                }
+            } catch {
+                Write-Log "ERROR: failed to refresh packaged CLI: $($_.Exception.Message)"
+            }
+        }
     }
 
     # ---------- Summary -----------------------------------------------------

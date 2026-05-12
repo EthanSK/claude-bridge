@@ -347,6 +347,21 @@ under a per-checkout lock. Each invocation:
    "typing into CC's terminal directly", which the periodic updater still
    refuses to do.
 
+**Windows-only Step 5** (added in 4.7.0, lives between the registry rewire and
+the OC restart bridge in `agent-bridge-periodic-update.ps1`): refresh the
+packaged CLI shim at `%LOCALAPPDATA%\agent-bridge\bin\`. `install.ps1` COPIES
+the two CLI files (`agent-bridge` + `agent-bridge.cmd`) into that directory
+because `.cmd` shims under cmd.exe don't have symlink semantics. Without an
+explicit refresh step, the packaged CLI would drift forever while the dev
+clone tracks main — that's how a fleet machine could stay at 4.5.0 for days
+after Mini/MBP advanced to 4.6.0. The step parses `VERSION="…"` from both the
+installed copy and the freshly-pulled dev clone copy; on mismatch, it
+`Copy-Item`s both files and verifies the new VERSION post-copy. No-op when
+versions match, when the install dir doesn't exist (no packaged install on
+this machine), or when the dev clone is missing the CLI files. The Mac/Linux
+script needs no equivalent — `install.sh` symlinks `/usr/local/bin/agent-bridge`
+straight at the dev clone, so `git pull` updates the CLI in place.
+
 The body deliberately does NOT restart the OpenClaw gateway directly and
 does NOT type `/reload-plugins` into the user's Claude Code terminal — both
 are interactive / runtime actions outside the scope of a 10-min background
